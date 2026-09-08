@@ -10,6 +10,7 @@
 | [`hecaitou`](skills/dialog/hecaitou/SKILL.md) | 从日常观察切入，分析平台、产品、关系与个人边界 | 带有具体场景、机制分析和边界意识的中文长文 |
 | [`scan-codebase`](skills/work/scan-codebase/SKILL.md) | 阅读实现代码前，先从 Git 历史判断仓库阶段与风险区域 | 当前阶段判断、风险地图和代码阅读顺序 |
 | [`daily-weekly-reporting`](skills/work/daily-weekly-reporting/SKILL.md) | 根据 Git 记录编写中文日报、周报或工作总结 | 区分已提交成果、未提交进展和待验证事项的工作报告 |
+| [`changelog`](skills/work/changelog/SKILL.md) | 按 Keep a Changelog 规范编写、更新或审核版本记录 | 有证据支撑的版本条目或分级审核结果 |
 
 ### 使用示例
 
@@ -29,6 +30,10 @@
 
 ```text
 使用 $daily-weekly-reporting，根据今天所有分支的 Git 记录写一份日报。
+```
+
+```text
+使用 $changelog 根据 v1.2.0 到 HEAD 的变化更新 Unreleased，并审核现有条目。
 ```
 
 ### 补充说明

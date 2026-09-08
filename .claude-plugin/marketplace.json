@@ -16,6 +16,7 @@
       "category": "productivity",
       "strict": false,
       "skills": [
+        "./skills/work/changelog",
         "./skills/work/daily-weekly-reporting",
         "./skills/work/scan-codebase"
       ]
