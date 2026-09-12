@@ -86,13 +86,4 @@ claude plugin install gwyn-space-skills-work@gwyn-space
 claude plugin install gwyn-space-skills-dialog@gwyn-space
 ```
 
-### Codex marketplace
-
-添加 marketplace 并安装插件：
-
-```bash
-codex plugin marketplace add Gwyntoria/skills --ref main
-codex plugin add gwyn-space-skills@gwyn-space
-```
-
 安装或更新插件后，新建会话以加载最新的 skill。

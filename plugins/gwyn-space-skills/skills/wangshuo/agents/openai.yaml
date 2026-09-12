@@ -1,6 +1,0 @@
-interface:
-  display_name: "王烁"
-  short_description: "Analyze complex issues and write with Wang Shuo's methods"
-  default_prompt: "Use $wangshuo to analyze this question or write from evidence, incentives, uncertainty, and second-order effects."
-policy:
-  allow_implicit_invocation: false

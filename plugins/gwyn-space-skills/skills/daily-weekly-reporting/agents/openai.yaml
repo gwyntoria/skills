@@ -1,4 +1,0 @@
-interface:
-  display_name: "Daily Weekly Reporting"
-  short_description: "Write evidence-based Chinese daily and weekly reports"
-  default_prompt: "Use $daily-weekly-reporting to write the current report from all-branch Git evidence and the existing work-log style."

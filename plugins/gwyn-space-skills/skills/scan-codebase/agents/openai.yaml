@@ -1,6 +1,0 @@
-interface:
-  display_name: "Scan Codebase"
-  short_description: "Scan Git history before reading a codebase"
-  default_prompt: "Use $scan-codebase to assess this repository from Git history before reading implementation code."
-policy:
-  allow_implicit_invocation: false

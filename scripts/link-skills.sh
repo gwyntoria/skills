@@ -7,8 +7,7 @@ set -euo pipefail
 #
 # Links all skills in the repository into ~/.agents/skills by default.
 # Pass --skill NAME to link only one skill. Pass --claude to also link skills
-# into ~/.claude/skills, or --codex to link them only into ~/.codex/skills and
-# remove matching entries from ~/.agents.
+# into ~/.claude/skills.
 # Each entry is a symlink into this repo, so a `git pull` is all that's needed
 # to keep installed skills up to date.
 
@@ -19,24 +18,13 @@ AGENTS_DEST="$LINK_HOME/.agents/skills"
 mode="agents"
 selected_skill=""
 usage() {
-	echo "usage: $0 [--claude | --codex] [--skill NAME]" >&2
+	echo "usage: $0 [--claude] [--skill NAME]" >&2
 }
 
 while [ "$#" -gt 0 ]; do
 	case "$1" in
 	--claude)
-		if [ "$mode" = "codex" ]; then
-			echo "error: --claude and --codex cannot be used together." >&2
-			exit 2
-		fi
 		mode="claude"
-		;;
-	--codex)
-		if [ "$mode" = "claude" ]; then
-			echo "error: --claude and --codex cannot be used together." >&2
-			exit 2
-		fi
-		mode="codex"
 		;;
 	--skill)
 		if [ -n "$selected_skill" ]; then
@@ -71,9 +59,6 @@ case "$mode" in
 claude)
 	DESTS=("$AGENTS_DEST" "$LINK_HOME/.claude/skills")
 	;;
-codex)
-	DESTS=("$LINK_HOME/.codex/skills")
-	;;
 *)
 	DESTS=("$AGENTS_DEST")
 	;;
@@ -92,7 +77,7 @@ ensure_destination_is_safe() {
 		exit 1
 	fi
 	case "$resolved" in
-	"$REPO"|"$REPO"/*)
+	"$REPO" | "$REPO"/*)
 		echo "error: $dest is a symlink into this repo ($resolved)." >&2
 		echo "Remove it (rm \"$dest\") and re-run." >&2
 		exit 1
@@ -124,11 +109,6 @@ if [ -n "$selected_skill" ]; then
 	fi
 fi
 
-if [ "$mode" = "codex" ]; then
-	# Validate the cleanup destination before creating any Codex links.
-	ensure_destination_is_safe "$AGENTS_DEST"
-fi
-
 for DEST in "${DESTS[@]}"; do
 	# If $DEST is a symlink that resolves into this repo, we'd end up writing the
 	# per-skill symlinks back into the repo's own skills/ tree. Detect and bail
@@ -147,14 +127,3 @@ for DEST in "${DESTS[@]}"; do
 		echo "linked $name -> $src ($DEST)"
 	done
 done
-
-if [ "$mode" = "codex" ]; then
-	# Codex uses its own skill directory, so remove matching shared skill entries.
-	for name in "${names[@]}"; do
-		target="$AGENTS_DEST/$name"
-		if [ -e "$target" ] || [ -L "$target" ]; then
-			rm -rf -- "$target"
-			echo "removed $target"
-		fi
-	done
-fi

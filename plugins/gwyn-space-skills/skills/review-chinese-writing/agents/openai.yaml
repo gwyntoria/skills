@@ -1,4 +1,0 @@
-interface:
-  display_name: "Review Chinese Writing"
-  short_description: "以两阶段证据评审审察中文非虚构文章的合格性与提升空间"
-  default_prompt: "Use $review-chinese-writing to review this Chinese nonfiction article without modifying it."
