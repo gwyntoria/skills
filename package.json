@@ -3,13 +3,13 @@
   "version": "1.0.0",
   "private": true,
   "description": "The agent guidelines and skills I created.",
-  "homepage": "https://github.com/Gwyntoria/skills#readme",
+  "homepage": "https://github.com/gwyntoria/skills#readme",
   "bugs": {
-    "url": "https://github.com/Gwyntoria/skills/issues"
+    "url": "https://github.com/gwyntoria/skills/issues"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Gwyntoria/skills.git"
+    "url": "git+https://github.com/gwyntoria/skills.git"
   },
   "license": "MIT",
   "author": "Gwyntotia",
