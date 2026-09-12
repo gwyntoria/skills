@@ -43,11 +43,12 @@
 
 ## Instructions
 
-| 文件 | 适用范围 |
-| --- | --- |
-| [`global.md`](instructions/global.md) | 全局 Agent Instructions，可放在 Agent 的配置目录中，如 `~/.codex/`、`~/.claude/` |
-| [`c-project.md`](instructions/c-project.md) | C/C++ 项目的格式、命名、注释和提交信息约定 |
-| [`writing.md`](instructions/writing.md) | Markdown 写作仓库的资源路径、引用方式和格式检查规则 |
+| 文件 | 使用范围 | 说明 |
+| --- | --- | --- |
+| [`global.md`](instructions/global.md) | 全局 | 可放在 Agent 的配置目录中，如 `~/.codex/`、`~/.claude/` |
+| [`c-project.md`](instructions/c-project.md) | 项目 | C/C++ 项目的格式、命名、注释和提交信息约定 |
+| [`writing.md`](instructions/writing.md) | 项目 | Markdown 写作仓库的资源路径、引用方式和格式检查规则 |
+| [`chinese-punctuation.md`](instructions/chinese-punctuation.md) | 项目 | 终端回复的中文半角标点、空格规则和适用范围 |
 
 这些 instruction 是可复用的规则片段。使用时应根据目标 Agent 的配置方式，选择适用文件并合并到项目指令中。
 
