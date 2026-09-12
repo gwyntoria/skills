@@ -4,13 +4,32 @@
 
 ## Skills
 
+### dialog
+
+写作与分析方法。
+
 | Skill | 适用场景 | 主要输出 |
 | --- | --- | --- |
 | [`wangshuo`](skills/dialog/wangshuo/SKILL.md) | 分析组织、市场、公共议题和个人重大选择等复杂问题 | 证据分级、激励与博弈分析、有限判断和行动条件 |
 | [`hecaitou`](skills/dialog/hecaitou/SKILL.md) | 从日常观察切入，分析平台、产品、关系与个人边界 | 带有具体场景、机制分析和边界意识的中文长文 |
-| [`scan-codebase`](skills/work/scan-codebase/SKILL.md) | 阅读实现代码前，先从 Git 历史判断仓库阶段与风险区域 | 当前阶段判断、风险地图和代码阅读顺序 |
+
+### work
+
+报告与工程类技能。
+
+| Skill | 适用场景 | 主要输出 |
+| --- | --- | --- |
 | [`daily-weekly-reporting`](skills/work/daily-weekly-reporting/SKILL.md) | 根据 Git 记录编写中文日报、周报或工作总结 | 区分已提交成果、未提交进展和待验证事项的工作报告 |
+| [`scan-codebase`](skills/work/scan-codebase/SKILL.md) | 阅读实现代码前，先从 Git 历史判断仓库阶段与风险区域 | 当前阶段判断、风险地图和代码阅读顺序 |
 | [`changelog`](skills/work/changelog/SKILL.md) | 按 Keep a Changelog 规范编写、更新或审核版本记录 | 有证据支撑的版本条目或分级审核结果 |
+
+### writing
+
+中文写作审读技能。
+
+| Skill | 适用场景 | 主要输出 |
+| --- | --- | --- |
+| [`review-chinese-writing`](skills/writing/review-chinese-writing/SKILL.md) | 审读面向普通读者的中文非虚构稿件，判断能否发布 | 两阶段评审报告：合格判定、必须修改项和按收益排序的提升建议 |
 
 ### 使用示例
 
@@ -34,6 +53,10 @@
 
 ```text
 使用 $changelog 根据 v1.2.0 到 HEAD 的变化更新 Unreleased，并审核现有条目。
+```
+
+```text
+使用 $review-chinese-writing 审读这篇稿子，先判断是否合格，再给修改建议。
 ```
 
 ### 补充说明
@@ -67,13 +90,13 @@
 安装前需要本地已有 Node.js 与 npm。运行下面的命令，从仓库中选择需要的 skill 和目标 Agent：
 
 ```bash
-npx skills add Gwyntoria/skills -g -y
+npx skills add gwyntoria/skills -g -y
 ```
 
 也可以直接安装指定的 skill：
 
 ```bash
-npx skills add Gwyntoria/skills -g --skill scan-codebase
+npx skills add gwyntoria/skills -g --skill scan-codebase
 ```
 
 ### Claude Code marketplace
@@ -81,9 +104,10 @@ npx skills add Gwyntoria/skills -g --skill scan-codebase
 添加 marketplace 并安装插件：
 
 ```bash
-claude plugin marketplace add Gwyntoria/skills
+claude plugin marketplace add gwyntoria/skills
 claude plugin install gwyn-space-skills-work@gwyn-space
 claude plugin install gwyn-space-skills-dialog@gwyn-space
+claude plugin install gwyn-space-skills-writing@gwyn-space
 ```
 
 安装或更新插件后，新建会话以加载最新的 skill。
