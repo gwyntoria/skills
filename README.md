@@ -83,6 +83,28 @@
 - [`English Coaching`](instructions/global.md#english-coaching)：源自 Waza 的 [`rules/english.md`](https://github.com/tw93/Waza/blob/main/rules/english.md)。
 - [`Anti-Patterns: Cross-Skill AI Behavior`](instructions/global.md#anti-patterns-cross-skill-ai-behavior)：源自 Waza 的 [`rules/anti-patterns.md`](https://github.com/tw93/Waza/blob/main/rules/anti-patterns.md)。
 
+## Scripts
+
+[`scripts/`](scripts/) 下是个人环境安装、WSL 配置和仓库维护三类辅助脚本。
+
+| 脚本 | 运行环境 | 说明 |
+| --- | --- | --- |
+| [`config_agent.sh`](scripts/config_agent.sh) | macOS / Linux | 安装 Codex CLI、Claude Code 和 Pi，写入全局指令，安装状态栏、Pi 扩展和第三方 skills，并清理已有的全局 skills |
+| [`toria-up.sh`](scripts/toria-up.sh) | macOS / Linux | 依次更新 skills、Codex、Claude Code、Homebrew 和 Pi，末尾汇总每个任务的结果 |
+| [`statusline.sh`](scripts/statusline.sh) | Claude Code | 状态栏脚本，显示模型与思考等级、目录与 Git 分支、上下文余量、输入输出 token、速率限制和版本 |
+| [`wsl_setup.sh`](scripts/wsl_setup.sh) | WSL Ubuntu | 装配 Homebrew、Git、lazygit、Starship、uv、Python、nvm、Node.js 和 Codex CLI |
+| [`wsl_uninstall.sh`](scripts/wsl_uninstall.sh) | WSL Ubuntu | 撤销 `wsl_setup.sh` 写入的用户级工具和 `~/.bashrc` 配置 |
+| [`list-skills.sh`](scripts/list-skills.sh) | 仓库维护 | 列出仓库内全部 skill 路径，并检查是否有重名 |
+| [`link-skills.sh`](scripts/link-skills.sh) | 仓库维护 | 把仓库内的 skill 软链到 `~/.agents/skills`，可指定 skill 或目录，也可移除和清理 |
+
+### 补充说明
+
+- `config_agent.sh` 面向个人环境，会覆盖 `~/.codex/AGENTS.md` 和 `~/.claude/CLAUDE.md`，并先删除 `~/.agents/skills` 和 `~/.claude/skills` 下的已有内容，再按脚本内的清单重新安装。运行前确认这些位置没有需要保留的内容。
+- `toria-up.sh` 按固定顺序执行更新，前置命令不存在时记为跳过而不是失败，最后打印成功、失败和跳过的清单；带 `-c` 时在 Homebrew 更新后追加 `brew cleanup`。
+- `statusline.sh` 由 `config_agent.sh` 从仓库的 raw 地址拉取并安装到 `~/.claude/statusline.sh`，其中速率限制一段只在会话上报数据时显示。
+- `link-skills.sh` 只处理指向本仓库的软链，遇到真实目录或指向别处的软链会跳过并报告，重复运行不会产生重复条目。
+- `wsl_uninstall.sh` 默认保留 apt 安装的系统包，需要一并删除时设置 `REMOVE_APT_PACKAGES=1`。
+
 ## 安装
 
 ### npx skills
