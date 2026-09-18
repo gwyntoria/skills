@@ -2,6 +2,90 @@
 
 PROGRAM_NAME="${0##*/}"
 
+PROGRESS_ENABLED=0
+PROGRESS_CLEAR_LINE=
+
+# 交互终端使用单行进度条；重定向和定时任务保持普通输出。
+setup_progress() {
+    if ! [ -t 1 ] || ! [ -t 2 ] || [ "${TERM:-dumb}" = dumb ]; then
+        return
+    fi
+
+    if ! command -v tput >/dev/null 2>&1; then
+        return
+    fi
+
+    PROGRESS_CLEAR_LINE=$(tput el 2>/dev/null) || return
+    PROGRESS_ENABLED=1
+}
+
+draw_progress() {
+    local current="$1"
+    local total="$2"
+    local name="$3"
+    local state="$4"
+    local width=20
+    local filled
+    local empty
+    local bar=
+
+    if [ "$PROGRESS_ENABLED" -ne 1 ]; then
+        return
+    fi
+
+    filled=$((current * width / total))
+    empty=$((width - filled))
+
+    while [ "$filled" -gt 0 ]; do
+        bar="${bar}#"
+        filled=$((filled - 1))
+    done
+    while [ "$empty" -gt 0 ]; do
+        bar="${bar}-"
+        empty=$((empty - 1))
+    done
+
+    printf '\r%s[%s] %d/%d  %s (%s)' \
+        "$PROGRESS_CLEAR_LINE" "$bar" "$current" "$total" "$name" "$state" >&2
+}
+
+clear_progress() {
+    if [ "$PROGRESS_ENABLED" -eq 1 ]; then
+        printf '\r%s' "$PROGRESS_CLEAR_LINE" >&2
+    fi
+}
+
+restore_terminal() {
+    if [ "$PROGRESS_ENABLED" -eq 1 ]; then
+        clear_progress
+        PROGRESS_ENABLED=0
+    fi
+}
+
+# 进度条占用当前最后一行。子命令每输出一行，就先清除它，打印日志，
+# 再在新的最后一行重画，避免多个进程争用终端光标。
+run_command_with_progress() {
+    local name="$1"
+    local line
+    local rc
+
+    shift
+
+    if [ "$PROGRESS_ENABLED" -ne 1 ]; then
+        "$@"
+        return $?
+    fi
+
+    "$@" 2>&1 | while IFS= read -r line || [ -n "$line" ]; do
+        clear_progress
+        printf '%s\n' "$line"
+        draw_progress "$TASK_CURRENT" "$TASK_TOTAL" "$name" "Running"
+    done
+    rc=${PIPESTATUS[0]}
+
+    return "$rc"
+}
+
 usage() {
     printf 'Usage: %s [options]\n' "$PROGRAM_NAME"
     printf '\n'
@@ -46,7 +130,6 @@ parse_args() {
 run_update() {
     local name="$1"
     local executable="$2"
-    local activity_pid=
     local elapsed
     local status
     local detail
@@ -70,27 +153,13 @@ run_update() {
         detail="$executable"
     else
         SECONDS=0
+        draw_progress "$TASK_CURRENT" "$TASK_TOTAL" "$name" "Running"
 
-        # 更新器长时间没有输出时，定期提示它仍在运行。只在交互终端启用，
-        # 避免污染重定向日志和定时任务输出。
-        if [ -t 2 ]; then
-            (
-                while sleep 10; do
-                    printf '[%s] %s still running (%ss elapsed)\n' \
-                        "$(date '+%H:%M:%S')" "$name" "$SECONDS" >&2
-                done
-            ) &
-            activity_pid=$!
-        fi
-
-        "$@"
+        run_command_with_progress "$name" "$@"
         rc=$?
         elapsed=$SECONDS
 
-        if [ -n "$activity_pid" ]; then
-            kill "$activity_pid" 2>/dev/null || true
-            wait "$activity_pid" 2>/dev/null || true
-        fi
+        clear_progress
 
         if [ "$rc" -eq 0 ]; then
             printf '✅ Completed: %s (%ss)\n' "$name" "$elapsed"
@@ -120,6 +189,8 @@ run_tasks() {
     if [ "$clean_homebrew" -eq 1 ]; then
         TASK_TOTAL=$((TASK_TOTAL + 1))
     fi
+
+    setup_progress
 
     run_update \
         "Skills" \
@@ -236,6 +307,7 @@ main() {
     # RESULTS 是 run_update 和 report_results 之间唯一的交接面。
     RESULTS=()
     clean_homebrew=0
+    trap restore_terminal EXIT
 
     parse_args "$@"
     parse_rc=$?
