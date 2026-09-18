@@ -46,15 +46,19 @@ parse_args() {
 run_update() {
     local name="$1"
     local executable="$2"
+    local activity_pid=
+    local elapsed
     local status
     local detail
     local rc
 
     shift 2
+    TASK_CURRENT=$((TASK_CURRENT + 1))
 
     printf '\n'
     printf '%s\n' "=================================================="
-    printf '[%s] Starting: %s\n' "$(date '+%H:%M:%S')" "$name"
+    printf '[%s] [%s/%s] Starting: %s\n' \
+        "$(date '+%H:%M:%S')" "$TASK_CURRENT" "$TASK_TOTAL" "$name"
     printf 'Command:'
     printf ' %s' "$@"
     printf '\n'
@@ -65,15 +69,35 @@ run_update() {
         status=skip
         detail="$executable"
     else
+        SECONDS=0
+
+        # 更新器长时间没有输出时，定期提示它仍在运行。只在交互终端启用，
+        # 避免污染重定向日志和定时任务输出。
+        if [ -t 2 ]; then
+            (
+                while sleep 10; do
+                    printf '[%s] %s still running (%ss elapsed)\n' \
+                        "$(date '+%H:%M:%S')" "$name" "$SECONDS" >&2
+                done
+            ) &
+            activity_pid=$!
+        fi
+
         "$@"
         rc=$?
+        elapsed=$SECONDS
+
+        if [ -n "$activity_pid" ]; then
+            kill "$activity_pid" 2>/dev/null || true
+            wait "$activity_pid" 2>/dev/null || true
+        fi
 
         if [ "$rc" -eq 0 ]; then
-            printf '✅ Completed: %s\n' "$name"
+            printf '✅ Completed: %s (%ss)\n' "$name" "$elapsed"
             status=ok
             detail=
         else
-            printf '❌ Failed: %s\n' "$name"
+            printf '❌ Failed: %s (%ss)\n' "$name" "$elapsed"
             printf 'Exit code: %s\n' "$rc"
             status=fail
             detail="$rc"
@@ -89,6 +113,13 @@ run_update() {
 # 按固定顺序跑更新任务。clean_homebrew 为 1 时，在 Homebrew 之后加一步 cleanup。
 run_tasks() {
     local clean_homebrew="$1"
+
+    TASK_CURRENT=0
+    TASK_TOTAL=7
+
+    if [ "$clean_homebrew" -eq 1 ]; then
+        TASK_TOTAL=$((TASK_TOTAL + 1))
+    fi
 
     run_update \
         "Skills" \
