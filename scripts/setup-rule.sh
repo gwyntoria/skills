@@ -530,14 +530,18 @@ assert_markers_balanced() {
     return 1
 }
 
-# Build the managed block: markers, a provenance line, then the rule verbatim.
+# Build the managed block: markers, a provenance line, then the rule body.
+# Project-classified rules omit their H1 in Codex AGENTS.md files. global.md
+# keeps its title, and every Claude destination keeps the source verbatim.
 write_block() {
     local output="$1"
     local body="$2"
     local eol="$3"
+    local omit_h1="$4"
     local start
     local end
     local line
+    local line_number=0
 
     start="$(start_marker)"
     end="$(end_marker)"
@@ -547,6 +551,10 @@ write_block() {
         printf '<!-- Installed from instructions/%s by %s. Edits inside this block are overwritten on reinstall. -->%s\n' \
             "$RULE_FILE" "$PROGRAM_NAME" "$eol"
         while IFS= read -r line || [ -n "$line" ]; do
+            line_number=$((line_number + 1))
+            if [ "$omit_h1" -eq 1 ] && [ "$line_number" -eq 1 ]; then
+                continue
+            fi
             printf '%s%s\n' "$line" "$eol"
         done <"$body"
         printf '%s%s\n' "$end" "$eol"
@@ -811,6 +819,7 @@ write_managed_block() {
     local block_file
     local merged_file
     local eol=""
+    local omit_h1=0
 
     case "$target" in
     claude) destination="$(claude_rule_path "$scope")" ;;
@@ -840,7 +849,11 @@ write_managed_block() {
         eol=$'\r'
     fi
 
-    write_block "$block_file" "$RULE_SOURCE" "$eol"
+    if [ "$target" = "codex" ] && [ "$RULE_SCOPE" = "project" ]; then
+        omit_h1=1
+    fi
+
+    write_block "$block_file" "$RULE_SOURCE" "$eol" "$omit_h1"
 
     if [ "$discard_existing" -eq 1 ] && [ -f "$resolved" ]; then
         : >"$merged_file"
