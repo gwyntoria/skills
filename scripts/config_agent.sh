@@ -6,9 +6,13 @@ PROGRAM_NAME="${0##*/}"
 INSTALL_AGENT=0
 INSTALL_SKILLS=0
 
-GLOBAL_INSTRUCTIONS_URL="https://raw.githubusercontent.com/gwyntoria/skills/refs/heads/main/instructions/global.md"
-
-STATUSLINE_URL="https://raw.githubusercontent.com/gwyntoria/skills/refs/heads/main/scripts/statusline.sh"
+# This repository's own install content — the instruction rules and the statusline
+# script — is read from the working copy, so the script must run from a clone.
+# Only third-party sources below are fetched over the network.
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-$0}")" && pwd -P)"
+REPO="$(cd -- "$SCRIPT_DIR/.." && pwd -P)"
+SETUP_RULE="$REPO/scripts/setup-rule.sh"
+STATUSLINE_SOURCE="$REPO/scripts/statusline.sh"
 
 WAZA_SKILLS_URL="https://github.com/tw93/waza"
 KAMI_SKILLS_URL="https://github.com/tw93/kami"
@@ -165,14 +169,12 @@ remove_unwanted_agent_skills() {
 # settings.json 已存在时只更新 statusLine 键，其余配置原样保留；
 # 文件不是合法 JSON 就报错退出，不覆盖用户原有内容。
 install_statusline() {
-    local temporary_file="$1"
     local claude_dir="$HOME/.claude"
     local settings_file="$claude_dir/settings.json"
 
     mkdir -p "$claude_dir"
 
-    curl -fsSL "$STATUSLINE_URL" -o "$temporary_file"
-    install -m 0755 "$temporary_file" "$claude_dir/statusline.sh"
+    install -m 0755 "$STATUSLINE_SOURCE" "$claude_dir/statusline.sh"
 
     # 单引号里是 JS 而不是 shell：~ 原样写进 JSON，交给 Claude Code 执行命令时展开，
     # ${settingsPath} 是 JS 模板字符串。这两处故意如此。
@@ -223,21 +225,26 @@ install_agents() {
 
     log "Installing global instructions for Codex and Claude Code"
 
+    for required in "$SETUP_RULE" "$STATUSLINE_SOURCE"; do
+        if [ ! -f "$required" ]; then
+            printf 'Error: %s is missing. Run this script from a clone of the repository.\n' "$required" >&2
+            exit 1
+        fi
+    done
+
     mkdir -p "$HOME/.codex"
     mkdir -p "$HOME/.claude"
-    temporary_dir="$(mktemp -d)"
-    instructions_file="$temporary_dir/AGENTS.md"
-    trap 'rm -rf "$temporary_dir"' 0 HUP INT TERM
 
-    curl -fsSL "$GLOBAL_INSTRUCTIONS_URL" -o "$instructions_file"
-    install -m 0644 "$instructions_file" "$HOME/.codex/AGENTS.md"
-    install -m 0644 "$instructions_file" "$HOME/.claude/CLAUDE.md"
+    # Delegated to setup-rule.sh so both scripts write global.md the same way:
+    # a rules file for Claude Code, a managed block in AGENTS.md for Codex.
+    # stdin is closed because setup-rule.sh is non-interactive by design.
+    bash "$SETUP_RULE" global --target both --global --migrate-legacy </dev/null
 
     success "Global instructions installed for Codex and Claude Code"
 
     log "Installing the Claude Code statusline"
 
-    install_statusline "$temporary_dir/statusline.sh"
+    install_statusline
 
     success "Claude Code statusline installed"
 }
@@ -297,6 +304,9 @@ main() {
     fi
 }
 
-if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+# ${BASH_SOURCE[0]:-} rather than ${BASH_SOURCE[0]}: under `set -u` the bare form
+# is an unbound-variable error when the script arrives on a pipe, so
+# `curl … | bash` finished all its work and then exited 1.
+if [ "${BASH_SOURCE[0]:-}" = "$0" ]; then
     main "$@"
 fi
