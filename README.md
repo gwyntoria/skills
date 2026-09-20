@@ -79,7 +79,7 @@
 git clone https://github.com/gwyntoria/skills.git
 cd skills
 
-# 全局。Claude Code 写 ~/.claude/rules/，Codex 写 ~/.codex/AGENTS.md 里的托管块
+# 全局。写入 ~/.claude/CLAUDE.md 和 ~/.codex/AGENTS.md 里的托管块
 scripts/setup-rule.sh global --target both --global
 
 # 项目级。写进当前仓库的 .claude/rules/ 和 AGENTS.md
@@ -117,8 +117,8 @@ scripts/setup-rule.sh global --remove
 ### 补充说明
 
 - `config_agent.sh --agent` 需要从 clone 出来的仓库里运行，会安装 Codex CLI 和 Claude Code，通过 `setup-rule.sh` 安装全局指令，并从工作区安装 Claude Code 状态栏。`config_agent.sh --skill` 会先删除 `~/.agents/skills` 和 `~/.claude/skills` 下的已有内容，再按脚本内的清单重新安装；两个参数可以同时使用。运行前确认这些位置没有需要保留的内容。
-- `setup-rule.sh` 的两个 Agent 机制不同，所以安装方式也不同: Claude Code 原生读取 `.claude/rules/` 下的规则，装的是独立文件；Codex 只有 `AGENTS.md`，装的是 `<!-- gwyn-space-skills: <规则>:start -->` 与 `:end` 之间的托管块。**块内手改会在下次安装时被覆盖**，块外内容不受影响。规则清单由 `instructions/*.md` 决定，加一个文件就多一条规则；默认范围只有 `global.md` 是全局，其余按项目处理，用 `--global` 可以覆盖。
-- 从 `config_agent.sh` 早期版本升级时，`~/.claude/CLAUDE.md` 与 `~/.codex/AGENTS.md` 里各有一份和 `global.md` 逐字节相同的旧副本，装上规则后同一份内容会加载两遍。`setup-rule.sh` 检测到这种副本会报警；加 `--migrate-legacy` 才会改名成 `.legacy-<时间戳>` 备份，从不删除。`config_agent.sh` 默认带上这个选项。
+- `setup-rule.sh` 将全局 `global.md` 分别写入 `~/.claude/CLAUDE.md` 和 `~/.codex/AGENTS.md` 的 `<!-- gwyn-space-skills: <规则>:start -->` 与 `:end` 托管块；项目规则仍使用 Claude Code 的 `.claude/rules/`，Codex 项目规则写入项目 `AGENTS.md` 的托管块。**块内手改会在下次安装时被覆盖**，块外内容不受影响。规则清单由 `instructions/*.md` 决定，加一个文件就多一条规则；默认范围只有 `global.md` 是全局，其余按项目处理，用 `--global` 可以覆盖。
+- 从 `config_agent.sh` 早期版本升级时，`~/.claude/CLAUDE.md` 与 `~/.codex/AGENTS.md` 可能是和 `global.md` 逐字节相同的整文件副本。`setup-rule.sh` 检测到这种副本会报警；加 `--migrate-legacy` 才会先创建 `.pre-rules.bak-<时间戳>` 备份，再改成托管块。旧版 `~/.claude/rules/global.md` 与仓库内容完全相同时会移到 `~/.claude/` 下备份；文件已被修改或是软链接时会停止安装并保留原文件。`config_agent.sh` 默认带上迁移选项。
 - `toria-up.sh` 按固定顺序执行更新，前置命令不存在时记为跳过而不是失败，最后打印成功、失败和跳过的清单；带 `-c` 时在 Homebrew 更新后追加 `brew cleanup`。
 - `statusline.sh` 由 `config_agent.sh` 从工作区复制到 `~/.claude/statusline.sh`，其中速率限制一段只在会话上报数据时显示。
 - `link-skills.sh` 只处理指向本仓库的软链，遇到真实目录或指向别处的软链会跳过并报告，重复运行不会产生重复条目。

@@ -235,8 +235,8 @@ install_agents() {
     mkdir -p "$HOME/.codex"
     mkdir -p "$HOME/.claude"
 
-    # Delegated to setup-rule.sh so both scripts write global.md the same way:
-    # a rules file for Claude Code, a managed block in AGENTS.md for Codex.
+    # Delegated to setup-rule.sh so both agents receive managed global.md blocks:
+    # CLAUDE.md for Claude Code and AGENTS.md for Codex.
     # stdin is closed because setup-rule.sh is non-interactive by design.
     bash "$SETUP_RULE" global --target both --global --migrate-legacy </dev/null
 

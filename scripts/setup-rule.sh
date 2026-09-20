@@ -12,9 +12,8 @@
 #
 # The two agents need different install engines, because their mechanisms differ:
 #
-#   Claude Code  ~/.claude/rules/**/*.md and <project>/.claude/rules/**/*.md are
-#                loaded natively, so a rule is just a file. Nothing else is
-#                touched, and removal is an unlink.
+#   Claude Code  global.md is merged into ~/.claude/CLAUDE.md. Project rules
+#                are installed as files under <project>/.claude/rules/.
 #   Codex        has no rules directory and no import syntax; AGENTS.md is the
 #                only mechanism. A rule therefore has to be merged into that file
 #                inside a marker block so re-runs replace it instead of stacking.
@@ -209,7 +208,7 @@ usage() {
     printf '  --project [DIR]      install into a project config (default: the git work tree root)\n'
     printf '  --remove             remove the rule instead of installing it\n'
     printf '  --list               list the rules and whether they are installed\n'
-    printf '  --migrate-legacy     rename byte-identical legacy copies instead of refusing\n'
+    printf '  --migrate-legacy     back up byte-identical legacy files before adopting\n'
     printf '  -h, --help           Show this help message\n'
     printf '\n'
     printf 'Edits made inside a managed block are overwritten on the next install.\n'
@@ -381,7 +380,13 @@ resolve_project_dir() {
 
 claude_rule_path() {
     case "$1" in
-    global) printf '%s\n' "$HOME/.claude/rules/$RULE_FILE" ;;
+    global)
+        if [ "$RULE" = "global" ]; then
+            printf '%s\n' "$HOME/.claude/CLAUDE.md"
+        else
+            printf '%s\n' "$HOME/.claude/rules/$RULE_FILE"
+        fi
+        ;;
     project) printf '%s\n' "$PROJECT_DIR/.claude/rules/$RULE_FILE" ;;
     esac
 }
@@ -608,84 +613,77 @@ merge_block() {
 # ------------------------------------------------------------
 # Legacy copies
 # ------------------------------------------------------------
-# config_agent.sh used to write global.md straight over ~/.claude/CLAUDE.md and
-# ~/.codex/AGENTS.md. Once global.md is also installed as a rule, those copies
-# make every session load the same text twice.
+# Older config_agent.sh versions wrote global.md straight over CLAUDE.md and
+# AGENTS.md. The immediately previous setup-rule.sh version also installed a
+# duplicate at ~/.claude/rules/global.md.
 
 timestamp() {
     date -u '+%Y%m%dT%H%M%SZ'
 }
 
-# Claude Code loads every .md under rules/, so a backup that keeps a .md suffix
-# would be picked up as a rule. Hence the suffix.
-migrate_legacy_claude_md() {
-    local legacy="$HOME/.claude/CLAUDE.md"
-    local stamp
+remove_legacy_claude_global_rule() {
+    local legacy="$HOME/.claude/rules/global.md"
     local backup
 
-    [ -f "$legacy" ] || return 0
+    [ "$RULE" = "global" ] || return 0
+    [ -e "$legacy" ] || [ -L "$legacy" ] || return 0
 
-    if ! cmp -s "$legacy" "$RULE_SOURCE"; then
-        if grep -qF -- "$RULE_TITLE" "$legacy" 2>/dev/null; then
-            warn "$legacy contains an unmanaged copy of $RULE_FILE."
-            warn "That copy plus the new rule loads the same text twice. Review it by hand; nothing was changed."
-        fi
-        return 0
-    fi
-
-    if [ "$MIGRATE_LEGACY" -ne 1 ]; then
-        warn "$legacy is byte-identical to $RULE_FILE and will now load twice."
-        warn "Re-run with --migrate-legacy, or remove it yourself: rm \"$legacy\""
-        return 0
-    fi
-
-    stamp="$(timestamp)"
-    backup="$legacy.legacy-$stamp"
-
-    if ! mv "$legacy" "$backup"; then
-        warn "could not move $legacy aside"
+    if [ -L "$legacy" ]; then
+        warn "$legacy is a symlink; remove it manually before installing global.md."
         return 1
     fi
 
-    success "Moved the duplicate to $backup"
-    printf '  Restore with: mv "%s" "%s"\n' "$backup" "$legacy"
+    if ! cmp -s "$legacy" "$RULE_SOURCE"; then
+        warn "$legacy differs from $RULE_FILE; it was left in place."
+        warn "Remove or reconcile it before installing global.md into CLAUDE.md."
+        return 1
+    fi
 
+    backup="$HOME/.claude/global.md.pre-claude-md.bak-$(timestamp)"
+
+    if ! mv "$legacy" "$backup"; then
+        error "could not move obsolete $legacy aside"
+        return 1
+    fi
+
+    success "Moved obsolete Claude rule to $backup"
+    printf '  Restore with: mv "%s" "%s"\n' "$backup" "$legacy"
     return 0
 }
 
 # A byte-identical AGENTS.md has no markers, so appending would leave the rule in
 # the file twice. Refuse, unless migration was explicitly requested.
-adopt_legacy_codex_agents() {
-    local agents="$1"
+adopt_legacy_managed_file() {
+    local destination="$1"
     local stamp
     local backup
 
-    [ -f "$agents" ] || return 1
+    [ -f "$destination" ] || return 1
 
-    if ! cmp -s "$agents" "$RULE_SOURCE"; then
-        if grep -qF -- "$RULE_TITLE" "$agents" 2>/dev/null; then
-            warn "$agents contains an unmanaged copy of $RULE_FILE; see lines $(marker_line_numbers "$agents" "$RULE_TITLE")."
+    if ! cmp -s "$destination" "$RULE_SOURCE"; then
+        if grep -qF -- "$RULE_TITLE" "$destination" 2>/dev/null; then
+            warn "$destination contains an unmanaged copy of $RULE_FILE; see lines $(marker_line_numbers "$destination" "$RULE_TITLE")."
         fi
         return 1
     fi
 
     if [ "$MIGRATE_LEGACY" -ne 1 ]; then
-        error "$agents is byte-identical to $RULE_FILE and has no managed block."
-        printf '  Appending would leave two copies in the file Codex loads every session.\n' >&2
+        error "$destination is byte-identical to $RULE_FILE and has no managed block."
+        printf '  Appending would leave two copies in the file the agent loads every session.\n' >&2
         printf '  Re-run with --migrate-legacy to back it up and replace it with a managed block.\n' >&2
         return 2
     fi
 
     stamp="$(timestamp)"
-    backup="$agents.pre-rules.bak-$stamp"
+    backup="$destination.pre-rules.bak-$stamp"
 
-    if ! cp -p "$agents" "$backup"; then
-        error "could not back up $agents"
+    if ! cp -p "$destination" "$backup"; then
+        error "could not back up $destination"
         return 2
     fi
 
     success "Backed up the legacy copy to $backup"
-    printf '  Restore with: mv "%s" "%s"\n' "$backup" "$agents"
+    printf '  Restore with: mv "%s" "%s"\n' "$backup" "$destination"
 
     # Tell the caller the current content should be discarded.
     return 0
@@ -701,6 +699,11 @@ install_claude() {
     local destination
     local resolved
     local backup
+
+    if [ "$RULE" = "global" ] && [ "$scope" = "global" ]; then
+        install_managed_file claude "$scope"
+        return $?
+    fi
 
     if [ "$scope" = "global" ]; then
         target="$HOME/.claude/rules"
@@ -752,6 +755,11 @@ remove_claude() {
     local destination
     local resolved
 
+    if [ "$RULE" = "global" ] && [ "$scope" = "global" ]; then
+        remove_managed_file claude "$scope"
+        return $?
+    fi
+
     destination="$(claude_rule_path "$scope")"
 
     if [ ! -e "$destination" ] && [ ! -L "$destination" ]; then
@@ -788,14 +796,15 @@ remove_claude() {
 }
 
 # ------------------------------------------------------------
-# Codex
+# Managed instruction files
 # ------------------------------------------------------------
 
-# $1 scope, $2 1 when the destination's current content must be discarded
+# $1 target, $2 scope, $3 1 when the destination's current content must be discarded
 # (legacy adoption).
-write_codex_block() {
-    local scope="$1"
-    local discard_existing="$2"
+write_managed_block() {
+    local target="$1"
+    local scope="$2"
+    local discard_existing="$3"
     local destination
     local resolved
     local directory
@@ -803,7 +812,10 @@ write_codex_block() {
     local merged_file
     local eol=""
 
-    destination="$(codex_file_path "$scope")"
+    case "$target" in
+    claude) destination="$(claude_rule_path "$scope")" ;;
+    codex) destination="$(codex_file_path "$scope")" ;;
+    esac
 
     if ! resolved="$(resolve_symlinks "$destination")"; then
         error "could not resolve $destination"
@@ -838,7 +850,7 @@ write_codex_block() {
     fi
 
     if [ -f "$resolved" ] && cmp -s "$resolved" "$merged_file"; then
-        success "already current (codex, $scope): $resolved"
+        success "already current ($target, $scope): $resolved"
         return 0
     fi
 
@@ -847,13 +859,14 @@ write_codex_block() {
         return 1
     fi
 
-    success "installed (codex, $scope): $resolved"
+    success "installed ($target, $scope): $resolved"
 
     return 0
 }
 
-install_codex() {
-    local scope="$1"
+install_managed_file() {
+    local target="$1"
+    local scope="$2"
     local destination
     local override
     # Tri-state, and the initial value matters: 1 means "no legacy copy was
@@ -862,13 +875,18 @@ install_codex() {
     #   1 = nothing to adopt, 0 = adopted, 2 = refused
     local adopt_status=1
 
-    destination="$(codex_file_path "$scope")"
+    case "$target" in
+    claude) destination="$(claude_rule_path "$scope")" ;;
+    codex) destination="$(codex_file_path "$scope")" ;;
+    esac
 
     # Checked before the write decision, not after it: AGENTS.override.md wins
     # over AGENTS.md, so the rule is inert even when nothing needed writing.
-    override="$(dirname "$destination")/AGENTS.override.md"
-    if [ -f "$override" ]; then
-        warn "$override exists and takes precedence; Codex will not read $(basename "$destination")."
+    if [ "$target" = "codex" ]; then
+        override="$(dirname "$destination")/AGENTS.override.md"
+        if [ -f "$override" ]; then
+            warn "$override exists and takes precedence; Codex will not read $(basename "$destination")."
+        fi
     fi
 
     if ! assert_markers_balanced "$destination"; then
@@ -881,29 +899,33 @@ install_codex() {
         # ordinary "no legacy copy" case, so capture instead of letting set -e
         # abort.
         adopt_status=0
-        adopt_legacy_codex_agents "$destination" || adopt_status=$?
+        adopt_legacy_managed_file "$destination" || adopt_status=$?
         if [ "$adopt_status" -eq 2 ]; then
             return 1
         fi
     fi
 
     if [ "$adopt_status" -eq 0 ]; then
-        write_codex_block "$scope" 1
+        write_managed_block "$target" "$scope" 1
     else
-        write_codex_block "$scope" 0
+        write_managed_block "$target" "$scope" 0
     fi
 }
 
-remove_codex() {
-    local scope="$1"
+remove_managed_file() {
+    local target="$1"
+    local scope="$2"
     local destination
     local resolved
     local rendered
 
-    destination="$(codex_file_path "$scope")"
+    case "$target" in
+    claude) destination="$(claude_rule_path "$scope")" ;;
+    codex) destination="$(codex_file_path "$scope")" ;;
+    esac
 
     if [ ! -f "$destination" ]; then
-        printf '  not installed (codex, %s): %s\n' "$scope" "$destination"
+        printf '  not installed (%s, %s): %s\n' "$target" "$scope" "$destination"
         return 0
     fi
 
@@ -912,7 +934,7 @@ remove_codex() {
     fi
 
     if [ "$(count_marker_lines "$destination" "$(start_marker)")" -eq 0 ]; then
-        printf '  not installed (codex, %s): %s\n' "$scope" "$destination"
+        printf '  not installed (%s, %s): %s\n' "$target" "$scope" "$destination"
         return 0
     fi
 
@@ -930,7 +952,7 @@ remove_codex() {
     merge_block "$resolved" "$SCRATCH_DIR/empty" "$rendered"
 
     if cmp -s "$resolved" "$rendered"; then
-        printf '  not installed (codex, %s): %s\n' "$scope" "$resolved"
+        printf '  not installed (%s, %s): %s\n' "$target" "$scope" "$resolved"
         return 0
     fi
 
@@ -939,8 +961,20 @@ remove_codex() {
         return 1
     fi
 
-    success "removed (codex, $scope): $resolved"
+    success "removed ($target, $scope): $resolved"
     return 0
+}
+
+# ------------------------------------------------------------
+# Codex
+# ------------------------------------------------------------
+
+install_codex() {
+    install_managed_file codex "$1"
+}
+
+remove_codex() {
+    remove_managed_file codex "$1"
 }
 
 # ------------------------------------------------------------
@@ -958,7 +992,9 @@ preflight() {
         case "$target" in
         claude)
             for scope in $SCOPES; do
-                if [ "$scope" = "global" ]; then
+                if [ "$RULE" = "global" ] && [ "$scope" = "global" ]; then
+                    directory="$HOME/.claude"
+                elif [ "$scope" = "global" ]; then
                     directory="$HOME/.claude/rules"
                 else
                     directory="$PROJECT_DIR/.claude/rules"
@@ -1007,7 +1043,11 @@ is_installed_claude() {
     local path
 
     path="$(claude_rule_path "$scope")"
-    [ -f "$path" ] && head -n 1 "$path" | grep -qF -- "$RULE_TITLE"
+    if [ "$RULE" = "global" ] && [ "$scope" = "global" ]; then
+        [ -f "$path" ] && [ "$(count_marker_lines "$path" "$(start_marker)")" -gt 0 ]
+    else
+        [ -f "$path" ] && head -n 1 "$path" | grep -qF -- "$RULE_TITLE"
+    fi
 }
 
 is_installed_codex() {
@@ -1099,11 +1139,15 @@ run() {
 
         log "Installing $RULE_FILE"
 
-        if [ "$SCOPE" = "everywhere" ] || [ "$SCOPE" = "global" ]; then
-            if ! migrate_legacy_claude_md; then
-                FAILURES=$((FAILURES + 1))
+        case " $TARGETS " in
+        *" claude "*)
+            if { [ "$SCOPE" = "everywhere" ] || [ "$SCOPE" = "global" ]; } &&
+                ! remove_legacy_claude_global_rule; then
+                error "obsolete Claude rule must be resolved before installation."
+                return 1
             fi
-        fi
+            ;;
+        esac
     else
         log "Removing $RULE_FILE"
     fi
