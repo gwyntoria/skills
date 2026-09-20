@@ -2,6 +2,10 @@
 
 set -eu
 
+PROGRAM_NAME="${0##*/}"
+INSTALL_AGENT=0
+INSTALL_SKILLS=0
+
 GLOBAL_INSTRUCTIONS_URL="https://raw.githubusercontent.com/gwyntoria/skills/refs/heads/main/instructions/global.md"
 
 STATUSLINE_URL="https://raw.githubusercontent.com/gwyntoria/skills/refs/heads/main/scripts/statusline.sh"
@@ -23,6 +27,47 @@ log() {
 
 success() {
     printf '\033[1;32m✓ %s\033[0m\n' "$1"
+}
+
+usage() {
+    printf 'Usage: %s [--agent] [--skill]\n' "$PROGRAM_NAME"
+    printf '\n'
+    printf 'Options:\n'
+    printf '  --agent  Install agents, global instructions, statusline, and Pi extensions\n'
+    printf '  --skill  Replace and install global agent skills\n'
+    printf '  -h, --help  Show this help message\n'
+}
+
+parse_args() {
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+        --agent)
+            INSTALL_AGENT=1
+            ;;
+        --skill)
+            INSTALL_SKILLS=1
+            ;;
+        -h | --help)
+            usage
+            return 1
+            ;;
+        *)
+            printf 'Error: unknown option: %s\n\n' "$1" >&2
+            usage >&2
+            return 2
+            ;;
+        esac
+
+        shift
+    done
+
+    if [ "$INSTALL_AGENT" -eq 0 ] && [ "$INSTALL_SKILLS" -eq 0 ]; then
+        printf 'Error: specify --agent, --skill, or both.\n\n' >&2
+        usage >&2
+        return 2
+    fi
+
+    return 0
 }
 
 require_command() {
@@ -157,9 +202,7 @@ install_statusline() {
     ' "$settings_file" "~/.claude/statusline.sh"
 }
 
-main() {
-    # Stage 1: Check required commands and coding agents.
-
+install_agents() {
     if ! command -v codex >/dev/null 2>&1; then
         log "Installing Codex"
         curl -fsSL https://chatgpt.com/codex/install.sh | sh
@@ -189,9 +232,6 @@ main() {
 
     require_command curl
     require_command node
-    require_command npx
-
-    # Stage 2: Install the global instructions for Codex and Claude Code.
 
     log "Installing global instructions for Codex and Claude Code"
 
@@ -207,23 +247,32 @@ main() {
 
     success "Global instructions installed for Codex and Claude Code"
 
-    # Stage 3: Install the Claude Code statusline.
-
     log "Installing the Claude Code statusline"
 
     install_statusline "$temporary_dir/statusline.sh"
 
     success "Claude Code statusline installed"
 
-    # Stage 4: Remove existing global agent skills.
+    require_command pi
+
+    log "Installing Pi extensions"
+
+    for extension in "${PI_EXTENSIONS[@]}"; do
+        pi install "$extension"
+    done
+
+    success "Pi extensions installed"
+}
+
+install_skills() {
+    require_command node
+    require_command npx
 
     log "Removing existing agent skills"
 
     remove_installed_agent_skills
 
     success "Existing agent skills removed"
-
-    # Stage 5: Install global skills for Codex and Claude Code.
 
     log "Installing skills for Codex and Claude Code"
 
@@ -250,18 +299,24 @@ main() {
     remove_unwanted_agent_skills
 
     success "Agent skills installed"
+}
 
-    # Stage 6: Install Pi extensions.
+main() {
+    local parse_status
 
-    require_command pi
+    parse_args "$@" || {
+        parse_status=$?
+        [ "$parse_status" -eq 1 ] && return 0
+        return "$parse_status"
+    }
 
-    log "Installing Pi extensions"
+    if [ "$INSTALL_AGENT" -eq 1 ]; then
+        install_agents
+    fi
 
-    for extension in "${PI_EXTENSIONS[@]}"; do
-        pi install "$extension"
-    done
-
-    success "Pi extensions installed"
+    if [ "$INSTALL_SKILLS" -eq 1 ]; then
+        install_skills
+    fi
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
