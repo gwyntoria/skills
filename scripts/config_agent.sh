@@ -17,9 +17,6 @@ MATTPOCOCK_ENGINEERING_URL="$MATTPOCOCK_SKILLS_URL/tree/main/skills/engineering"
 MATTPOCOCK_PRODUCTIVITY_URL="$MATTPOCOCK_SKILLS_URL/tree/main/skills/productivity"
 HUMANLAYER_SKILLS_URL="https://github.com/humanlayer/skills"
 UNWANTED_AGENT_SKILLS=()
-PI_EXTENSIONS=(
-    "npm:pi-web-access"
-)
 
 log() {
     printf '\n\033[1;34m==> %s\033[0m\n' "$1"
@@ -33,7 +30,7 @@ usage() {
     printf 'Usage: %s [--agent] [--skill]\n' "$PROGRAM_NAME"
     printf '\n'
     printf 'Options:\n'
-    printf '  --agent  Install agents, global instructions, statusline, and Pi extensions\n'
+    printf '  --agent  Install agents, global instructions, and statusline\n'
     printf '  --skill  Replace and install global agent skills\n'
     printf '  -h, --help  Show this help message\n'
 }
@@ -221,15 +218,6 @@ install_agents() {
         log "Claude Code has been installed"
     fi
 
-    if ! command -v pi >/dev/null 2>&1; then
-        log "Installing Pi"
-        curl -fsSL https://pi.dev/install.sh | sh
-        require_command pi
-        success "Pi installed"
-    else
-        log "Pi has been installed"
-    fi
-
     require_command curl
     require_command node
 
@@ -252,16 +240,6 @@ install_agents() {
     install_statusline "$temporary_dir/statusline.sh"
 
     success "Claude Code statusline installed"
-
-    require_command pi
-
-    log "Installing Pi extensions"
-
-    for extension in "${PI_EXTENSIONS[@]}"; do
-        pi install "$extension"
-    done
-
-    success "Pi extensions installed"
 }
 
 install_skills() {

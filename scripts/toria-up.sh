@@ -184,7 +184,7 @@ run_tasks() {
     local clean_homebrew="$1"
 
     TASK_CURRENT=0
-    TASK_TOTAL=7
+    TASK_TOTAL=5
 
     if [ "$clean_homebrew" -eq 1 ]; then
         TASK_TOTAL=$((TASK_TOTAL + 1))
@@ -224,16 +224,6 @@ run_tasks() {
             "brew" \
             brew cleanup
     fi
-
-    run_update \
-        "Pi" \
-        "pi" \
-        pi update
-
-    run_update \
-        "Pi Extension Packages" \
-        "pi" \
-        pi update --extensions
 }
 
 # 把 RESULTS 渲染成尾部汇总。
