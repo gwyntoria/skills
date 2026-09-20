@@ -73,7 +73,24 @@
 | [`writing.md`](instructions/writing.md) | 项目 | Markdown 写作仓库的资源路径、引用方式和格式检查规则 |
 | [`chinese-punctuation.md`](instructions/chinese-punctuation.md) | 项目 | 终端回复的中文半角标点、空格规则和适用范围 |
 
-这些 instruction 是可复用的规则片段。使用时应根据目标 Agent 的配置方式，选择适用文件并合并到项目指令中。
+这些 instruction 是可复用的规则片段，可以用 [`scripts/setup-rule.sh`](scripts/setup-rule.sh) 安装。脚本直接读取工作区里的 `instructions/`，不依赖网络，但因此**需要先 clone 本仓库**，再从仓库里运行:
+
+```bash
+git clone https://github.com/gwyntoria/skills.git
+cd skills
+
+# 全局。Claude Code 写 ~/.claude/rules/，Codex 写 ~/.codex/AGENTS.md 里的托管块
+scripts/setup-rule.sh global --target both --global
+
+# 项目级。写进当前仓库的 .claude/rules/ 和 AGENTS.md
+scripts/setup-rule.sh writing --target both
+
+# 查看安装状态，或撤销
+scripts/setup-rule.sh --list
+scripts/setup-rule.sh global --remove
+```
+
+改了 `instructions/` 下的文件后重新运行即可生效，不需要发版或切 ref。
 
 ### 补充说明
 
@@ -90,6 +107,7 @@
 | 脚本 | 运行环境 | 说明 |
 | --- | --- | --- |
 | [`config_agent.sh`](scripts/config_agent.sh) | macOS / Linux | 安装 Codex CLI、Claude Code 和 Pi，写入全局指令，安装状态栏、Pi 扩展和第三方 skills，并清理已有的全局 skills |
+| [`setup-rule.sh`](scripts/setup-rule.sh) | macOS / Linux | 把 `instructions/` 下的单个规则装进 Claude Code 或 Codex，支持全局与项目两级，带 `--remove` 撤销 |
 | [`toria-up.sh`](scripts/toria-up.sh) | macOS / Linux | 依次更新 skills、Codex、Claude Code、Homebrew 和 Pi，末尾汇总每个任务的结果 |
 | [`statusline.sh`](scripts/statusline.sh) | Claude Code | 状态栏脚本，显示模型与思考等级、目录与 Git 分支、上下文余量、输入输出 token、速率限制和版本 |
 | [`wsl_setup.sh`](scripts/wsl_setup.sh) | WSL Ubuntu | 装配 Homebrew、Git、lazygit、Starship、uv、Python、nvm、Node.js 和 Codex CLI，带 `--uninstall` 撤销上述改动 |
@@ -98,9 +116,11 @@
 
 ### 补充说明
 
-- `config_agent.sh` 面向个人环境，会覆盖 `~/.codex/AGENTS.md` 和 `~/.claude/CLAUDE.md`，并先删除 `~/.agents/skills` 和 `~/.claude/skills` 下的已有内容，再按脚本内的清单重新安装。运行前确认这些位置没有需要保留的内容。
+- `config_agent.sh` 面向个人环境，**需要从 clone 出来的仓库里运行**：全局指令和状态栏脚本都取本地文件，不联网拉取。它会先删除 `~/.agents/skills` 和 `~/.claude/skills` 下的已有内容，再按脚本内的清单重新安装，运行前确认这些位置没有需要保留的内容。全局指令交给 `setup-rule.sh` 安装，不再整文件覆盖 `~/.claude/CLAUDE.md`。Codex CLI、Claude Code、Pi 以及第三方 skills 仍从各自的官方源安装。
+- `setup-rule.sh` 的两个 Agent 机制不同，所以安装方式也不同: Claude Code 原生读取 `.claude/rules/` 下的规则，装的是独立文件；Codex 只有 `AGENTS.md`，装的是 `<!-- gwyn-space-skills: <规则>:start -->` 与 `:end` 之间的托管块。**块内手改会在下次安装时被覆盖**，块外内容不受影响。规则清单由 `instructions/*.md` 决定，加一个文件就多一条规则；默认范围只有 `global.md` 是全局，其余按项目处理，用 `--global` 可以覆盖。
+- 从 `config_agent.sh` 早期版本升级时，`~/.claude/CLAUDE.md` 与 `~/.codex/AGENTS.md` 里各有一份和 `global.md` 逐字节相同的旧副本，装上规则后同一份内容会加载两遍。`setup-rule.sh` 检测到这种副本会报警；加 `--migrate-legacy` 才会改名成 `.legacy-<时间戳>` 备份，从不删除。`config_agent.sh` 默认带上这个选项。
 - `toria-up.sh` 按固定顺序执行更新，前置命令不存在时记为跳过而不是失败，最后打印成功、失败和跳过的清单；带 `-c` 时在 Homebrew 更新后追加 `brew cleanup`。
-- `statusline.sh` 由 `config_agent.sh` 从仓库的 raw 地址拉取并安装到 `~/.claude/statusline.sh`，其中速率限制一段只在会话上报数据时显示。
+- `statusline.sh` 由 `config_agent.sh` 从工作区复制到 `~/.claude/statusline.sh`，其中速率限制一段只在会话上报数据时显示。
 - `link-skills.sh` 只处理指向本仓库的软链，遇到真实目录或指向别处的软链会跳过并报告，重复运行不会产生重复条目。
 - `wsl_setup.sh --uninstall` 保留 Codex CLI 和 apt 安装的系统包，需要一并删除 apt 包时设置 `REMOVE_APT_PACKAGES=1`，确认提示可以用 `ASSUME_YES=1` 跳过。
 
