@@ -322,6 +322,15 @@ install_homebrew() {
     fi
 
     append_once 'eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"' "$BASHRC"
+
+    if brew list --formula eza >/dev/null 2>&1; then
+        success "eza already installed: $(eza --version | head -n 1)"
+    else
+        brew install eza
+        success "eza installed with Homebrew"
+    fi
+
+    append_once 'alias la="eza -laG --group-directories-first --icons=auto"' "$BASHRC"
 }
 
 check_git() {
@@ -652,6 +661,9 @@ uninstall_shell_config() {
     log "Removing shell configuration"
 
     remove_exact_line 'eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"' "$BASHRC" ||
+        warn "Could not update $BASHRC"
+
+    remove_exact_line 'alias la="eza -laG --group-directories-first --icons=auto"' "$BASHRC" ||
         warn "Could not update $BASHRC"
 
     remove_exact_line 'export PATH="$HOME/.local/bin:$PATH"' "$BASHRC" ||
