@@ -330,8 +330,8 @@ install_homebrew() {
         success "eza installed with Homebrew"
     fi
 
-    append_once 'alias ls="eza -laG --git --group-directories-first --icons=auto"' "$BASHRC"
-    append_once 'alias la="eza -la --git --group-directories-first --icons=auto"' "$BASHRC"
+    append_once 'alias ls="eza -al --git --group-directories-first --icons=auto"' "$BASHRC"
+    append_once 'alias la="eza -alG --git --group-directories-first --icons=auto"' "$BASHRC"
 }
 
 check_git() {
