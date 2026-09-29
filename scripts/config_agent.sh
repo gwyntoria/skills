@@ -17,8 +17,7 @@ STATUSLINE_SOURCE="$REPO/scripts/statusline.sh"
 WAZA_SKILLS_URL="https://github.com/tw93/waza"
 KAMI_SKILLS_URL="https://github.com/tw93/kami"
 MATTPOCOCK_SKILLS_URL="https://github.com/mattpocock/skills"
-MATTPOCOCK_ENGINEERING_URL="$MATTPOCOCK_SKILLS_URL/tree/main/skills/engineering"
-MATTPOCOCK_PRODUCTIVITY_URL="$MATTPOCOCK_SKILLS_URL/tree/main/skills/productivity"
+MATTPOCOCK_SKILLS_PAGE_URL="https://www.aihero.dev/skills"
 HUMANLAYER_SKILLS_URL="https://github.com/humanlayer/skills"
 UNWANTED_AGENT_SKILLS=()
 
@@ -90,6 +89,29 @@ install_agent_skills() {
         --global \
         --yes
 }
+
+fetch_mattpocock_skill_names() (
+    set -o pipefail
+
+    curl -fsSL --connect-timeout 10 --max-time 60 "$MATTPOCOCK_SKILLS_PAGE_URL" |
+        node -e '
+            const fs = require("fs");
+            const html = fs.readFileSync(0, "utf8");
+            // Restrict the allowlist to the homepage skill set, excluding other links.
+            const section = html.match(/<section\b[^>]*\baria-labelledby=["\x27]skill-set-heading["\x27][^>]*>([\s\S]*?)<\/section>/i);
+            const links = (section?.[1] ?? "").matchAll(
+                /<a\b[^>]*\bhref=["\x27](?:https:\/\/www\.aihero\.dev)?\/skills-([a-z0-9][a-z0-9-]*)\/?["\x27][^>]*>/g
+            );
+            const names = [...new Set([...links].map(match => match[1]))];
+
+            if (names.length === 0) {
+                process.stderr.write("Error: no main skills found on the Matt Pocock skills page.\n");
+                process.exit(1);
+            }
+
+            process.stdout.write(names.join("\n") + "\n");
+        '
+)
 
 remove_installed_agent_skills() {
     local agents_dir
@@ -249,9 +271,78 @@ install_agents() {
     success "Claude Code statusline installed"
 }
 
+print_installed_agent_skills() {
+    node -e '
+        const fs = require("fs");
+        const skillsDir = process.argv[1];
+        const lockPath = process.argv[2];
+        let lockedSkills = {};
+
+        try {
+            lockedSkills = JSON.parse(fs.readFileSync(lockPath, "utf8")).skills ?? {};
+        } catch {}
+
+        const names = fs.readdirSync(skillsDir, { withFileTypes: true })
+            .filter(entry => entry.isDirectory() || entry.isSymbolicLink())
+            .map(entry => entry.name)
+            .filter(name => {
+                try {
+                    return fs.statSync(`${skillsDir}/${name}`).isDirectory();
+                } catch {
+                    return false;
+                }
+            })
+            .sort();
+        const groups = new Map();
+
+        for (const name of names) {
+            const skill = lockedSkills[name] ?? {};
+            let category = "Other";
+
+            if (skill.source === "tw93/waza") category = "Waza";
+            else if (skill.source === "tw93/kami") category = "Kami";
+            else if (skill.source === "humanlayer/skills") category = "HumanLayer";
+            else if (skill.source === "mattpocock/skills") {
+                const section = skill.skillPath?.split("/")[1];
+                if (section === "engineering") category = "Matt Pocock / Engineering";
+                else if (section === "productivity") category = "Matt Pocock / Productivity";
+                else category = "Matt Pocock / Other";
+            }
+
+            if (!groups.has(category)) groups.set(category, []);
+            groups.get(category).push(name);
+        }
+
+        console.log(`Installed skills by category (${names.length}):`);
+        for (const category of ["Waza", "Kami", "Matt Pocock / Engineering", "Matt Pocock / Productivity", "Matt Pocock / Other", "HumanLayer", "Other"]) {
+            const skills = groups.get(category);
+            if (!skills) continue;
+            console.log(`\n${category} (${skills.length}):`);
+            console.log(`  ${skills.join(", ")}`);
+        }
+    ' "$HOME/.agents/skills" "$HOME/.agents/.skill-lock.json"
+}
+
 install_skills() {
+    local skill_names
+    local skill_name
+    local mattpocock_skills=()
+
+    require_command curl
     require_command node
     require_command npx
+
+    log "Fetching Matt Pocock main skills from the official website"
+
+    # Resolve the allowlist before removing any installed skills.
+    if ! skill_names="$(fetch_mattpocock_skill_names)"; then
+        printf 'Error: cannot load %s; existing skills were not removed.\n' "$MATTPOCOCK_SKILLS_PAGE_URL" >&2
+        return 1
+    fi
+
+    while IFS= read -r skill_name; do
+        mattpocock_skills+=("$skill_name")
+    done <<<"$skill_names"
 
     log "Removing existing agent skills"
 
@@ -266,10 +357,9 @@ install_skills() {
     install_agent_skills "$WAZA_SKILLS_URL"
     install_agent_skills "$KAMI_SKILLS_URL"
 
-    # Install the Mattpocock engineering and productivity skills.
+    # Let the installer match only website-listed names against the repository.
 
-    install_agent_skills "$MATTPOCOCK_ENGINEERING_URL"
-    install_agent_skills "$MATTPOCOCK_PRODUCTIVITY_URL"
+    install_agent_skills "$MATTPOCOCK_SKILLS_URL" --skill "${mattpocock_skills[@]}"
 
     # Install the Humanlayer show-me skill.
 
@@ -282,6 +372,8 @@ install_skills() {
     # Remove skills that are not part of the desired setup.
 
     remove_unwanted_agent_skills
+
+    print_installed_agent_skills
 
     success "Agent skills installed"
 }
