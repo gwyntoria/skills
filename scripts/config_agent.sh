@@ -272,6 +272,8 @@ install_agents() {
 }
 
 print_installed_agent_skills() {
+    # This single-quoted argument is JavaScript; its template expressions belong to Node.
+    # shellcheck disable=SC2016
     node -e '
         const fs = require("fs");
         const skillsDir = process.argv[1];
