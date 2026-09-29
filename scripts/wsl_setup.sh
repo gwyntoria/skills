@@ -57,6 +57,7 @@ SYSTEM_PACKAGES=(
     unzip
     zip
     jq
+    net-tools
     ripgrep
     fd-find
     tree
