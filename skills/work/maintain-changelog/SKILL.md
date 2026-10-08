@@ -1,9 +1,9 @@
 ---
-name: changelog
+name: maintain-changelog
 description: Write, update, or review CHANGELOG.md files and release change summaries using Keep a Changelog conventions. Use when users ask to 编写 changelog, 更新 CHANGELOG, 审核版本记录, prepare an Unreleased section, or check release entries. Not for commit-message review or general code review.
 ---
 
-# Changelog
+# Maintain Changelog
 
 Produce a human-readable record of notable project changes, grounded in the
 requested release scope and consistent with the existing changelog. Use

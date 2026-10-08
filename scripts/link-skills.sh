@@ -75,7 +75,7 @@ that resolve into this repo.
 
 examples:
   link-skills.sh -d dialog writing --claude
-  link-skills.sh --remove -s changelog
+  link-skills.sh --remove -s maintain-changelog
   link-skills.sh --prune -d dialog writing --claude
 EOF
 }
