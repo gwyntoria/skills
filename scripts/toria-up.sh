@@ -3,20 +3,34 @@
 PROGRAM_NAME="${0##*/}"
 
 PROGRESS_ENABLED=0
-PROGRESS_CLEAR_LINE=
+PROGRESS_ROWS=0
+PROGRESS_COLS=0
 
-# 交互终端使用单行进度条；重定向和定时任务保持普通输出。
+# 最后一行留给进度，其余行正常滚动；不接管子命令的输入输出。
 setup_progress() {
-    if ! [ -t 1 ] || ! [ -t 2 ] || [ "${TERM:-dumb}" = dumb ]; then
+    local dimensions
+    if ! [ -t 0 ] || ! [ -t 1 ] || ! [ -t 2 ] || [ "${TERM:-dumb}" = dumb ]; then
+        return
+    fi
+    dimensions=$(stty size 2>/dev/null) || return
+    read -r PROGRESS_ROWS PROGRESS_COLS <<<"$dimensions"
+    case "$PROGRESS_ROWS:$PROGRESS_COLS" in
+    *[!0-9:]* | :* | *:) return ;;
+    esac
+    if [ "$PROGRESS_ROWS" -lt 3 ] || [ "$PROGRESS_COLS" -lt 2 ]; then
         return
     fi
 
-    if ! command -v tput >/dev/null 2>&1; then
-        return
-    fi
-
-    PROGRESS_CLEAR_LINE=$(tput el 2>/dev/null) || return
+    # 先腾出一行，再把光标放回滚动区，兼容启动时已在屏幕底部。
+    printf '\n\0337\033[1;%dr\0338\033[1A\r' "$((PROGRESS_ROWS - 1))" >&2
     PROGRESS_ENABLED=1
+}
+
+restore_terminal() {
+    if [ "$PROGRESS_ENABLED" -eq 1 ]; then
+        printf '\0337\033[%d;1H\033[2K\033[r\0338' "$PROGRESS_ROWS" >&2
+        PROGRESS_ENABLED=0
+    fi
 }
 
 draw_progress() {
@@ -28,9 +42,22 @@ draw_progress() {
     local filled
     local empty
     local bar=
+    local text
+    local dimensions
+    local rows
+    local cols
 
     if [ "$PROGRESS_ENABLED" -ne 1 ]; then
         return
+    fi
+
+    # 在子命令结束后的安全边界重新读取尺寸，运行中不争用光标。
+    dimensions=$(stty size 2>/dev/null) || return
+    read -r rows cols <<<"$dimensions"
+    if [ "$rows" != "$PROGRESS_ROWS" ] || [ "$cols" != "$PROGRESS_COLS" ]; then
+        restore_terminal
+        setup_progress
+        [ "$PROGRESS_ENABLED" -eq 1 ] || return
     fi
 
     filled=$((current * width / total))
@@ -45,45 +72,10 @@ draw_progress() {
         empty=$((empty - 1))
     done
 
-    printf '\r%s[%s] %d/%d  %s (%s)' \
-        "$PROGRESS_CLEAR_LINE" "$bar" "$current" "$total" "$name" "$state" >&2
-}
-
-clear_progress() {
-    if [ "$PROGRESS_ENABLED" -eq 1 ]; then
-        printf '\r%s' "$PROGRESS_CLEAR_LINE" >&2
-    fi
-}
-
-restore_terminal() {
-    if [ "$PROGRESS_ENABLED" -eq 1 ]; then
-        clear_progress
-        PROGRESS_ENABLED=0
-    fi
-}
-
-# 进度条占用当前最后一行。子命令每输出一行，就先清除它，打印日志，
-# 再在新的最后一行重画，避免多个进程争用终端光标。
-run_command_with_progress() {
-    local name="$1"
-    local line
-    local rc
-
-    shift
-
-    if [ "$PROGRESS_ENABLED" -ne 1 ]; then
-        "$@"
-        return $?
-    fi
-
-    "$@" 2>&1 | while IFS= read -r line || [ -n "$line" ]; do
-        clear_progress
-        printf '%s\n' "$line"
-        draw_progress "$TASK_CURRENT" "$TASK_TOTAL" "$name" "Running"
-    done
-    rc=${PIPESTATUS[0]}
-
-    return "$rc"
+    text="[$bar] $current/$total  $name ($state)"
+    # 留出右侧一列，避免窄窗口中自动换行；一次写完再恢复日志光标。
+    printf '\0337\033[%d;1H\033[2K%s\0338' \
+        "$PROGRESS_ROWS" "${text:0:$((PROGRESS_COLS - 1))}" >&2
 }
 
 usage() {
@@ -155,11 +147,10 @@ run_update() {
         SECONDS=0
         draw_progress "$TASK_CURRENT" "$TASK_TOTAL" "$name" "Running"
 
-        run_command_with_progress "$name" "$@"
+        # 子命令直接使用终端，保留无换行提示和交互能力。
+        "$@"
         rc=$?
         elapsed=$SECONDS
-
-        clear_progress
 
         if [ "$rc" -eq 0 ]; then
             printf '✅ Completed: %s (%ss)\n' "$name" "$elapsed"
@@ -172,6 +163,8 @@ run_update() {
             detail="$rc"
         fi
     fi
+
+    draw_progress "$TASK_CURRENT" "$TASK_TOTAL" "$name" "$status"
 
     RESULTS+=("$status"$'\t'"$name"$'\t'"$detail")
 
@@ -189,8 +182,6 @@ run_tasks() {
     if [ "$clean_homebrew" -eq 1 ]; then
         TASK_TOTAL=$((TASK_TOTAL + 1))
     fi
-
-    setup_progress
 
     run_update \
         "Skills" \
@@ -297,7 +288,6 @@ main() {
     # RESULTS 是 run_update 和 report_results 之间唯一的交接面。
     RESULTS=()
     clean_homebrew=0
-    trap restore_terminal EXIT
 
     parse_args "$@"
     parse_rc=$?
@@ -309,6 +299,12 @@ main() {
     *) return 2 ;;
     esac
 
+    trap restore_terminal EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    trap 'exit 129' HUP
+    setup_progress
+
     printf '\n'
     printf '%s\n' "##################################################"
     printf 'Update started: %s\n' "$(date '+%Y-%m-%d %H:%M:%S')"
@@ -316,6 +312,7 @@ main() {
 
     run_tasks "$clean_homebrew"
 
+    restore_terminal
     # report_results 的返回值就是脚本的退出码。
     report_results
 }
