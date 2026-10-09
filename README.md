@@ -112,7 +112,6 @@ scripts/setup-rule.sh global --remove
 | [`statusline.sh`](scripts/statusline.sh) | Claude Code | 状态栏脚本，显示模型与思考等级、目录与 Git 分支、上下文余量、输入输出 token、速率限制和版本 |
 | [`wsl_setup.sh`](scripts/wsl_setup.sh) | WSL Ubuntu | 装配 Homebrew、Git、lazygit、Starship、uv、Python、nvm、Node.js 和 Codex CLI，带 `--uninstall` 撤销上述改动 |
 | [`list-skills.sh`](scripts/list-skills.sh) | 仓库维护 | 列出仓库内全部 skill 路径，并检查是否有重名 |
-| [`link-skills.sh`](scripts/link-skills.sh) | 仓库维护 | 把仓库内的 skill 软链到 `~/.agents/skills`，可指定 skill 或目录，也可移除和清理 |
 
 ### 补充说明
 
@@ -121,7 +120,6 @@ scripts/setup-rule.sh global --remove
 - 从 `config_agent.sh` 早期版本升级时，`~/.claude/CLAUDE.md` 与 `~/.codex/AGENTS.md` 可能是和 `global.md` 逐字节相同的整文件副本。`setup-rule.sh` 检测到这种副本会报警；加 `--migrate-legacy` 才会先创建 `.pre-rules.bak-<时间戳>` 备份，再改成托管块。旧版 `~/.claude/rules/global.md` 与仓库内容完全相同时会移到 `~/.claude/` 下备份；文件已被修改或是软链接时会停止安装并保留原文件。`config_agent.sh` 默认带上迁移选项。
 - `toria-up.sh` 按固定顺序执行更新，前置命令不存在时记为跳过而不是失败，最后打印成功、失败和跳过的清单；带 `-c` 时在 Homebrew 更新后追加 `brew cleanup`。交互终端使用 Bash 和终端控制序列把进度固定在最后一行，上方保留日志和普通确认输入；任务切换时更新底栏，退出或 Ctrl-C 时恢复终端。子程序清屏、全屏交互和运行中缩放窗口可能影响底栏，尺寸在下一次任务边界重新读取。重定向或定时任务保持普通输出。
 - `statusline.sh` 由 `config_agent.sh` 从工作区复制到 `~/.claude/statusline.sh`，其中速率限制一段只在会话上报数据时显示。
-- `link-skills.sh` 只处理指向本仓库的软链，遇到真实目录或指向别处的软链会跳过并报告，重复运行不会产生重复条目。
 - `wsl_setup.sh --uninstall` 保留 Codex CLI 和 apt 安装的系统包，需要一并删除 apt 包时设置 `REMOVE_APT_PACKAGES=1`，确认提示可以用 `ASSUME_YES=1` 跳过。
 
 ## 安装
