@@ -71,6 +71,7 @@ For example, a public declaration in a header:
 ```c
 /**
  * @brief Advance a countdown timer by the elapsed time.
+ * 
  * @param[in,out] timer Timer to update; must be non-NULL.
  * @param[in] elapsed_ms Elapsed time in milliseconds; zero leaves the timer unchanged.
  * @return true if the timer is expired after the update, including an already
@@ -103,6 +104,7 @@ The corresponding source definition combines the function contract with process 
 ```c
 /**
  * @brief Advance a countdown timer by the elapsed time.
+ * 
  * @param[in,out] timer Timer to update; must be non-NULL.
  * @param[in] elapsed_ms Elapsed time in milliseconds; zero leaves the timer unchanged.
  * @return true if the timer is expired after the update, including an already
