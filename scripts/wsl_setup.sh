@@ -18,6 +18,8 @@ set -euo pipefail
 #   - uv and Python
 #   - nvm and Node.js
 #   - Codex CLI
+#   - Claude Code
+#   - Global agent/skill configuration
 #
 # --uninstall preserves Codex CLI and, by default, the apt packages.
 #
@@ -511,6 +513,18 @@ install_codex() {
     fi
 }
 
+install_claude() {
+    log "Checking Claude Code"
+
+    if command_exists claude; then
+        success "Claude Code already installed"
+    else
+        curl -fsSL https://claude.ai/install.sh | bash
+        command_exists claude
+        success "Claude Code installed"
+    fi
+}
+
 report_installed_versions() {
     log "Development environment summary"
 
@@ -542,6 +556,9 @@ report_installed_versions() {
 
     printf "Codex:     "
     codex --version
+
+    printf "Claude:    "
+    claude --version
 }
 
 # ------------------------------------------------------------
@@ -755,6 +772,8 @@ run_install() {
     install_nvm
     install_node
     install_codex
+    install_claude
+    bash "$SCRIPT_DIR/config_agent.sh" --agent --skill
     report_installed_versions
 
     printf '\n'
