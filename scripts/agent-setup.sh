@@ -11,7 +11,7 @@ INSTALL_SKILLS=0
 # Only third-party sources below are fetched over the network.
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-$0}")" && pwd -P)"
 REPO="$(cd -- "$SCRIPT_DIR/.." && pwd -P)"
-SETUP_RULE="$REPO/scripts/setup-rule.sh"
+SETUP_RULE="$REPO/scripts/agent-install-rule.sh"
 STATUSLINE_SOURCE="$REPO/scripts/statusline.sh"
 
 WAZA_SKILLS_URL="https://github.com/tw93/waza"
@@ -257,9 +257,9 @@ install_agents() {
     mkdir -p "$HOME/.codex"
     mkdir -p "$HOME/.claude"
 
-    # Delegated to setup-rule.sh so both agents receive managed global.md blocks:
+    # Delegated to agent-install-rule.sh so both agents receive managed global.md blocks:
     # CLAUDE.md for Claude Code and AGENTS.md for Codex.
-    # stdin is closed because setup-rule.sh is non-interactive by design.
+    # stdin is closed because agent-install-rule.sh is non-interactive by design.
     bash "$SETUP_RULE" global --target both --global --migrate-legacy </dev/null
 
     success "Global instructions installed for Codex and Claude Code"

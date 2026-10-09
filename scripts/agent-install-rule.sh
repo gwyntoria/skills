@@ -3,7 +3,7 @@
 # into Claude Code or Codex, at global or project scope.
 #
 # Usage:
-#   setup-rule.sh <rule> [--target claude|codex|both|auto]
+#   agent-install-rule.sh <rule> [--target claude|codex|both|auto]
 #                        [--global | --project [DIR]] [--remove] [--list]
 #                        [--migrate-legacy] [-h|--help]
 #
@@ -1202,7 +1202,7 @@ run() {
 main() {
     # `|| parse_rc=$?` rather than a bare call: parse_args returns 1 after
     # printing --help, and under `set -e` a bare call would abort the script
-    # before the return code could be read. wsl_setup.sh gets away with the bare
+    # before the return code could be read. env-setup-wsl.sh gets away with the bare
     # form only because it does not run under `set -e`.
     parse_rc=0
     parse_args "$@" || parse_rc=$?

@@ -6,8 +6,8 @@ set -euo pipefail
 # WSL Ubuntu Development Environment
 #
 # Usage:
-#   ./wsl_setup.sh              Install
-#   ./wsl_setup.sh --uninstall  Remove what the installer created
+#   ./env-setup-wsl.sh              Install
+#   ./env-setup-wsl.sh --uninstall  Remove what the installer created
 #
 # Handles:
 #   - apt system packages
@@ -38,8 +38,8 @@ ASSUME_YES="${ASSUME_YES:-0}"
 
 HOMEBREW_BIN="/home/linuxbrew/.linuxbrew/bin/brew"
 
-WT_HOOK_START='# >>> wsl_setup.sh Windows Terminal CWD hook >>>'
-WT_HOOK_END='# <<< wsl_setup.sh Windows Terminal CWD hook <<<'
+WT_HOOK_START='# >>> env-setup-wsl.sh Windows Terminal CWD hook >>>'
+WT_HOOK_END='# <<< env-setup-wsl.sh Windows Terminal CWD hook <<<'
 
 # 安装和卸载共用同一份清单：安装时补装缺失项，REMOVE_APT_PACKAGES=1 时按它卸载。
 # 两份清单分开写会逐渐漂移，之前就漏掉了 make、cmake、clang-format 等包。
@@ -364,8 +364,8 @@ configure_user_bin() {
 
     mkdir -p "$LOCAL_BIN"
 
-    install -m 0755 "$SCRIPT_DIR/toria-up.sh" "$LOCAL_BIN/toria-up"
-    success "toria-up installed"
+    install -m 0755 "$SCRIPT_DIR/env-update.sh" "$LOCAL_BIN/toria-update"
+    success "toria-update installed"
 
     append_once 'export PATH="$HOME/.local/bin:$PATH"' "$BASHRC"
 
@@ -573,11 +573,11 @@ confirm_uninstall() {
         "  - nvm and every Node.js version installed under ~/.nvm" \
         "  - uv binaries and uv-managed Python ${PYTHON_VERSION}" \
         "  - Starship installed at ~/.local/bin/starship" \
-        "  - toria-up installed at ~/.local/bin/toria-up" \
+        "  - env-update installed at ~/.local/bin/toria-update" \
         "  - lazygit installed by apt or Homebrew" \
         "  - Homebrew and every package installed through Homebrew" \
-        "  - Exact ~/.bashrc lines added by wsl_setup.sh" \
-        "  - The ~/.inputrc line added by wsl_setup.sh" \
+        "  - Exact ~/.bashrc lines added by env-setup-wsl.sh" \
+        "  - The ~/.inputrc line added by env-setup-wsl.sh" \
         "" \
         "Codex CLI and all Codex data will be preserved." \
         "apt system packages are preserved by default."
@@ -716,7 +716,7 @@ uninstall_shell_config() {
     remove_exact_line 'set completion-ignore-case on' "$INPUTRC" ||
         warn "Could not update $INPUTRC"
 
-    rm -f -- "$LOCAL_BIN/toria-up"
+    rm -f -- "$LOCAL_BIN/toria-update"
 
     rmdir "$LOCAL_BIN" 2>/dev/null || true
 
@@ -733,7 +733,7 @@ uninstall_optional_apt_packages() {
 
     log "Removing apt system packages"
 
-    warn "These packages may be used by software unrelated to wsl_setup.sh"
+    warn "These packages may be used by software unrelated to env-setup-wsl.sh"
 
     if sudo apt remove -y "${SYSTEM_PACKAGES[@]}"; then
         success "apt system packages removed"
@@ -773,7 +773,7 @@ run_install() {
     install_node
     install_codex
     install_claude
-    bash "$SCRIPT_DIR/config_agent.sh" --agent --skill
+    bash "$SCRIPT_DIR/agent-setup.sh" --agent --skill
     report_installed_versions
 
     printf '\n'
