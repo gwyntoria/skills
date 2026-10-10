@@ -108,9 +108,9 @@ scripts/agent-install-rule.sh global --remove
 | --- | --- | --- |
 | [`agent-setup.sh`](scripts/agent-setup.sh) | macOS / Linux | 按参数安装 Agent 配置或第三方 skills；`--agent` 安装 CLI、全局指令和状态栏，`--skill` 清理并重装全局 skills |
 | [`agent-install-rule.sh`](scripts/agent-install-rule.sh) | macOS / Linux | 把 `instructions/` 下的单个规则装进 Claude Code 或 Codex，支持全局与项目两级，带 `--remove` 撤销 |
+| [`env-setup-wsl.sh`](scripts/env-setup-wsl.sh) | WSL Ubuntu | 装配 Homebrew、Git、lazygit、Starship、uv、Python、nvm、Node.js 和 Codex CLI |
 | [`env-update.sh`](scripts/env-update.sh) | macOS / Linux | 依次更新 skills、Codex、Claude Code 和 Homebrew，末尾汇总每个任务的结果 |
 | [`statusline.sh`](scripts/statusline.sh) | Claude Code | 状态栏脚本，显示模型与思考等级、目录与 Git 分支、上下文余量、输入输出 token、速率限制和版本 |
-| [`env-setup-wsl.sh`](scripts/env-setup-wsl.sh) | WSL Ubuntu | 装配 Homebrew、Git、lazygit、Starship、uv、Python、nvm、Node.js 和 Codex CLI |
 | [`list-skills.sh`](scripts/list-skills.sh) | 仓库维护 | 列出仓库内全部 skill 路径，并检查是否有重名 |
 
 ### 补充说明
