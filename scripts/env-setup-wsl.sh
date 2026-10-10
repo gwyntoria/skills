@@ -6,8 +6,7 @@ set -euo pipefail
 # WSL Ubuntu Development Environment
 #
 # Usage:
-#   ./env-setup-wsl.sh              Install
-#   ./env-setup-wsl.sh --uninstall  Remove what the installer created
+#   ./env-setup-wsl.sh  Install
 #
 # Handles:
 #   - apt system packages
@@ -21,8 +20,6 @@ set -euo pipefail
 #   - Claude Code
 #   - Global agent/skill configuration
 #
-# --uninstall preserves Codex CLI and, by default, the apt packages.
-#
 # Target:
 #   - Ubuntu on WSL
 #   - Bash
@@ -33,16 +30,13 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
 PYTHON_VERSION="${PYTHON_VERSION:-3.14}"
 NODE_VERSION="${NODE_VERSION:-lts/*}"
-REMOVE_APT_PACKAGES="${REMOVE_APT_PACKAGES:-0}"
-ASSUME_YES="${ASSUME_YES:-0}"
 
 HOMEBREW_BIN="/home/linuxbrew/.linuxbrew/bin/brew"
 
 WT_HOOK_START='# >>> env-setup-wsl.sh Windows Terminal CWD hook >>>'
 WT_HOOK_END='# <<< env-setup-wsl.sh Windows Terminal CWD hook <<<'
 
-# 安装和卸载共用同一份清单：安装时补装缺失项，REMOVE_APT_PACKAGES=1 时按它卸载。
-# 两份清单分开写会逐渐漂移，之前就漏掉了 make、cmake、clang-format 等包。
+# 安装时按清单补装缺失的系统包。
 SYSTEM_PACKAGES=(
     git
     curl
@@ -66,8 +60,7 @@ SYSTEM_PACKAGES=(
 )
 
 # $HOME 派生路径统一由 set_paths 赋值。顺序要求：require_safe_home 必须先通过，
-# 否则 HOME 为空或为 / 时这些路径指向错误位置，而卸载路径里跟着 rm -rf。
-MODE="install"
+# 避免 HOME 为空或为 / 时向错误位置写入配置。
 LOCAL_BIN=""
 BASHRC=""
 INPUTRC=""
@@ -110,13 +103,6 @@ require_safe_home() {
         exit 1
         ;;
     esac
-}
-
-require_not_root() {
-    if [ "$EUID" -eq 0 ]; then
-        printf 'Error: do not run this script with sudo or as root.\n' >&2
-        exit 1
-    fi
 }
 
 set_paths() {
@@ -188,9 +174,11 @@ remove_exact_line() {
 
     [ -f "$file" ] || return 0
 
+    # 替换符号链接的目标文件，保留用户的配置链接。
+    file="$(readlink -f -- "$file")" || return 1
     directory="$(dirname "$file")"
     filename="$(basename "$file")"
-    temporary_file="$(mktemp "$directory/.${filename}.tmp.XXXXXX")"
+    temporary_file="$(mktemp "$directory/.${filename}.tmp.XXXXXX")" || return 1
 
     if grep -Fvx -- "$line" "$file" >"$temporary_file"; then
         :
@@ -207,8 +195,10 @@ remove_exact_line() {
     if cmp -s "$file" "$temporary_file"; then
         rm -f -- "$temporary_file"
     else
-        chmod --reference="$file" "$temporary_file"
-        mv -- "$temporary_file" "$file"
+        if ! chmod --reference="$file" "$temporary_file" || ! mv -- "$temporary_file" "$file"; then
+            rm -f -- "$temporary_file"
+            return 1
+        fi
     fi
 }
 
@@ -222,21 +212,38 @@ remove_managed_block() {
 
     [ -f "$file" ] || return 0
 
+    # 临时文件和目标位于同一目录，替换时不覆盖配置符号链接。
+    file="$(readlink -f -- "$file")" || return 1
     directory="$(dirname "$file")"
     filename="$(basename "$file")"
-    temporary_file="$(mktemp "$directory/.${filename}.tmp.XXXXXX")"
+    temporary_file="$(mktemp "$directory/.${filename}.tmp.XXXXXX")" || return 1
 
-    awk -v start="$start_marker" -v end="$end_marker" '
-        $0 == start { removing = 1; next }
-        removing && $0 == end { removing = 0; next }
+    if ! awk -v start="$start_marker" -v end="$end_marker" '
+        $0 == start {
+            if (removing) invalid = 1
+            removing = 1
+            next
+        }
+        $0 == end {
+            if (!removing) invalid = 1
+            removing = 0
+            next
+        }
         !removing { print }
-    ' "$file" >"$temporary_file"
+        END { if (removing || invalid) exit 1 }
+    ' "$file" >"$temporary_file"; then
+        rm -f -- "$temporary_file"
+        printf 'Error: could not safely remove managed block from %s. Original file preserved.\n' "$file" >&2
+        return 1
+    fi
 
     if cmp -s "$file" "$temporary_file"; then
         rm -f -- "$temporary_file"
     else
-        chmod --reference="$file" "$temporary_file"
-        mv -- "$temporary_file" "$file"
+        if ! chmod --reference="$file" "$temporary_file" || ! mv -- "$temporary_file" "$file"; then
+            rm -f -- "$temporary_file"
+            return 1
+        fi
     fi
 }
 
@@ -249,13 +256,10 @@ usage() {
     printf '\n'
     printf 'Options:\n'
     printf '  -h, --help       Show this help message\n'
-    printf '      --uninstall  Remove the tools and shell configuration this script installed\n'
     printf '\n'
     printf 'Environment variables:\n'
-    printf '  PYTHON_VERSION=3.14    uv-managed Python version to install or remove\n'
+    printf '  PYTHON_VERSION=3.14    uv-managed Python version to install\n'
     printf '  NODE_VERSION=lts/*     Node.js version installed through nvm\n'
-    printf '  ASSUME_YES=1           Skip the UNINSTALL confirmation\n'
-    printf '  REMOVE_APT_PACKAGES=1  Also remove the apt packages during --uninstall\n'
 }
 
 # 解析命令行选项。
@@ -267,9 +271,6 @@ parse_args() {
         -h | --help)
             usage
             return 1
-            ;;
-        --uninstall)
-            MODE="uninstall"
             ;;
         *)
             printf 'Error: unknown option: %s\n\n' "$1" >&2
@@ -394,9 +395,9 @@ install_starship() {
         success "Starship installed"
     fi
 
-    remove_managed_block "$WT_HOOK_START" "$WT_HOOK_END" "$BASHRC"
-    remove_exact_line 'eval "$(starship init bash)"' "$BASHRC"
-    remove_exact_line 'starship_precmd_user_func="__wt_update_cwd"' "$BASHRC"
+    remove_managed_block "$WT_HOOK_START" "$WT_HOOK_END" "$BASHRC" || return 1
+    remove_exact_line 'eval "$(starship init bash)"' "$BASHRC" || return 1
+    remove_exact_line 'starship_precmd_user_func="__wt_update_cwd"' "$BASHRC" || return 1
 
     if ! active_line_contains 'function __wt_update_cwd()' "$BASHRC"; then
         printf '\n%s\n' \
@@ -484,22 +485,30 @@ install_nvm() {
 
 install_node() {
     local installed_version
+    local version_status
 
     log "Checking Node.js ${NODE_VERSION}"
 
-    # 有意分两行写。`local x="$(...)"` 会用 local 的退出码盖掉命令替换的失败，
-    # 这里要和改动前的全局赋值保持一致的错误传播。
-    installed_version="$(nvm version "$NODE_VERSION")"
+    # nvm 用 N/A 和退出码 3 表示未安装；其他错误仍向调用者传播。
+    if installed_version="$(nvm version "$NODE_VERSION")"; then
+        :
+    else
+        version_status="$?"
+        if [ "$version_status" -ne 3 ] || [ "$installed_version" != "N/A" ]; then
+            return "$version_status"
+        fi
+    fi
 
     if [ "$installed_version" != "N/A" ]; then
         success "Node.js already installed: $installed_version"
     else
-        nvm install "$NODE_VERSION"
-        nvm alias default "$NODE_VERSION"
-        nvm use default
-        success "Node.js installed: $(node --version)"
-        success "npm installed: $(npm --version)"
+        nvm install "$NODE_VERSION" || return "$?"
+        nvm alias default "$NODE_VERSION" || return "$?"
     fi
+
+    nvm use "$NODE_VERSION" || return "$?"
+    success "Node.js active: $(node --version)"
+    success "npm available: $(npm --version)"
 }
 
 install_codex() {
@@ -562,187 +571,6 @@ report_installed_versions() {
 }
 
 # ------------------------------------------------------------
-# Uninstall steps
-# ------------------------------------------------------------
-
-# 打印删除清单并等待确认。ASSUME_YES=1 时直接通过。
-# 返回 0 继续卸载，1 表示用户取消。
-confirm_uninstall() {
-    printf '%s\n' \
-        "This script will remove:" \
-        "  - nvm and every Node.js version installed under ~/.nvm" \
-        "  - uv binaries and uv-managed Python ${PYTHON_VERSION}" \
-        "  - Starship installed at ~/.local/bin/starship" \
-        "  - env-update installed at ~/.local/bin/toria-update" \
-        "  - lazygit installed by apt or Homebrew" \
-        "  - Homebrew and every package installed through Homebrew" \
-        "  - Exact ~/.bashrc lines added by env-setup-wsl.sh" \
-        "  - The ~/.inputrc line added by env-setup-wsl.sh" \
-        "" \
-        "Codex CLI and all Codex data will be preserved." \
-        "apt system packages are preserved by default."
-
-    if [ "$ASSUME_YES" = "1" ]; then
-        return 0
-    fi
-
-    printf '\nType UNINSTALL to continue: '
-    local confirmation=""
-    read -r confirmation || true
-
-    if [ "$confirmation" != "UNINSTALL" ]; then
-        warn "Uninstallation cancelled"
-        return 1
-    fi
-
-    return 0
-}
-
-uninstall_nvm() {
-    log "Removing nvm and Node.js"
-
-    if [ -d "$NVM_DIR" ]; then
-        rm -rf -- "$NVM_DIR"
-        success "nvm and its Node.js installations removed"
-    else
-        warn "nvm was not found"
-    fi
-}
-
-uninstall_uv_and_python() {
-    log "Removing uv-managed Python ${PYTHON_VERSION} and uv"
-
-    if [ -x "$LOCAL_BIN/uv" ]; then
-        "$LOCAL_BIN/uv" python uninstall "$PYTHON_VERSION" ||
-            warn "uv could not uninstall Python ${PYTHON_VERSION}"
-
-        rm -f -- \
-            "$LOCAL_BIN/uv" \
-            "$LOCAL_BIN/uvx" \
-            "$LOCAL_BIN/uvw"
-
-        success "uv binaries removed"
-    else
-        warn "uv installed at ~/.local/bin was not found"
-    fi
-}
-
-uninstall_starship() {
-    log "Removing Starship"
-
-    if [ -e "$LOCAL_BIN/starship" ] || [ -L "$LOCAL_BIN/starship" ]; then
-        rm -f -- "$LOCAL_BIN/starship"
-        success "Starship removed"
-    else
-        warn "Starship installed at ~/.local/bin was not found"
-    fi
-}
-
-# 必须在 uninstall_homebrew 之前调用：Homebrew 不在时这条腿才轮到 apt。
-uninstall_lazygit() {
-    log "Removing lazygit"
-
-    if dpkg-query -W -f='${Status}' lazygit 2>/dev/null | grep -Fq 'install ok installed'; then
-        if sudo apt remove -y lazygit; then
-            success "apt-installed lazygit removed"
-        else
-            warn "apt could not remove lazygit"
-        fi
-    elif [ -x "$HOMEBREW_BIN" ] && "$HOMEBREW_BIN" list --formula lazygit >/dev/null 2>&1; then
-        if "$HOMEBREW_BIN" uninstall lazygit; then
-            success "Homebrew-installed lazygit removed"
-        else
-            warn "Homebrew could not remove lazygit"
-        fi
-    else
-        warn "lazygit was not found"
-    fi
-}
-
-uninstall_homebrew() {
-    log "Removing Homebrew"
-
-    if [ -x "$HOMEBREW_BIN" ]; then
-        if curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/uninstall.sh |
-            NONINTERACTIVE=1 /bin/bash; then
-            success "Homebrew removed"
-        else
-            warn "Homebrew uninstaller reported an error"
-        fi
-    else
-        warn "Homebrew was not found"
-    fi
-}
-
-# 每行删除都挂 || warn。remove_exact_line 只在文件读写出错时返回 1，
-# 让它冒泡出去的话 set -e 会在卸载进行到一半时终止脚本，留下半清理状态。
-uninstall_shell_config() {
-    log "Removing shell configuration"
-
-    remove_exact_line 'eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"' "$BASHRC" ||
-        warn "Could not update $BASHRC"
-
-    remove_exact_line 'alias la="eza -laG --group-directories-first --icons=auto"' "$BASHRC" ||
-        warn "Could not update $BASHRC"
-
-    remove_exact_line 'export PATH="$HOME/.local/bin:$PATH"' "$BASHRC" ||
-        warn "Could not update $BASHRC"
-
-    remove_managed_block "$WT_HOOK_START" "$WT_HOOK_END" "$BASHRC" ||
-        warn "Could not update $BASHRC"
-
-    remove_exact_line 'eval "$(starship init bash)"' "$BASHRC" ||
-        warn "Could not update $BASHRC"
-
-    remove_exact_line 'starship_precmd_user_func="__wt_update_cwd"' "$BASHRC" ||
-        warn "Could not update $BASHRC"
-
-    remove_exact_line 'export NVM_DIR="$HOME/.nvm"' "$BASHRC" ||
-        warn "Could not update $BASHRC"
-
-    remove_exact_line '[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"' "$BASHRC" ||
-        warn "Could not update $BASHRC"
-
-    remove_exact_line '[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"  # This loads nvm' "$BASHRC" ||
-        warn "Could not update $BASHRC"
-
-    remove_exact_line '[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"' "$BASHRC" ||
-        warn "Could not update $BASHRC"
-
-    remove_exact_line '[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"  # This loads nvm bash_completion' "$BASHRC" ||
-        warn "Could not update $BASHRC"
-
-    # 只删安装脚本写入的那一行，~/.inputrc 文件本身保留。
-    remove_exact_line 'set completion-ignore-case on' "$INPUTRC" ||
-        warn "Could not update $INPUTRC"
-
-    rm -f -- "$LOCAL_BIN/toria-update"
-
-    rmdir "$LOCAL_BIN" 2>/dev/null || true
-
-    success "Shell configuration removed"
-}
-
-# 必须排在最后。这一步会移除 curl 和 git，提前执行会让后面依赖它们的
-# Homebrew 卸载器失效。
-uninstall_optional_apt_packages() {
-    if [ "$REMOVE_APT_PACKAGES" != "1" ]; then
-        warn "apt system packages were preserved"
-        return 0
-    fi
-
-    log "Removing apt system packages"
-
-    warn "These packages may be used by software unrelated to env-setup-wsl.sh"
-
-    if sudo apt remove -y "${SYSTEM_PACKAGES[@]}"; then
-        success "apt system packages removed"
-    else
-        warn "apt reported an error while removing system packages"
-    fi
-}
-
-# ------------------------------------------------------------
 # Orchestration
 # ------------------------------------------------------------
 
@@ -790,29 +618,6 @@ run_install() {
     echo
 }
 
-run_uninstall() {
-    require_not_root
-
-    if ! confirm_uninstall; then
-        return 0
-    fi
-
-    uninstall_nvm
-    uninstall_uv_and_python
-    uninstall_starship
-    uninstall_lazygit
-    uninstall_homebrew
-    uninstall_shell_config
-    uninstall_optional_apt_packages
-
-    printf '\n'
-    success "WSL development environment uninstallation completed"
-
-    printf '\nRestart your terminal or run:\n\n'
-    echo "    exec bash"
-    echo
-}
-
 main() {
     local parse_rc=0
 
@@ -831,11 +636,7 @@ main() {
     require_safe_home
     set_paths
 
-    if [ "$MODE" = "uninstall" ]; then
-        run_uninstall
-    else
-        run_install
-    fi
+    run_install
 }
 
 # 守卫让脚本可以被 source 进来单独调用某个函数做检查，
