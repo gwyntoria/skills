@@ -32,3 +32,6 @@ package-lock.json
 *~
 
 .baoyu-skills
+
+/crnetz_downloader/chapter_html/
+/crnetz_downloader/md/
