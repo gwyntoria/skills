@@ -4,6 +4,8 @@ from http.server import HTTPServer
 import json
 from pathlib import Path
 import tempfile
+import subprocess
+import sys
 from threading import Thread
 import unittest
 from urllib.error import HTTPError
@@ -55,6 +57,26 @@ class ReceiverTests(unittest.TestCase):
         self.assertEqual(json.loads(body), [])
         self.request("/test-token/chapter/1", b'<html>replacement</html>')
         self.assertEqual((self.output / "0001.html").read_bytes(), data)
+
+    def test_multipage_resume_and_page_identity(self):
+        first = '<meta charset="utf-8"><div id="content">(第1/3页)</div><a onclick="putbookcase(127324, 1)"></a>'
+        data = first.encode('utf-8')
+        self.request('/test-token/chapter/1', data)
+        status, _, body = self.request('/test-token/chapters')
+        pending = json.loads(body)
+        self.assertEqual([item['url'] for item in pending], [
+            self.origin + '/127324/1_2.html', self.origin + '/127324/1_3.html'])
+        status, _, _ = self.request('/test-token/chapter/1/2', data)
+        self.assertEqual(status, 400)
+        for page in (2, 3):
+            page_data = first.replace('第1/3页', f'第{page}/3页').encode('utf-8')
+            status, _, body = self.request(f'/test-token/chapter/1/{page}', page_data)
+            self.assertEqual(status, 200, body)
+        _, _, body = self.request('/test-token/chapters')
+        self.assertEqual(json.loads(body), [])
+        self.assertEqual(sorted(p.name for p in self.output.iterdir()),
+                         ['0001.html', '0001_2.html', '0001_3.html'])
+        self.assertEqual((self.output / '0001.html').read_bytes(), data)
 
     def test_token_origin_and_path_guards(self):
         for path, origin in [("/wrong/chapter/1", self.origin),
@@ -118,6 +140,35 @@ class ReceiverTests(unittest.TestCase):
         status, _, _ = self.request('/test-token/chapter/1', b'<html>replacement</html>')
         self.assertEqual(status, 400)
         self.assertEqual(path.read_bytes(), data)
+
+
+class MarkdownTests(unittest.TestCase):
+    def test_multipage_merge_and_missing_page_error(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = Path(__file__).resolve().parents[1]
+            for name in ('html_to_md.py', 'download_chapters.py'):
+                (root / name).write_bytes((source / name).read_bytes())
+            html_dir = root / 'chapter_html'
+            html_dir.mkdir()
+            template = '<a href="/123/" title="测试书">测试书</a><h1 class="title">第二章</h1><div class="content" id="content">第二章 (第{page}/2页)<br>{body}<br>（本章未完，请点击下一页继续阅读）</div>'
+            (html_dir / '0002.html').write_text(template.format(page=1, body='首页正文'), encoding='utf-8')
+            command = [sys.executable, str(root / 'html_to_md.py')]
+            result = subprocess.run(command, capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('missing pages: [2]', result.stderr)
+            self.assertFalse((root / 'md').exists())
+            (html_dir / '0002_2.html').write_text(template.format(page=2, body='续页正文'), encoding='utf-8')
+            result = subprocess.run(command, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            text = (root / 'md/测试书.md').read_text(encoding='utf-8')
+            self.assertEqual(text.count('## 第二章'), 1)
+            self.assertIn('首页正文', text)
+            self.assertIn('续页正文', text)
+            self.assertLess(text.index('首页正文'), text.index('续页正文'))
+            self.assertNotIn('(第1/2页)', text)
+            self.assertNotIn('(第2/2页)', text)
+            self.assertNotIn('（本章未完，请点击下一页继续阅读）', text)
 
 
 class DirectoryTests(unittest.TestCase):

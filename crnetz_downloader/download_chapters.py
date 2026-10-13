@@ -11,7 +11,9 @@ Open the printed localhost URL and run its snippet in a chapter/directory tab
 in your normal Chrome. Only the Python standard library is required. HTML is
 saved as original response bytes; linked resources are not downloaded.
 Only HTML files are written. Resume checks the page's book/chapter bookmark
-IDs against the directory URL before skipping an existing file.
+IDs and page numbers before skipping an existing file. Missing continuation
+pages are discovered from the current/total page marker and saved separately
+as 0001_2.html, 0001_3.html, etc.
 """
 
 import argparse
@@ -116,6 +118,22 @@ def parse_chapters(html, base_url=DEFAULT_URL):
 
 
 
+def pagination(data):
+    """Return the site's explicit current/total page marker, if present."""
+    try:
+        text = decode_html(data)
+    except UnicodeDecodeError:
+        text = data.decode("utf-8", errors="replace")
+    match = re.search(r'第\s*(\d+)\s*/\s*(\d+)\s*页', text)
+    if not match:
+        return None
+    current, total = map(int, match.groups())
+    if not 1 <= current <= total <= 1000:
+        raise ValueError("无效章节分页标记")
+    return current, total
+
+
+
 def browser_script(endpoint, origin, directory_url=None):
     return """(async () => {
   const endpoint = ENDPOINT;
@@ -150,15 +168,18 @@ def browser_script(endpoint, origin, directory_url=None):
         method: 'POST', headers: { 'Content-Type': directory.contentType }, body: directory.bytes
       });
     }
-    const chapters = await local('/chapters');
-    for (const chapter of chapters) {
-      if (!window.crnetzDownloading) break;
-      const chapterHtml = await fetchHtml(chapter.url);
-      await local('/chapter/' + chapter.index, {
-        method: 'POST', headers: { 'Content-Type': chapterHtml.contentType }, body: chapterHtml.bytes
-      });
-      console.log(`已保存 ${chapter.index}: ${chapter.name}`);
-      await new Promise(resolve => setTimeout(resolve, 1000));
+    while (window.crnetzDownloading) {
+      const chapters = await local('/chapters');
+      if (!chapters.length) break;
+      for (const chapter of chapters) {
+        if (!window.crnetzDownloading) break;
+        const chapterHtml = await fetchHtml(chapter.url);
+        await local('/chapter/' + chapter.index + '/' + chapter.page, {
+          method: 'POST', headers: { 'Content-Type': chapterHtml.contentType }, body: chapterHtml.bytes
+        });
+        console.log(`已保存 ${chapter.index} 第 ${chapter.page} 页: ${chapter.name}`);
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
     }
     console.log(window.crnetzDownloading ? '章节下载完成' : '下载已停止');
   } catch (error) {
@@ -171,22 +192,50 @@ def browser_script(endpoint, origin, directory_url=None):
 
 
 def make_handler(chapters, output, origin, token, directory_url=None):
-    def record(index):
+    def record(index, page=1):
         chapter = chapters[index - 1]
-        return {"index": index, "name": chapter["name"], "url": chapter["url"], "file": f"{index:04d}.html"}
+        suffix = "" if page == 1 else f"_{page}"
+        url = chapter["url"].removesuffix(".html") + suffix + ".html"
+        return {"index": index, "page": page, "name": chapter["name"],
+                "url": url, "file": f"{index:04d}{suffix}.html"}
 
-    def completed(index):
-        item = record(index)
+    def check_identity(data, index, page):
+        ids = re.fullmatch(r"/(\d+)/(\d+)\.html", urlsplit(chapters[index - 1]["url"]).path)
+        bookmarks = re.findall(rb"putbookcase\(\s*(\d+)\s*,\s*(\d+)\s*\)", data)
+        marker = pagination(data)
+        if not ids or tuple(value.encode("ascii") for value in ids.groups()) not in bookmarks:
+            raise ValueError("HTML 的书籍或章节标识不匹配")
+        if (marker and marker[0] != page) or (page > 1 and not marker):
+            raise ValueError("HTML 的分页标识不匹配")
+
+
+    def completed(index, page=1):
+        item = record(index, page)
         path = output / item["file"]
         if not path.exists():
             return False
         data = path.read_bytes()
         validate_html(200, "text/html", data)
-        ids = re.fullmatch(r"/(\d+)/(\d+)\.html", urlsplit(item["url"]).path)
-        bookmarks = re.findall(rb"putbookcase\(\s*(\d+)\s*,\s*(\d+)\s*\)", data)
-        if ids and tuple(value.encode("ascii") for value in ids.groups()) in bookmarks:
-            return True
-        raise ValueError(f"已有 HTML 的书籍或章节标识不匹配, 拒绝覆盖: {path.name}")
+        try:
+            check_identity(data, index, page)
+        except ValueError as exc:
+            raise ValueError(f"已有 HTML 标识不匹配, 拒绝覆盖: {path.name}: {exc}") from exc
+        return True
+
+    def pending_pages():
+        pending = []
+        for index in range(1, len(chapters) + 1):
+            page, total = 1, 1
+            while page <= total:
+                item = record(index, page)
+                if completed(index, page):
+                    marker = pagination((output / item["file"]).read_bytes())
+                    if marker:
+                        total = max(total, marker[1])
+                else:
+                    pending.append(item)
+                page += 1
+        return pending
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args):
@@ -239,7 +288,7 @@ def make_handler(chapters, output, origin, token, directory_url=None):
             try:
                 if not chapters:
                     raise ValueError("目录尚未解析, 请先运行浏览器代码片段")
-                pending = [record(i) for i in range(1, len(chapters) + 1) if not completed(i)]
+                pending = pending_pages()
                 self.respond(200, json.dumps(pending, ensure_ascii=False))
             except (OSError, ValueError, LookupError) as exc:
                 self.respond(409, str(exc))
@@ -267,16 +316,23 @@ def make_handler(chapters, output, origin, token, directory_url=None):
                     print(f"已解析目录: {len(chapters)} 章", flush=True)
                     self.respond(200, json.dumps({"chapters": len(chapters)}))
                     return
-                suffix = self.path.removeprefix(f"/{token}/chapter/")
-                if not suffix.isascii() or not suffix.isdecimal():
+                match = re.fullmatch(re.escape(f"/{token}/chapter/") + r"([0-9]+)(?:/([0-9]+))?", self.path)
+                if not match:
                     raise ValueError("无效章节序号")
-                index = int(suffix)
-                if not 1 <= index <= len(chapters):
-                    raise ValueError("章节序号超出范围")
-                if completed(index):
+                index, page = int(match[1]), int(match[2] or 1)
+                if not 1 <= index <= len(chapters) or not 1 <= page <= 1000:
+                    raise ValueError("章节序号或页码超出范围")
+                if completed(index, page):
                     self.respond(200, '{"status":"skipped"}')
                     return
-                item = record(index)
+                check_identity(data, index, page)
+                if page > 1:
+                    if not completed(index):
+                        raise ValueError("请先保存章节首页")
+                    marker = pagination((output / record(index)["file"]).read_bytes())
+                    if not marker or page > marker[1]:
+                        raise ValueError("页码超出章节分页范围")
+                item = record(index, page)
                 path = output / item["file"]
                 temporary = path.with_suffix(".html.part")
                 temporary.write_bytes(data)
