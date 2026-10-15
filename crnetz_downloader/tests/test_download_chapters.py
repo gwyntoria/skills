@@ -59,13 +59,13 @@ class ReceiverTests(unittest.TestCase):
         status, headers, body = self.request("/test-token/chapter/1", data)
         self.assertEqual(status, 200, body)
         self.assertEqual(headers["Access-Control-Allow-Origin"], self.origin)
-        self.assertEqual((self.output / "0001.html").read_bytes(), data)
-        self.assertEqual([p.name for p in self.output.iterdir()], ["0001.html"])
+        self.assertEqual((self.output / "0001_1.html").read_bytes(), data)
+        self.assertEqual([p.name for p in self.output.iterdir()], ["0001_1.html"])
         status, _, body = self.request("/test-token/chapters")
         self.assertEqual(status, 200)
         self.assertEqual(json.loads(body), [])
         self.request("/test-token/chapter/1", b"<html>replacement</html>")
-        self.assertEqual((self.output / "0001.html").read_bytes(), data)
+        self.assertEqual((self.output / "0001_1.html").read_bytes(), data)
 
     def test_copy_page_uses_bound_server_and_session(self):
         status, headers, body = self.request("/test-token/")
@@ -101,9 +101,45 @@ class ReceiverTests(unittest.TestCase):
         self.assertEqual(json.loads(body), [])
         self.assertEqual(
             sorted(p.name for p in self.output.iterdir()),
-            ["0001.html", "0001_2.html", "0001_3.html"],
+            ["0001_1.html", "0001_2.html", "0001_3.html"],
         )
-        self.assertEqual((self.output / "0001.html").read_bytes(), data)
+        self.assertEqual((self.output / "0001_1.html").read_bytes(), data)
+
+    def test_download_finishes_each_chapter_before_next(self):
+        self.chapters.append(
+            {"name": "第二章", "url": self.origin + "/127324/2.html"}
+        )
+        expected = [(1, 1), (1, 2), (1, 3), (2, 1), (2, 2)]
+        downloaded = []
+        while True:
+            status, _, body = self.request("/test-token/chapters")
+            self.assertEqual(status, 200, body)
+            pending = json.loads(body)
+            if not pending:
+                break
+            self.assertEqual(len({item["index"] for item in pending}), 1)
+            for item in pending:
+                index, page = item["index"], item["page"]
+                total = 3 if index == 1 else 2
+                data = (
+                    '<meta charset="utf-8">'
+                    f'第{page}/{total}页'
+                    f'<a onclick="putbookcase(127324, {index})"></a>'
+                ).encode("utf-8")
+                status, _, body = self.request(
+                    f"/test-token/chapter/{index}/{page}", data
+                )
+                self.assertEqual(status, 200, body)
+                downloaded.append((index, page))
+                self.assertLessEqual(len(downloaded), len(expected))
+        self.assertEqual(downloaded, expected)
+        # A missing continuation must be repaired before advancing chapters.
+        (self.output / "0001_2.html").unlink()
+        _, _, body = self.request("/test-token/chapters")
+        self.assertEqual(
+            [(item["index"], item["page"]) for item in json.loads(body)],
+            [(1, 2)],
+        )
 
     def test_token_origin_and_path_guards(self):
         for path, origin in [
@@ -128,7 +164,7 @@ class ReceiverTests(unittest.TestCase):
         )
         self.assertEqual(status, 400)
         self.assertEqual(list(self.output.iterdir()), [])
-        existing = self.output / "0001.html"
+        existing = self.output / "0001_1.html"
         existing.write_bytes(b"user-owned file")
         status, _, _ = self.request(
             "/test-token/chapter/1", b"<html>new file</html>"
@@ -177,7 +213,7 @@ class ReceiverTests(unittest.TestCase):
         self.assertEqual(status, 400)
 
     def test_existing_other_chapter_is_not_skipped_or_overwritten(self):
-        path = self.output / "0001.html"
+        path = self.output / "0001_1.html"
         data = b'<html onclick="putbookcase(999, 1)">other book</html>'
         path.write_bytes(data)
         status, _, _ = self.request("/test-token/chapters")
@@ -190,6 +226,39 @@ class ReceiverTests(unittest.TestCase):
 
 
 class MarkdownTests(unittest.TestCase):
+    def test_numeric_chapter_and_page_order(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = Path(__file__).resolve().parents[1]
+            for name in ("html_to_md.py", "download_chapters.py"):
+                (root / name).write_bytes((source / name).read_bytes())
+            html_dir = root / "chapter_html"
+            html_dir.mkdir()
+            expected = []
+            for chapter in (1, 2):
+                for page in range(1, 13):
+                    body = f"正文({chapter},{page})"
+                    expected.append(body)
+                    html = (
+                        '<a href="/123/" title="测试书">测试书</a>'
+                        f'<h1 class="title">第{chapter}章</h1>'
+                        '<div class="content" id="content">'
+                        f'第{page}/12页<br>{body}</div>'
+                    )
+                    (html_dir / f"{chapter:04d}_{page}.html").write_text(
+                        html, encoding="utf-8"
+                    )
+            result = subprocess.run(
+                [sys.executable, str(root / "html_to_md.py")],
+                capture_output=True, text=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            text = (root / "md/测试书.md").read_text(encoding="utf-8")
+            positions = [text.index(body) for body in expected]
+            self.assertEqual(positions, sorted(positions))
+            self.assertEqual(text.count("## 第1章"), 1)
+            self.assertEqual(text.count("## 第2章"), 1)
+
     def test_valueless_attributes(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -199,7 +268,7 @@ class MarkdownTests(unittest.TestCase):
             html_dir = root / "chapter_html"
             html_dir.mkdir()
             html = '<a href title="忽略"></a><h1 class>忽略</h1><div id="content" class></div><a href="/123/" title="测试书">测试书</a><h1 class="title">第一章</h1><div id="content" class="content">正文</div>'
-            (html_dir / "0001.html").write_text(html, encoding="utf-8")
+            (html_dir / "0001_1.html").write_text(html, encoding="utf-8")
             result = subprocess.run(
                 [sys.executable, str(root / "html_to_md.py")],
                 capture_output=True,
@@ -236,7 +305,7 @@ class MarkdownTests(unittest.TestCase):
             html_dir = root / "chapter_html"
             html_dir.mkdir()
             template = '<a href="/123/" title="测试书">测试书</a><h1 class="title">第二章</h1><div class="content" id="content">第二章 (第{page}/2页)<br>{body}<br>（本章未完，请点击下一页继续阅读）</div>'
-            (html_dir / "0002.html").write_bytes(
+            (html_dir / "0002_1.html").write_bytes(
                 b"<!--\x90-->"
                 + template.format(page=1, body="首页正文").encode("utf-8")
             )
@@ -296,7 +365,7 @@ class DirectoryTests(unittest.TestCase):
             root = Path(directory)
             output = root / "out"
             output.mkdir()
-            (output / "0001.html").write_text("old chapter")
+            (output / "0001_1.html").write_text("old chapter")
             nested = output / "nested"
             nested.mkdir()
             (nested / "old.txt").write_text("old content")
@@ -326,7 +395,7 @@ class DirectoryTests(unittest.TestCase):
     def test_bind_failure_preserves_output(self):
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory)
-            preserved = output / "0001.html"
+            preserved = output / "0001_1.html"
             preserved.write_text("old chapter")
             with patch(
                 "download_chapters.HTTPServer", side_effect=OSError("port busy")

@@ -87,11 +87,7 @@ for path in files:
             for number in range(1, marker[1] + 1)
             if not (
                 path.parent
-                / (
-                    f"{chapter_index:04d}"
-                    + (f"_{number}" if number > 1 else "")
-                    + ".html"
-                )
+                / f"{chapter_index:04d}_{number}.html"
             ).exists()
         ]
         if missing:

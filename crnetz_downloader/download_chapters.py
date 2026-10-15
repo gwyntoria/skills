@@ -215,7 +215,7 @@ class _ChapterHandler(BaseHTTPRequestHandler):
             "page": page,
             "name": chapter["name"],
             "url": url,
-            "file": f"{index:04d}{suffix}.html",
+            "file": f"{index:04d}_{page}.html",
         }
 
     def check_identity(self, data, index, page):
@@ -250,6 +250,7 @@ class _ChapterHandler(BaseHTTPRequestHandler):
         return True
 
     def pending_pages(self):
+        """Return missing pages of the first unfinished chapter only."""
         pending = []
         for index in range(1, len(self.chapters) + 1):
             page, total = 1, 1
@@ -264,6 +265,8 @@ class _ChapterHandler(BaseHTTPRequestHandler):
                 else:
                     pending.append(item)
                 page += 1
+            if pending:
+                return pending
         return pending
 
     def log_message(self, format: str, *args: object) -> None:
