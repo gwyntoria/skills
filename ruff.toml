@@ -1,0 +1,30 @@
+# 缩进宽度和格式化目标行长度
+indent-width = 4
+line-length = 80
+
+# 选择兼容的 Python 版本
+target-version = "py312"
+
+# 在默认排除目录之外追加目录
+extend-exclude = ["__pycache__", "build"]
+
+[lint]
+select = ["E", "F", "W", "C90", "I"]
+ignore = ["E501"] # 不强制检查行长度
+
+[format]
+# 格式化文档字符串中的代码示例
+docstring-code-format = true
+indent-style = "space"
+# Use `\n` line endings for all files
+line-ending = "lf"
+quote-style = "double"
+
+
+[lint.isort]
+force-wrap-aliases = true
+combine-as-imports = true
+length-sort = true
+lines-after-imports = 2
+
+known-first-party = ["download_chapters"]
