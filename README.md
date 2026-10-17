@@ -66,12 +66,14 @@
 
 ## Instructions
 
+规则按默认使用范围分为 `instructions/global/` 和 `instructions/project/` 两个目录，安装时仍使用文件名作为规则名。
+
 | 文件 | 使用范围 | 说明 |
 | --- | --- | --- |
-| [`global.md`](instructions/global.md) | 全局 | 可放在 Agent 的配置目录中，如 `~/.codex/`、`~/.claude/` |
-| [`c-project.md`](instructions/c-project.md) | 项目 | C/C++ 项目的格式、命名、注释和提交信息约定 |
-| [`writing.md`](instructions/writing.md) | 项目 | Markdown 写作仓库的资源路径、引用方式和格式检查规则 |
-| [`chinese-punctuation.md`](instructions/chinese-punctuation.md) | 项目 | 终端回复的中文半角标点、空格规则和适用范围 |
+| [`agent-behavior.md`](instructions/global/agent-behavior.md) | 全局 | 可放在 Agent 的配置目录中，如 `~/.codex/`、`~/.claude/` |
+| [`c-project.md`](instructions/project/c-project.md) | 项目 | C/C++ 项目的格式、命名、注释和提交信息约定 |
+| [`writing-repo.md`](instructions/project/writing-repo.md) | 项目 | Markdown 写作仓库的资源路径、引用方式和格式检查规则 |
+| [`chinese-punctuation.md`](instructions/project/chinese-punctuation.md) | 项目 | 终端回复的中文半角标点、空格规则和适用范围 |
 
 这些 instruction 是可复用的规则片段，可以用 [`scripts/agent-install-rule.sh`](scripts/agent-install-rule.sh) 安装。脚本直接读取工作区里的 `instructions/`，不依赖网络，但因此**需要先 clone 本仓库**，再从仓库里运行:
 
@@ -80,25 +82,25 @@ git clone https://github.com/gwyntoria/skills.git
 cd skills
 
 # 全局。写入 ~/.claude/CLAUDE.md 和 ~/.codex/AGENTS.md 里的托管块
-scripts/agent-install-rule.sh global --target both --global
+scripts/agent-install-rule.sh agent-behavior --target both --global
 
 # 项目级。写进当前仓库的 .claude/rules/ 和 AGENTS.md
-scripts/agent-install-rule.sh writing --target both
+scripts/agent-install-rule.sh writing-repo --target both
 
 # 查看安装状态，或撤销
 scripts/agent-install-rule.sh --list
-scripts/agent-install-rule.sh global --remove
+scripts/agent-install-rule.sh agent-behavior --remove
 ```
 
 改了 `instructions/` 下的文件后重新运行即可生效，不需要发版或切 ref。
 
 ### 补充说明
 
-[`global.md`](instructions/global.md) 中的以下规则来源于 [Waza 项目的 `rules` 目录](https://github.com/tw93/Waza/tree/main/rules)，并按个人使用习惯做了调整：
+[`agent-behavior.md`](instructions/global/agent-behavior.md) 中的以下规则来源于 [Waza 项目的 `rules` 目录](https://github.com/tw93/Waza/tree/main/rules)，并按个人使用习惯做了调整：
 
-- [`Chinese Anti-AI Patterns`](instructions/global.md#chinese-anti-ai-patterns)：源自 Waza 的 [`rules/chinese.md`](https://github.com/tw93/Waza/blob/main/rules/chinese.md)。
-- [`English Coaching`](instructions/global.md#english-coaching)：源自 Waza 的 [`rules/english.md`](https://github.com/tw93/Waza/blob/main/rules/english.md)。
-- [`Anti-Patterns: Cross-Skill AI Behavior`](instructions/global.md#anti-patterns-cross-skill-ai-behavior)：源自 Waza 的 [`rules/anti-patterns.md`](https://github.com/tw93/Waza/blob/main/rules/anti-patterns.md)。
+- [`Chinese Anti-AI Patterns`](instructions/global/agent-behavior.md#chinese-anti-ai-patterns)：源自 Waza 的 [`rules/chinese.md`](https://github.com/tw93/Waza/blob/main/rules/chinese.md)。
+- [`English Coaching`](instructions/global/agent-behavior.md#english-coaching)：源自 Waza 的 [`rules/english.md`](https://github.com/tw93/Waza/blob/main/rules/english.md)。
+- [`Anti-Patterns: Cross-Skill AI Behavior`](instructions/global/agent-behavior.md#anti-patterns-cross-skill-ai-behavior)：源自 Waza 的 [`rules/anti-patterns.md`](https://github.com/tw93/Waza/blob/main/rules/anti-patterns.md)。
 
 ## Scripts
 
@@ -116,8 +118,8 @@ scripts/agent-install-rule.sh global --remove
 ### 补充说明
 
 - `agent-setup.sh --agent` 需要从 clone 出来的仓库里运行，会安装 Codex CLI 和 Claude Code，通过 `agent-install-rule.sh` 安装全局指令，并从工作区安装 Claude Code 状态栏。`agent-setup.sh --skill` 会先删除 `~/.agents/skills` 和 `~/.claude/skills` 下的已有内容，再按脚本内的清单重新安装；两个参数可以同时使用。运行前确认这些位置没有需要保留的内容。
-- `agent-install-rule.sh` 将全局 `global.md` 分别写入 `~/.claude/CLAUDE.md` 和 `~/.codex/AGENTS.md` 的 `<!-- gwyn-space-skills: <规则>:start -->` 与 `:end` 托管块；项目规则仍使用 Claude Code 的 `.claude/rules/`，Codex 项目规则写入项目 `AGENTS.md` 的托管块。**块内手改会在下次安装时被覆盖**，块外内容不受影响。规则清单由 `instructions/*.md` 决定，加一个文件就多一条规则；默认范围只有 `global.md` 是全局，其余按项目处理，用 `--global` 可以覆盖。
-- 从 `agent-setup.sh` 早期版本升级时，`~/.claude/CLAUDE.md` 与 `~/.codex/AGENTS.md` 可能是和 `global.md` 逐字节相同的整文件副本。`agent-install-rule.sh` 检测到这种副本会报警；加 `--migrate-legacy` 才会先创建 `.pre-rules.bak-<时间戳>` 备份，再改成托管块。旧版 `~/.claude/rules/global.md` 与仓库内容完全相同时会移到 `~/.claude/` 下备份；文件已被修改或是软链接时会停止安装并保留原文件。`agent-setup.sh` 默认带上迁移选项。
+- `agent-install-rule.sh` 将全局 `agent-behavior.md` 分别写入 `~/.claude/CLAUDE.md` 和 `~/.codex/AGENTS.md` 的 `<!-- gwyn-space-skills: <规则>:start -->` 与 `:end` 托管块；项目规则仍使用 Claude Code 的 `.claude/rules/`，Codex 项目规则写入项目 `AGENTS.md` 的托管块。**块内手改会在下次安装时被覆盖**，块外内容不受影响。规则清单由 `instructions/global/*.md` 和 `instructions/project/*.md` 决定，加一个文件就多一条规则；默认范围由所在目录决定，用 `--global` 或 `--project [DIR]` 可以覆盖。两个目录中的规则名不能重复。
+- 从 `agent-setup.sh` 早期版本升级时，`~/.claude/CLAUDE.md` 与 `~/.codex/AGENTS.md` 可能是和 `agent-behavior.md` 逐字节相同的整文件副本。`agent-install-rule.sh` 检测到这种副本会报警；加 `--migrate-legacy` 才会先创建 `.pre-rules.bak-<时间戳>` 备份，再改成托管块。旧版 `~/.claude/rules/global.md` 与仓库内容完全相同时会移到 `~/.claude/` 下备份；文件已被修改或是软链接时会停止安装并保留原文件。`agent-setup.sh` 默认带上迁移选项。
 - `env-update.sh` 按固定顺序执行更新，前置命令不存在时记为跳过而不是失败，最后打印成功、失败和跳过的清单；带 `-c` 时在 Homebrew 更新后追加 `brew cleanup`。交互终端使用 Bash 和终端控制序列把进度固定在最后一行，上方保留日志和普通确认输入；任务切换时更新底栏，退出或 Ctrl-C 时恢复终端。子程序清屏、全屏交互和运行中缩放窗口可能影响底栏，尺寸在下一次任务边界重新读取。重定向或定时任务保持普通输出。
 - `statusline.sh` 由 `agent-setup.sh` 从工作区复制到 `~/.claude/statusline.sh`，其中速率限制一段只在会话上报数据时显示。
 

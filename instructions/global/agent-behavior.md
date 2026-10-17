@@ -1,4 +1,4 @@
-# Global Agent Instructions
+# Agent Behavior Guidelines
 
 ## Communication
 

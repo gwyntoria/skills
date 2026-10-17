@@ -257,10 +257,10 @@ install_agents() {
     mkdir -p "$HOME/.codex"
     mkdir -p "$HOME/.claude"
 
-    # Delegated to agent-install-rule.sh so both agents receive managed global.md blocks:
+    # Delegated to agent-install-rule.sh so both agents receive managed agent-behavior.md blocks:
     # CLAUDE.md for Claude Code and AGENTS.md for Codex.
     # stdin is closed because agent-install-rule.sh is non-interactive by design.
-    bash "$SETUP_RULE" global --target both --global --migrate-legacy </dev/null
+    bash "$SETUP_RULE" agent-behavior --target both --global --migrate-legacy </dev/null
 
     success "Global instructions installed for Codex and Claude Code"
 

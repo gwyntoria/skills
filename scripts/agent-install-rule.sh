@@ -12,7 +12,7 @@
 #
 # The two agents need different install engines, because their mechanisms differ:
 #
-#   Claude Code  global.md is merged into ~/.claude/CLAUDE.md. Project rules
+#   Claude Code  agent-behavior.md is merged into ~/.claude/CLAUDE.md. Project rules
 #                are installed as files under <project>/.claude/rules/.
 #   Codex        has no rules directory and no import syntax; AGENTS.md is the
 #                only mechanism. A rule therefore has to be merged into that file
@@ -138,38 +138,40 @@ require_safe_home() {
 # ------------------------------------------------------------
 # Rule discovery
 # ------------------------------------------------------------
-# Rules are whatever instructions/*.md holds, so adding a file needs no edit
-# here. Only the scope default is declared, and it defaults to project: a wrong
-# global write pollutes $HOME, a wrong project write is local and visible.
+# Rules live in instructions/global/ and instructions/project/. The containing
+# directory determines the default scope; rule names must be unique across both.
 
 available_rules() {
     local file
 
-    for file in "$SOURCE_ROOT"/*.md; do
+    for file in "$SOURCE_ROOT"/global/*.md "$SOURCE_ROOT"/project/*.md; do
         [ -f "$file" ] || continue
         basename "$file" .md
     done
-}
-
-default_scope() {
-    case "$1" in
-    global) printf 'global\n' ;;
-    *) printf 'project\n' ;;
-    esac
 }
 
 # Resolve a rule name to its source file, default scope, and first line. The
 # first line is what a whole-file install must start with to count as ours,
 # which is how a foreign file of the same name is told apart from a managed one.
 lookup_rule() {
+    local scope
+
     RULE_FILE="$1.md"
-    RULE_SOURCE="$SOURCE_ROOT/$RULE_FILE"
+    RULE_SOURCE=""
+    RULE_SCOPE=""
 
-    if [ ! -f "$RULE_SOURCE" ]; then
-        return 1
-    fi
+    for scope in global project; do
+        if [ -f "$SOURCE_ROOT/$scope/$RULE_FILE" ]; then
+            if [ -n "$RULE_SOURCE" ]; then
+                error "duplicate rule name in instructions/global/ and instructions/project/: $1"
+                return 1
+            fi
+            RULE_SOURCE="$SOURCE_ROOT/$scope/$RULE_FILE"
+            RULE_SCOPE="$scope"
+        fi
+    done
 
-    RULE_SCOPE="$(default_scope "$1")"
+    [ -n "$RULE_SOURCE" ] || return 1
     RULE_TITLE="$(head -n 1 "$RULE_SOURCE")"
 
     case "$RULE_TITLE" in
@@ -341,7 +343,7 @@ resolve_scope() {
     fi
 
     if [ "$SCOPE" != "$RULE_SCOPE" ] && [ "$MODE" = "install" ]; then
-        warn "$RULE_FILE is classified $RULE_SCOPE in README.md; installing as $SCOPE."
+        warn "$RULE_FILE is classified $RULE_SCOPE by its source directory; installing as $SCOPE."
     fi
 
     return 0
@@ -381,7 +383,7 @@ resolve_project_dir() {
 claude_rule_path() {
     case "$1" in
     global)
-        if [ "$RULE" = "global" ]; then
+        if [ "$RULE" = "agent-behavior" ]; then
             printf '%s\n' "$HOME/.claude/CLAUDE.md"
         else
             printf '%s\n' "$HOME/.claude/rules/$RULE_FILE"
@@ -531,7 +533,7 @@ assert_markers_balanced() {
 }
 
 # Build the managed block: markers, a provenance line, then the rule body.
-# Project-classified rules omit their H1 in Codex AGENTS.md files. global.md
+# Project-classified rules omit their H1 in Codex AGENTS.md files. agent-behavior.md
 # keeps its title, and every Claude destination keeps the source verbatim.
 write_block() {
     local output="$1"
@@ -549,7 +551,7 @@ write_block() {
     {
         printf '%s%s\n' "$start" "$eol"
         printf '<!-- Installed from instructions/%s by %s. Edits inside this block are overwritten on reinstall. -->%s\n' \
-            "$RULE_FILE" "$PROGRAM_NAME" "$eol"
+            "$RULE_SCOPE/$RULE_FILE" "$PROGRAM_NAME" "$eol"
         while IFS= read -r line || [ -n "$line" ]; do
             line_number=$((line_number + 1))
             if [ "$omit_h1" -eq 1 ] && [ "$line_number" -eq 1 ]; then
@@ -633,17 +635,17 @@ remove_legacy_claude_global_rule() {
     local legacy="$HOME/.claude/rules/global.md"
     local backup
 
-    [ "$RULE" = "global" ] || return 0
+    [ "$RULE" = "agent-behavior" ] || return 0
     [ -e "$legacy" ] || [ -L "$legacy" ] || return 0
 
     if [ -L "$legacy" ]; then
-        warn "$legacy is a symlink; remove it manually before installing global.md."
+        warn "$legacy is a symlink; remove it manually before installing agent-behavior.md."
         return 1
     fi
 
     if ! cmp -s "$legacy" "$RULE_SOURCE"; then
         warn "$legacy differs from $RULE_FILE; it was left in place."
-        warn "Remove or reconcile it before installing global.md into CLAUDE.md."
+        warn "Remove or reconcile it before installing agent-behavior.md into CLAUDE.md."
         return 1
     fi
 
@@ -708,7 +710,7 @@ install_claude() {
     local resolved
     local backup
 
-    if [ "$RULE" = "global" ] && [ "$scope" = "global" ]; then
+    if [ "$RULE" = "agent-behavior" ] && [ "$scope" = "global" ]; then
         install_managed_file claude "$scope"
         return $?
     fi
@@ -763,7 +765,7 @@ remove_claude() {
     local destination
     local resolved
 
-    if [ "$RULE" = "global" ] && [ "$scope" = "global" ]; then
+    if [ "$RULE" = "agent-behavior" ] && [ "$scope" = "global" ]; then
         remove_managed_file claude "$scope"
         return $?
     fi
@@ -1005,7 +1007,7 @@ preflight() {
         case "$target" in
         claude)
             for scope in $SCOPES; do
-                if [ "$RULE" = "global" ] && [ "$scope" = "global" ]; then
+                if [ "$RULE" = "agent-behavior" ] && [ "$scope" = "global" ]; then
                     directory="$HOME/.claude"
                 elif [ "$scope" = "global" ]; then
                     directory="$HOME/.claude/rules"
@@ -1056,7 +1058,7 @@ is_installed_claude() {
     local path
 
     path="$(claude_rule_path "$scope")"
-    if [ "$RULE" = "global" ] && [ "$scope" = "global" ]; then
+    if [ "$RULE" = "agent-behavior" ] && [ "$scope" = "global" ]; then
         [ -f "$path" ] && [ "$(count_marker_lines "$path" "$(start_marker)")" -gt 0 ]
     else
         [ -f "$path" ] && head -n 1 "$path" | grep -qF -- "$RULE_TITLE"
