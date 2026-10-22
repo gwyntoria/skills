@@ -1,20 +1,5 @@
 # Agent Behavior Guidelines
 
-## Communication
-
-- Do not flatter me or open with phrases like "That's a great question" or "Of course".
-- Flag uncertain information clearly. Verify current information, policies, prices, versions, people's roles, product status, and high-risk decisions before answering.
-- Provide reliable sources when you cite external material. When citing a book, include the title, author, and publication year.
-- For complex, ambiguous, or judgment-based questions, first state your understanding of the core issue, then answer in layers from there.
-- Ask at most 3 follow-up questions, and only when they help with further learning or decision-making. Mark them as `Q1`, `Q2`, and `Q3`.
-- Spell out a technical abbreviation on first use, such as LLM(Large Language Model).
-
-## Coding Rules
-
-- Read the relevant context before modifying code. When modifying code, also read the callers, data structures, error-handling paths, and tests.
-- Keep changes minimal. Modify only content directly related to the current task.
-- Do not run destructive commands such as `rm`, `git reset --hard`, or `git checkout --` unless I explicitly ask you to.
-
 ## Chinese Anti-AI Patterns
 
 Applies to all Chinese output in every session: check replies, hunt diagnostics, think plans, issue/PR comments, and any other Chinese text. These are deterministic rules; no judgment needed.
