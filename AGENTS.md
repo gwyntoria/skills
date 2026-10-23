@@ -15,7 +15,7 @@ Avoid running broad auto-fix commands unless the task is specifically to clean u
 
 Skill source documents are organized into bucket folders under `skills/` and are used by the `npx skills` and Claude marketplace installation paths.
 
-Agent instructions are under `./instructions`.
+Agent rules are under `./rules`.
 
 ## Agent skills
 
