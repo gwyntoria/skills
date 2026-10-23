@@ -129,7 +129,7 @@ class AgentSetupTests(unittest.TestCase):
         terminal = Terminal(self.env)
         self.addCleanup(terminal.close)
         terminal.expect('Agent setup')
-        terminal.expect('Item 1/4')
+        terminal.expect('Item 1/5')
         return terminal
 
     def removal_terminal(self, kind='skills', agents='both', rules=False):
@@ -249,7 +249,7 @@ print_summary''')
         self.assertIn('b: back | q: exit', task_screen)
         term.send(b' \x1b[B\x1b[B b')  # Skills + Codex, Back while on Codex
         term.expect('Agent setup')
-        term.expect('Item 1/4')
+        term.expect('Item 1/5')
         term.send(b'\r')
         term.expect('> [x] Codex CLI')
         term.expect('Item 3/5')
@@ -482,7 +482,7 @@ print_summary''')
                 term.expect('Item 1/2')
                 term.send(b' \x1b[Bb')  # keep only Claude; cursor on Claude
                 term.expect('Agent setup')
-                term.expect(f'Item {offset + 1}/4')
+                term.expect(f'Item {offset + 1}/5')
                 term.send(b'\r')
                 term.expect('[ ] Codex')
                 term.expect('> [x] Claude Code')
@@ -602,6 +602,67 @@ print_summary''')
         self.assertIn('Rules backup failed; nothing removed', result.stderr)
         self.assertEqual(claude.read_bytes(), original)
         self.assertEqual((rules / 'custom.md').read_text(), 'custom')
+
+    def test_remove_all_backups_only_deletes_confirmed_setup_directories(self):
+        targets = [self.home / '.agent-skills-backup-ABC123', self.home / '.agent-rules-backup-def456']
+        for directory in targets:
+            directory.mkdir()
+            (directory / 'backup').write_text('archive')
+        unrelated = self.home / '.agent-skills-backup-manual-copy'
+        unrelated.mkdir()
+        external = self.root / 'external-backup'
+        external.mkdir()
+        (external / 'keep').write_text('outside')
+        link = self.home / '.agent-rules-backup-LINK12'
+        link.symlink_to(external)
+        (targets[0] / 'external-link').symlink_to(external)
+        term = self.terminal()
+        term.send(b'\x1b[B' * 3 + b'\r')
+        term.expect('Type DELETE')
+        preview = term.transcript.decode()
+        for target in targets:
+            self.assertIn(str(target), preview)
+        self.assertNotIn(str(link), preview)
+        self.assertIn('No new backup is created', preview)
+        later = self.home / '.agent-rules-backup-LATER1'
+        later.mkdir()  # never confirmed, so it must survive
+        term.send(b'DELETE\n')
+        term.expect('1 succeeded, 0 failed')
+        self.assertEqual(term.finish(), 0)
+        for target in targets:
+            self.assertFalse(target.exists())
+        self.assertTrue(unrelated.exists())
+        self.assertTrue(later.exists())
+        self.assertTrue(link.is_symlink())
+        self.assertEqual((external / 'keep').read_text(), 'outside')
+        self.assertEqual(self.old.read_text(), 'keep me')
+
+    def test_remove_all_backups_cancel_and_empty(self):
+        term = self.terminal()
+        term.send(b'\x1b[B' * 3 + b'\r')
+        term.expect('No setup backups found.')
+        self.assertEqual(term.finish(), 0)
+        target = self.home / '.agent-skills-backup-ABC123'
+        target.mkdir()
+        term = self.terminal()
+        term.send(b'\x1b[B' * 3 + b'\r')
+        term.expect('Type DELETE')
+        term.send(b'\n')
+        self.assertEqual(term.finish(), 0)
+        self.assertTrue(target.is_dir())
+
+    def test_backup_cleanup_rejects_changed_targets_before_deleting_any(self):
+        first = self.home / '.agent-skills-backup-ABC123'
+        first.mkdir()
+        external = self.root / 'outside-backup'
+        external.mkdir()
+        link = self.home / '.agent-rules-backup-LINK12'
+        link.symlink_to(external)
+        result = self.source('remove_setup_backups .agent-skills-backup-ABC123 .agent-rules-backup-LINK12')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Backup is no longer a directory', result.stderr)
+        self.assertTrue(first.is_dir())
+        self.assertTrue(link.is_symlink())
 
     def test_backup_failure_prevents_deletion(self):
         self.stub('tar', '#!/bin/sh\nexit 23\n')

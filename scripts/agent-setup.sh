@@ -479,6 +479,61 @@ confirm_instruction_removal() {
     print_summary
 }
 
+
+list_setup_backups() {
+    node - "$HOME" <<'JS'
+const fs = require('fs');
+const path = require('path');
+const home = process.argv[2];
+if (!home || !path.isAbsolute(home) || path.resolve(home) === '/') throw Error('Unsafe HOME');
+for (const entry of fs.readdirSync(home, {withFileTypes: true}).sort((a, b) => a.name.localeCompare(b.name))) {
+    if (entry.isDirectory() && /^\.agent-(skills|rules)-backup-[A-Za-z0-9]{6}$/.test(entry.name)) {
+        console.log(entry.name);
+    }
+}
+JS
+}
+
+remove_setup_backups() {
+    node - "$HOME" "$@" <<'JS'
+const fs = require('fs');
+const path = require('path');
+const [home, ...names] = process.argv.slice(2);
+if (!home || !path.isAbsolute(home) || path.resolve(home) === '/') throw Error('Unsafe HOME');
+// Validate the complete confirmed list before deleting anything. A directory
+// replaced by a symlink after preview must never redirect the deletion.
+for (const name of names) {
+    if (!/^\.agent-(skills|rules)-backup-[A-Za-z0-9]{6}$/.test(name)) throw Error('Invalid backup directory name');
+    const info = fs.lstatSync(path.join(home, name));
+    if (!info.isDirectory() || info.isSymbolicLink()) throw Error(`Backup is no longer a directory: ${name}`);
+}
+for (const name of names) {
+    const full = path.join(home, name);
+    fs.rmSync(full, {recursive: true});
+    console.log(`Removed backup: ${full}`);
+}
+JS
+}
+
+confirm_backup_removal() {
+    local names name answer
+    local backups=()
+    require_command node
+    names=$(list_setup_backups)
+    if [ -z "$names" ]; then printf 'No setup backups found.\n'; return 0; fi
+    printf '\nRemove all setup backup directories listed below:\n'
+    while IFS= read -r name; do
+        backups+=("$name")
+        printf '  %s/%s\n' "$HOME" "$name"
+    done <<<"$names"
+    printf 'This permanently deletes these backups and their restore data. No new backup is created.\n'
+    printf 'Type DELETE to confirm, or press Enter to cancel: '
+    IFS= read -r answer || return 0
+    [ "$answer" = DELETE ] || return 0
+    run_item 'Remove all backups' remove_setup_backups "${backups[@]}"
+    print_summary
+}
+
 preflight() {
     local item
     for item in "$@"; do
@@ -530,12 +585,13 @@ interactive_setup() {
     while :; do
         case "$page" in
             main)
-                choose_items 0 'Agent setup' 0 0 'Install / Update' 'Remove global skills' 'Remove global instructions' 'Exit' || return 0
+                choose_items 0 'Agent setup' 0 0 'Install / Update' 'Remove global skills' 'Remove global instructions' 'Remove all backups' 'Exit' || return 0
                 case "${MENU_SELECTED[0]}" in
                     0) page=tasks ;;
                     1) page=remove_skills ;;
                     2) page=remove_instructions ;;
-                    3) return 0 ;;
+                    3) confirm_backup_removal; return $? ;;
+                    4) return 0 ;;
                 esac ;;
             remove_skills | remove_instructions)
                 if [ "$page" = remove_skills ]; then i=4; answer='Remove global skills';
