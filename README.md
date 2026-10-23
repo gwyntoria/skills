@@ -108,7 +108,7 @@ scripts/agent-install-rule.sh agent-behavior --remove
 
 | 脚本 | 运行环境 | 说明 |
 | --- | --- | --- |
-| [`agent-setup.sh`](scripts/agent-setup.sh) | macOS / Linux | 按参数安装 Agent 配置或第三方 skills；`--agent` 安装 CLI、全局指令和状态栏，`--skill` 清理并重装全局 skills |
+| [`agent-setup.sh`](scripts/agent-setup.sh) | macOS / Linux | 交互选择 Agent 配置和第三方 skills；支持非交互安装及 `--list` 候选清单 |
 | [`agent-install-rule.sh`](scripts/agent-install-rule.sh) | macOS / Linux | 把 `instructions/` 下的单个规则装进 Claude Code 或 Codex，支持全局与项目两级，带 `--remove` 撤销 |
 | [`env-setup-wsl.sh`](scripts/env-setup-wsl.sh) | WSL Ubuntu | 装配 Homebrew、Git、lazygit、Starship、uv、Python、nvm、Node.js 和 Codex CLI |
 | [`env-update.sh`](scripts/env-update.sh) | macOS / Linux | 依次更新 skills、Codex、Claude Code 和 Homebrew，末尾汇总每个任务的结果 |
@@ -117,7 +117,12 @@ scripts/agent-install-rule.sh agent-behavior --remove
 
 ### 补充说明
 
-- `agent-setup.sh --agent` 需要从 clone 出来的仓库里运行，会安装 Codex CLI 和 Claude Code，通过 `agent-install-rule.sh` 安装全局指令，并从工作区安装 Claude Code 状态栏。`agent-setup.sh --skill` 会先删除 `~/.agents/skills` 和 `~/.claude/skills` 下的已有内容，再按脚本内的清单重新安装；两个参数可以同时使用。运行前确认这些位置没有需要保留的内容。
+- 无参数运行 `bash scripts/agent-setup.sh` 进入终端菜单：方向键移动、空格勾选、`a` 全选、`n` 取消全选、回车继续、下级选择页面按 `b` 返回上一级、`q` 退出整个流程。主菜单只显示适用的导航按键；安装任务顺序为 Skills、全局指令、Codex CLI、Claude Code CLI、Claude 状态栏。返回后保留勾选与光标位置，同一次运行中复用已获取的 skills 候选。Codex CLI、Claude Code CLI、全局指令、Claude 状态栏可以分别选择；skills 按 Waza、Kami、Matt Pocock 和 HumanLayer 分组选择，安装目标可选 Codex、Claude Code 或两者。安装项目默认不选，执行前展示清单并确认。菜单使用 Bash 内置能力，不依赖额外的 TUI 工具。
+- `agent-setup.sh --agent` 从仓库工作区安装两个 CLI、全局指令和状态栏；`--skill` 安装全部候选 skills，保留已有内容；两个参数可以同时使用并保持非交互执行。`--list` 只列出可安装 skills，不执行安装，不能与安装参数组合。Waza 和 Kami 从来源仓库读取候选，Matt Pocock 沿用官网清单，HumanLayer 安装 `show-me`。候选获取失败后继续展示其他来源，同一来源仓库中选中的 skills 合并为一条安装命令，仓库批次失败后继续处理其他仓库，不自动逐项重试；结尾按安装批次汇总结果，有失败时返回非零退出码。无参数且没有终端时会提示使用参数并退出。
+- 主菜单提供 `Remove global skills` 和 `Remove global instructions`，两者都先进入 Agent 多选页，默认勾选 Codex 和 Claude Code，支持 `b` 返回、`q` 退出并保留勾选与光标。确认页展示实际范围，输入 `DELETE` 后执行。
+- 删除 skills 时，Codex 清理共享的 `~/.agents/skills` 和相关锁文件；Claude 清理 `~/.claude/skills` 中的技能目录和链接。保留 `.system`，删除软链接时不删除其指向的内容。仅选 Claude 时保留共享源和锁文件；仅选 Codex 时保留 Claude 链接，扫描后在确认前用红色列出会受影响的链接。其他 Agent 也可能使用共享目录。实际删除目标先备份到权限为 `0700` 的 `~/.agent-skills-backup-*/skills.tar`，备份失败不删除；日志打印目标、备份路径和 `tar -xf` 恢复命令。
+- 删除 instructions 时，只移除所选 Agent 的 `~/.codex/AGENTS.md` 或 `~/.claude/CLAUDE.md` 中安装器管理的 `agent-behavior` 规则块，保留文件中的个人内容与其他规则块。选中 Claude 后额外选择是否清空 `~/.claude/rules`，默认保留；选择清空时包括自定义规则、隐藏文件和子目录，软链接只删除链接本身。现有指令文件与 rules 内容在修改前备份到权限为 `0700` 的 `~/.agent-rules-backup-*`，任何备份失败都不执行移除。日志打印卸载范围、结果和 `cp -p` 或 `tar -xf` 恢复命令；回滚时先停止安装操作，再执行对应恢复命令，保留备份供核对。
+- 安装器的隔离回归检查使用 Python 3 标准库运行：`python3 scripts/tests/test_agent_setup.py`。检查不安装真实 CLI 或 skills，不修改当前用户配置。
 - `agent-install-rule.sh` 将全局 `agent-behavior.md` 分别写入 `~/.claude/CLAUDE.md` 和 `~/.codex/AGENTS.md` 的 `<!-- gwyn-space-skills: <规则>:start -->` 与 `:end` 托管块；项目规则仍使用 Claude Code 的 `.claude/rules/`，Codex 项目规则写入项目 `AGENTS.md` 的托管块。**块内手改会在下次安装时被覆盖**，块外内容不受影响。规则清单由 `instructions/global/*.md` 和 `instructions/project/*.md` 决定，加一个文件就多一条规则；默认范围由所在目录决定，用 `--global` 或 `--project [DIR]` 可以覆盖。两个目录中的规则名不能重复。
 - 从 `agent-setup.sh` 早期版本升级时，`~/.claude/CLAUDE.md` 与 `~/.codex/AGENTS.md` 可能是和 `agent-behavior.md` 逐字节相同的整文件副本。`agent-install-rule.sh` 检测到这种副本会报警；加 `--migrate-legacy` 才会先创建 `.pre-rules.bak-<时间戳>` 备份，再改成托管块。旧版 `~/.claude/rules/global.md` 与仓库内容完全相同时会移到 `~/.claude/` 下备份；文件已被修改或是软链接时会停止安装并保留原文件。`agent-setup.sh` 默认带上迁移选项。
 - `env-update.sh` 按固定顺序执行更新，前置命令不存在时记为跳过而不是失败，最后打印成功、失败和跳过的清单；带 `-c` 时在 Homebrew 更新后追加 `brew cleanup`。交互终端使用 Bash 和终端控制序列把进度固定在最后一行，上方保留日志和普通确认输入；任务切换时更新底栏，退出或 Ctrl-C 时恢复终端。子程序清屏、全屏交互和运行中缩放窗口可能影响底栏，尺寸在下一次任务边界重新读取。重定向或定时任务保持普通输出。
