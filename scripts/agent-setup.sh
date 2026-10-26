@@ -57,7 +57,12 @@ MENU_VISITED=()
 KEY=""
 REMOVE_CODEX=1
 REMOVE_CLAUDE=1
-REMOVE_CLAUDE_RULES=0
+REMOVE_RULES=0
+REMOVE_SKILLS=0
+REMOVAL_TEMP=""
+REMOVAL_RULE_IDS=(); REMOVAL_RULE_LABELS=(); REMOVAL_SKILL_IDS=(); REMOVAL_SKILL_LABELS=(); REMOVAL_SKILL_GROUPS=()
+REMOVAL_RULE_SELECTION=(); REMOVAL_SKILL_SELECTION=()
+REPO_ITEM_LABELS=(); REPO_ITEM_GROUPS=(); REPO_SELECTED=()
 
 log() { printf '\n==> %s\n' "$1"; }
 
@@ -95,7 +100,7 @@ parse_args() {
 require_command() {
     if ! command -v "$1" >/dev/null 2>&1; then
         printf 'Error: required command not found: %s\n' "$1" >&2
-        exit 1
+        return 1
     fi
 }
 
@@ -104,7 +109,8 @@ require_command() {
 run_item() {
     local label="$1" result
     shift
-    log "$label"
+    case "$label" in Remove*) printf '\n==> \033[31m%s\033[0m\n' "$label" ;;
+        *) printf '\n==> \033[32m%s\033[0m\n' "$label" ;; esac
     set +e
     ( set -e; set -o pipefail; "$@" ) </dev/null
     result=$?
@@ -120,14 +126,30 @@ run_item() {
 print_summary() {
     local item
     printf '\nResults: %s succeeded, %s failed\n' "${#SUCCEEDED[@]}" "${#FAILED[@]}"
-    for item in "${SUCCEEDED[@]+"${SUCCEEDED[@]}"}"; do printf '  OK    %s\n' "$item"; done
-    for item in "${FAILED[@]+"${FAILED[@]}"}"; do printf '  FAIL  %s\n' "$item"; done
+    for item in "${SUCCEEDED[@]+"${SUCCEEDED[@]}"}"; do
+        case "$item" in Remove*) printf '  OK    \033[31m%s\033[0m\n' "$item" ;;
+            *) printf '  OK    \033[32m%s\033[0m\n' "$item" ;; esac
+    done
+    for item in "${FAILED[@]+"${FAILED[@]}"}"; do printf '  FAIL  \033[31m%s\033[0m\n' "$item"; done
     [ "${#FAILED[@]}" -eq 0 ]
+}
+
+print_skill_targets() {
+    local name="$1" agent destination
+    printf '  \033[32mShared skill / %s -> %s/.agents/skills/%s\033[0m\n' "$name" "$HOME" "$name"
+    for agent in "${TARGET_AGENTS[@]}"; do
+        if [ "$agent" = claude-code ]; then
+            destination="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/skills/$name"
+            printf '  \033[32mClaude / %s -> %s\033[0m\n' "$name" "$destination"
+        fi
+    done
 }
 
 install_agent_skills() {
     local source="$1"
     shift
+    local name
+    for name in "$@"; do print_skill_targets "$name"; done
     npx --yes skills add "$source" --skill "$@" \
         --agent "${TARGET_AGENTS[@]}" --global --yes
 }
@@ -221,6 +243,7 @@ print_catalog() {
 
 cleanup_setup_resources() {
     if [ -n "$RESOURCE_TEMP" ]; then rm -rf -- "$RESOURCE_TEMP"; fi
+    if [ -n "$REMOVAL_TEMP" ]; then rm -rf -- "$REMOVAL_TEMP"; fi
 }
 
 resolve_resource() {
@@ -229,8 +252,8 @@ resolve_resource() {
     if [ -e "$candidate" ] || [ -L "$candidate" ]; then
         RESOURCE_PATH="$candidate"
     else
-        require_command curl
-        require_command tar
+        require_command curl || return 1
+        require_command tar || return 1
         if [ -z "$RESOURCE_TEMP" ]; then
             RESOURCE_TEMP="$(mktemp -d)" || return 1
             trap cleanup_setup_resources EXIT
@@ -293,7 +316,7 @@ install_setup_command() (
     bash -n "$temporary"
     chmod 0755 "$temporary"
     mv -f "$temporary" "$directory/agent-setup"
-    printf 'Installed: %s/agent-setup (used on next launch)\n' "$directory"
+    printf '\033[32mInstalled: %s/agent-setup (used on next launch)\033[0m\n' "$directory"
     # Print the PATH command literally for the user.
     # shellcheck disable=SC2016
     case ":$PATH:" in
@@ -310,7 +333,7 @@ apply_rule() {
 # The rule engine owns its helpers and traps only inside this subshell.
 rule_engine() (
     set -euo pipefail
-    PROGRAM_NAME=agent-setup.sh
+    PROGRAM_NAME='agent-setup.sh'
     RULE="$1"; SCOPE="$2"; TARGET_OPT="$3"; MODE="${4:-install}"
     RULE_FILE="$RULE.md"; RULE_CLASSIFICATION="${6:-$SCOPE}"; RULE_SOURCE=""; RULE_TITLE=""
     MARKER_PREFIX=gwyn-space-skills
@@ -326,7 +349,7 @@ rule_engine() (
     fi
 
 log() {
-    printf '\n\033[1;34m==> %s\033[0m\n' "$1"
+    printf '\n\033[1;32m==> %s\033[0m\n' "$1"
 }
 
 success() {
@@ -338,7 +361,7 @@ warn() {
 }
 
 error() {
-    printf 'Error: %s\n' "$1" >&2
+    printf '\033[31mError: %s\033[0m\n' "$1" >&2
 }
 
 
@@ -726,8 +749,8 @@ remove_legacy_claude_global_rule() {
         return 1
     fi
 
-    success "Moved obsolete Claude rule to $backup"
-    printf '  Restore with: mv "%s" "%s"\n' "$backup" "$legacy"
+    printf '\033[36mMoved obsolete Claude rule to %s\033[0m\n' "$backup"
+    printf '\033[36m  Restore with: mv "%s" "%s"\033[0m\n' "$backup" "$legacy"
     return 0
 }
 
@@ -762,8 +785,8 @@ adopt_legacy_managed_file() {
         return 2
     fi
 
-    success "Backed up the legacy copy to $backup"
-    printf '  Restore with: mv "%s" "%s"\n' "$backup" "$destination"
+    printf '\033[36mBacked up the legacy copy to %s\033[0m\n' "$backup"
+    printf '\033[36m  Restore with: mv "%s" "%s"\033[0m\n' "$backup" "$destination"
 
     # Tell the caller the current content should be discarded.
     return 0
@@ -1216,6 +1239,7 @@ install_statusline() {
     local settings_file="$claude_dir/settings.json"
     resolve_resource scripts/statusline.sh
     STATUSLINE_SOURCE="$RESOURCE_PATH"
+    printf '\033[32mStatusline target: %s/statusline.sh\nSettings target: %s\033[0m\n' "$claude_dir" "$settings_file"
 
     mkdir -p "$claude_dir"
 
@@ -1247,15 +1271,15 @@ install_statusline() {
 }
 
 install_codex() {
-    if command -v codex >/dev/null 2>&1; then return 0; fi
-    curl -fsSL https://chatgpt.com/codex/install.sh | sh
+    if ! command -v codex >/dev/null 2>&1; then curl -fsSL https://chatgpt.com/codex/install.sh | sh; fi
     require_command codex
+    printf '\033[32mCodex CLI: %s\033[0m\n' "$(command -v codex)"
 }
 
 install_claude() {
-    if command -v claude >/dev/null 2>&1; then return 0; fi
-    curl -fsSL https://claude.ai/install.sh | bash
+    if ! command -v claude >/dev/null 2>&1; then curl -fsSL https://claude.ai/install.sh | bash; fi
     require_command claude
+    printf '\033[32mClaude Code CLI: %s\033[0m\n' "$(command -v claude)"
 }
 
 install_global_rules() {
@@ -1275,7 +1299,7 @@ read_key() {
 
 # Fixed-height pages keep long skill catalogs usable in a small terminal.
 # Save each page's selection/cursor before reading a key, including Back/Exit.
-# Return 0 to continue, 1 to exit, and 2 to go back.
+# Return 0 to continue, 1 to exit, 2 to go back, or 3 on plan preparation failure.
 choose_items() {
     local page="$1" title="$2" multiple="$3" defaults="$4"
     shift 4
@@ -1301,7 +1325,7 @@ choose_items() {
         printf ' | Enter: continue'
         if [ "$page" -ne 0 ]; then printf ' | b: back'; fi
         printf ' | q: exit\n\n'
-        if [ "$page" -eq 11 ]; then print_install_plan || return 1; printf '\n'; fi
+        if [ "$page" -eq 11 ]; then print_install_plan || return 3; printf '\n'; fi
         start=$((cursor / 8 * 8)); end=$((start + 8))
         for ((i=start; i<end && i<${#options[@]}; i++)); do
             mark=' '; [ "${selected[i]}" -eq 0 ] || mark=x
@@ -1331,168 +1355,375 @@ choose_items() {
     done
 }
 
-# Preview and execution use the same target plan. Symlinks are archived and
-# unlinked without traversing their targets; bundled .system entries survive.
-remove_installed_agent_skills() {
-    node - "$HOME" "${1:-remove}" "$REMOVE_CODEX" "$REMOVE_CLAUDE" <<'JS'
+# Shared repository/skill selector. REPO_SELECTED contains item indices, so
+# distinct agents or unknown local entries never collapse into one deletion.
+choose_skill_repositories() {
+    local page="$1" title="$2" color="$3" cursor=0 child=-1 i j group found start end total chosen mark row key_page
+    local groups=() item_groups=() selected=() children=()
+    for ((i=0; i<${#REPO_ITEM_LABELS[@]}; i++)); do
+        group="${REPO_ITEM_GROUPS[i]}"; found=-1
+        for ((j=0; j<${#groups[@]}; j++)); do [ "${groups[j]}" != "$group" ] || { found="$j"; break; }; done
+        if [ "$found" -eq -1 ]; then found="${#groups[@]}"; groups+=("$group"); fi
+        item_groups+=("$found"); selected+=(0)
+    done
+    for i in "${REPO_SELECTED[@]+"${REPO_SELECTED[@]}"}"; do selected[i]=1; done
+    cursor="${MENU_CURSORS[page]:-0}"
+    while :; do
+        REPO_SELECTED=()
+        for ((i=0; i<${#selected[@]}; i++)); do [ "${selected[i]}" -eq 0 ] || REPO_SELECTED+=("$i"); done
+        printf '\033[H\033[2J%s\n' "$title"
+        if [ "$child" -lt 0 ]; then
+            printf 'Up/Down: move | Space: select repository | Enter: open / Continue | a: all | n: none | b: back | q: exit\n\n'
+            total=$((${#groups[@]} + 1)); MENU_CURSORS[page]="$cursor"
+        else
+            printf 'Repository: %s\nUp/Down: move | Space: select | a: all | n: none | Enter/b: repositories | q: exit\n\n' "${groups[child]}"
+            children=()
+            for ((i=0; i<${#selected[@]}; i++)); do [ "${item_groups[i]}" -ne "$child" ] || children+=("$i"); done
+            total="${#children[@]}"; key_page=$((100 + page * 100 + child)); MENU_CURSORS[key_page]="$cursor"
+        fi
+        if [ "$cursor" -ge "$total" ]; then cursor=0; fi
+        start=$((cursor / 8 * 8)); end=$((start + 8))
+        for ((row=start; row<end && row<total; row++)); do
+            if [ "$row" -eq "$cursor" ]; then printf '> '; else printf '  '; fi
+            if [ "$child" -lt 0 ]; then
+                if [ "$row" -eq "${#groups[@]}" ]; then printf 'Continue\n'; continue; fi
+                chosen=0; found=0
+                for ((i=0; i<${#selected[@]}; i++)); do
+                    if [ "${item_groups[i]}" -eq "$row" ]; then found=$((found + 1)); chosen=$((chosen + selected[i])); fi
+                done
+                mark=' '; if [ "$chosen" -eq "$found" ]; then mark=x; elif [ "$chosen" -gt 0 ]; then mark=-; fi
+                printf '[%s] \033[%sm%s\033[0m (%s/%s)\n' "$mark" "$color" "${groups[row]}" "$chosen" "$found"
+            else
+                i="${children[row]}"; mark=' '; [ "${selected[i]}" -eq 0 ] || mark=x
+                printf '[%s] \033[%sm%s\033[0m\n' "$mark" "$color" "${REPO_ITEM_LABELS[i]}"
+            fi
+        done
+        printf '\nItem %s/%s\n' "$((cursor + 1))" "$total"
+        read_key || return 1
+        case "$KEY" in
+            $'\e[A' | $'\eOA') cursor=$(((cursor + total - 1) % total)) ;;
+            $'\e[B' | $'\eOB') cursor=$(((cursor + 1) % total)) ;;
+            ' ' | a | n)
+                if [ "$child" -lt 0 ]; then
+                    [ "$cursor" -lt "${#groups[@]}" ] || [ "$KEY" != ' ' ] || continue
+                    found=1
+                    if [ "$KEY" = n ]; then found=0;
+                    elif [ "$KEY" = ' ' ]; then
+                        chosen=0; total=0
+                        for ((i=0; i<${#selected[@]}; i++)); do
+                            if [ "${item_groups[i]}" -eq "$cursor" ]; then total=$((total + 1)); chosen=$((chosen + selected[i])); fi
+                        done
+                        [ "$chosen" -ne "$total" ] || found=0
+                    fi
+                    for ((i=0; i<${#selected[@]}; i++)); do
+                        if [ "$KEY" != ' ' ] || [ "${item_groups[i]}" -eq "$cursor" ]; then selected[i]="$found"; fi
+                    done
+                elif [ "$KEY" = ' ' ]; then i="${children[cursor]}"; selected[i]=$((1 - selected[i]));
+                else
+                    found=1; [ "$KEY" != n ] || found=0
+                    for i in "${children[@]}"; do selected[i]="$found"; done
+                fi ;;
+            '')
+                if [ "$child" -ge 0 ]; then child=-1; cursor="${MENU_CURSORS[page]}";
+                elif [ "$cursor" -eq "${#groups[@]}" ]; then return 0;
+                else child="$cursor"; key_page=$((100 + page * 100 + child)); cursor="${MENU_CURSORS[key_page]:-0}"; fi ;;
+            b | B)
+                if [ "$child" -ge 0 ]; then child=-1; cursor="${MENU_CURSORS[page]}"; else return 2; fi ;;
+            q | Q | $'\e') return 1 ;;
+        esac
+    done
+}
+
+# The private manifest binds selection IDs to scanned paths and content hashes.
+# No source checkout or network access is required to remove installed content.
+removal_inventory() {
+    node - "$HOME" "$REMOVAL_TEMP/inventory.json" "$@" <<'JS'
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const cp = require('child_process');
-const [home, action, codex, claude] = process.argv.slice(2);
+const [home, manifest, action, ...args] = process.argv.slice(2);
+const red = s => `\x1b[31m${s}\x1b[0m`;
+const cyan = s => `\x1b[36m${s}\x1b[0m`;
+const yellow = s => `\x1b[33m${s}\x1b[0m`;
+process.on('uncaughtException', error => { console.error(red(error.message)); process.exitCode = 1; });
+const display = s => JSON.stringify(String(s)).slice(1, -1);
+const quote = s => "'" + s.replace(/'/g, "'\\''") + "'";
+const stat = p => { try { return fs.lstatSync(p); } catch (e) { if (e.code !== 'ENOENT') throw e; } };
 if (!home || !path.isAbsolute(home) || path.resolve(home) === '/') throw Error('Unsafe HOME');
-const stat = full => {
-    try { return fs.lstatSync(full); } catch (e) { if (e.code !== 'ENOENT') throw e; }
+const full = relative => {
+    const value = path.resolve(home, relative);
+    if (!value.startsWith(path.resolve(home) + path.sep)) throw Error('Path outside HOME');
+    return value;
 };
-for (const name of ['.agents', '.claude', ...(codex === '1' ? ['.agents/skills'] : [])]) {
-    const full = path.join(home, name);
-    if (stat(full)?.isSymbolicLink()) throw Error(`Refusing symlinked directory: ${full}`);
+function parents(relative) {
+    let current = path.dirname(full(relative));
+    const result = [];
+    while (current !== path.resolve(home)) {
+        const info = stat(current);
+        if (!info?.isDirectory() || info.isSymbolicLink()) throw Error(`Unsafe parent directory: ${current}`);
+        result.push([current, info.dev, info.ino]);
+        current = path.dirname(current);
+    }
+    return result;
 }
-const shared = path.join(home, '.agents/skills');
-const targets = [];
-const addEntries = relative => {
-    const full = path.join(home, relative);
-    const info = stat(full);
-    if (info?.isSymbolicLink()) targets.push(relative);
-    else if (info?.isDirectory()) {
-        for (const name of fs.readdirSync(full)) {
-            if (name !== '.system') targets.push(path.join(relative, name));
+function fingerprint(relative) {
+    const hash = crypto.createHash('sha256');
+    function walk(p) {
+        const info = stat(p);
+        if (!info) { hash.update('missing'); return; }
+        hash.update(JSON.stringify([p, info.dev, info.ino, info.mode, info.size, info.mtimeMs, info.ctimeMs]));
+        if (info.isSymbolicLink()) hash.update(fs.readlinkSync(p));
+        else if (info.isDirectory()) for (const name of fs.readdirSync(p).sort()) walk(path.join(p, name));
+        else if (info.isFile()) hash.update(fs.readFileSync(p));
+        else throw Error(`Unsupported entry: ${p}`);
+    }
+    walk(full(relative));
+    return hash.digest('hex');
+}
+function markers(text) {
+    const lines = text.match(/[^\n]*\n|[^\n]+$/g) || [];
+    let offset = 0, opened = null;
+    const result = [], names = new Set();
+    for (const line of lines) {
+        const start = line.replace(/[\r\n]+$/, '').match(/^<!-- gwyn-space-skills: ([a-zA-Z0-9][a-zA-Z0-9._-]*):start -->$/);
+        const end = line.replace(/[\r\n]+$/, '').match(/^<!-- gwyn-space-skills: ([a-zA-Z0-9][a-zA-Z0-9._-]*):end -->$/);
+        if (start) {
+            if (opened || names.has(start[1])) throw Error('Duplicate or nested managed rule markers');
+            opened = {name: start[1], start: offset}; names.add(start[1]);
+        }
+        if (end) {
+            if (!opened || opened.name !== end[1]) throw Error('Unbalanced managed rule markers');
+            result.push({...opened, end: offset + line.length}); opened = null;
+        }
+        offset += line.length;
+    }
+    if (opened) throw Error('Unbalanced managed rule markers');
+    return result;
+}
+const lockPath = '.agents/.skill-lock.json';
+function readLock() {
+    const info = stat(full(lockPath));
+    if (!info) return {data: {skills: {}}, valid: true};
+    if (!info.isFile() || info.isSymbolicLink()) return {valid: false};
+    try {
+        const data = JSON.parse(fs.readFileSync(full(lockPath), 'utf8'));
+        if (!data || typeof data !== 'object' || Array.isArray(data) ||
+            (data.skills !== undefined && (!data.skills || typeof data.skills !== 'object' || Array.isArray(data.skills)))) return {valid: false};
+        return {data, valid: true};
+    } catch { return {valid: false}; }
+}
+function repository(record) {
+    if (!record || record.sourceType !== 'github') return 'Unknown / local';
+    const source = record.source || record.sourceUrl || '';
+    if (typeof source !== 'string') return 'Unknown / local';
+    const match = source.replace(/^https?:\/\/github.com\//, '').replace(/^git@github.com:/, '').match(/^([\w.-]+)\/([\w.-]+)(?:\/|$)/);
+    return match ? `${match[1]}/${match[2].replace(/\.git$/, '')}`.toLowerCase() : 'Unknown / local';
+}
+function scan(codex, claude, rules, skills) {
+    for (const directory of [...(skills ? ['.agents'] : []), ...(claude ? ['.claude'] : []), ...(rules && codex ? ['.codex'] : [])]) {
+        if (stat(full(directory))?.isSymbolicLink()) throw Error(`Refusing symlinked directory: ${full(directory)}`);
+    }
+    const entries = [], lock = skills ? readLock() : {valid: true};
+    const add = entry => {
+        entries.push({...entry, id: entries.length, snapshot: fingerprint(entry.relative), parents: parents(entry.relative)});
+    };
+    for (const agent of ['codex', 'claude']) {
+        if (!(agent === 'codex' ? codex : claude)) continue;
+        if (rules) {
+            const relative = agent === 'codex' ? '.codex/AGENTS.md' : '.claude/CLAUDE.md';
+            const info = stat(full(relative));
+            if (info?.isSymbolicLink()) add({kind: 'rules', type: 'link', agent, relative, name: path.basename(relative)});
+            else if (info?.isFile()) {
+                parents(relative);
+                for (const block of markers(fs.readFileSync(full(relative), 'latin1'))) {
+                    add({kind: 'rules', type: 'block', agent, relative, name: block.name});
+                }
+            }
+            if (agent === 'claude') {
+                const walk = relative => {
+                    const info = stat(full(relative));
+                    if (!info) return;
+                    if (info.isSymbolicLink()) add({kind: 'rules', type: 'link', agent, relative, name: relative.slice('.claude/'.length)});
+                    else if (info.isDirectory()) {
+                        for (const name of fs.readdirSync(full(relative)).sort()) walk(path.join(relative, name));
+                    } else if (info.isFile()) add({kind: 'rules', type: 'file', agent, relative, name: relative.slice('.claude/'.length)});
+                };
+                walk('.claude/rules');
+            }
+        }
+        if (skills) {
+            const root = agent === 'codex' ? '.agents/skills' : '.claude/skills';
+            const info = stat(full(root));
+            if (info?.isSymbolicLink()) {
+                if (agent === 'codex') throw Error(`Refusing symlinked directory: ${full(root)}`);
+                add({kind: 'skills', type: 'link', agent, relative: root, name: 'skills directory link', group: 'Unknown / local'});
+            } else if (info?.isDirectory()) {
+                parents(path.join(root, 'entry'));
+                for (const name of fs.readdirSync(full(root)).sort()) {
+                    if (name === '.system') continue;
+                    const relative = path.join(root, name), info = stat(full(relative));
+                    let record = agent === 'codex' ? lock.data?.skills?.[name] : null;
+                    if (agent === 'claude' && info.isSymbolicLink()) {
+                        const destination = path.resolve(path.dirname(full(relative)), fs.readlinkSync(full(relative)));
+                        if (path.dirname(destination) === full('.agents/skills')) record = lock.data?.skills?.[path.basename(destination)];
+                    }
+                    add({kind: 'skills', type: info.isSymbolicLink() ? 'link' : info.isDirectory() ? 'directory' : 'file',
+                         agent, relative, name, group: repository(record)});
+                }
+            }
         }
     }
-};
-if (codex === '1') {
-    addEntries('.agents/skills');
-    if (stat(path.join(home, '.agents/.skill-lock.json'))) targets.push('.agents/.skill-lock.json');
+    if (skills && !lock.valid) console.error(yellow('Skill lock is unreadable; skills are grouped under Unknown / local. Codex deletion requires a valid lock.'));
+    return {entries, selected: [], lockSnapshot: skills ? fingerprint(lockPath) : null};
 }
-if (claude === '1') addEntries('.claude/skills');
-if (action === 'preview' && codex === '1' && claude !== '1') {
-    const affected = [];
-    const scan = full => {
-        const info = stat(full);
-        if (info?.isSymbolicLink()) {
-            const target = path.resolve(path.dirname(full), fs.readlinkSync(full));
-            if (targets.some(relative => {
-                const removed = path.join(home, relative);
-                return target === removed || target.startsWith(removed + path.sep) || removed.startsWith(target + path.sep);
-            })) affected.push(`${full} -> ${target}`);
-        } else if (info?.isDirectory()) {
-            for (const name of fs.readdirSync(full)) scan(path.join(full, name));
+function selected(data) {
+    const ids = new Set(data.selected);
+    return data.entries.filter(e => ids.has(e.id));
+}
+function verify(data, items) {
+    for (const entry of items) {
+        if (JSON.stringify(parents(entry.relative)) !== JSON.stringify(entry.parents) || fingerprint(entry.relative) !== entry.snapshot) {
+            throw Error(`Content changed; rescan and select again: ${full(entry.relative)}`);
         }
-    };
-    scan(path.join(home, '.claude/skills'));
-    if (affected.length) console.log('\x1b[31mWARNING: Claude links will be kept, but their shared skills will be removed:\n' + affected.join('\n') + '\x1b[0m');
+    }
+    if (items.some(e => e.kind === 'skills') && fingerprint(lockPath) !== data.lockSnapshot) throw Error('Skill lock changed; rescan and select again');
 }
-console.log('Removal targets:\n' + (targets.map(p => path.join(home, p)).join('\n') || '(none)'));
-if (action === 'preview') process.exit(0);
-if (!targets.length) { console.log('No managed global skills to remove.'); process.exit(0); }
-const backupDir = fs.mkdtempSync(path.join(home, '.agent-skills-backup-'));
-fs.chmodSync(backupDir, 0o700);
-const backup = path.join(backupDir, 'skills.tar');
-const result = cp.spawnSync('tar', ['-cf', backup, '-C', home, '--', ...targets], {stdio: 'inherit'});
-if (result.status !== 0) throw Error('Backup failed; nothing removed');
-console.log(`Backup: ${backup}`);
-const quote = value => "'" + value.replace(/'/g, "'\\''") + "'";
-console.log(`Restore: tar -xf ${quote(backup)} -C ${quote(home)}`);
-for (const target of targets) fs.rmSync(path.join(home, target), {recursive: true, force: true});
+function warnings(items) {
+    const removed = new Set(items.filter(e => e.type !== 'block').map(e => full(e.relative)));
+    const sources = items.filter(e => e.kind === 'skills' && e.agent === 'codex').map(e => full(e.relative));
+    if (!sources.length) return;
+    console.log(yellow('Other agents may use shared skills.'));
+    function walk(p) {
+        const info = stat(p);
+        if (!info) return;
+        if (info.isSymbolicLink()) {
+            const destination = path.resolve(path.dirname(p), fs.readlinkSync(p));
+            if (!removed.has(p) && sources.some(source => destination === source || destination.startsWith(source + path.sep) || source.startsWith(destination + path.sep))) {
+                console.log(red(`WARNING: Claude link will be kept: ${display(p)} -> ${display(destination)}`));
+            }
+        } else if (info.isDirectory()) for (const name of fs.readdirSync(p)) walk(path.join(p, name));
+    }
+    // Do not traverse a symlinked agent parent just to produce a warning.
+    if (!stat(full('.claude'))?.isSymbolicLink()) walk(full('.claude/skills'));
+}
+function atomicWrite(relative, text) {
+    parents(relative);
+    const destination = full(relative), info = fs.lstatSync(destination);
+    if (!info.isFile() || info.isSymbolicLink()) throw Error(`Not a regular file: ${destination}`);
+    const temporary = `${destination}.agent-setup-${crypto.randomBytes(8).toString('hex')}`;
+    try {
+        fs.writeFileSync(temporary, text, {flag: 'wx', mode: info.mode & 0o777});
+        fs.chmodSync(temporary, info.mode & 0o777);
+        fs.renameSync(temporary, destination);
+    } finally { fs.rmSync(temporary, {force: true}); }
+}
+if (action === 'scan') {
+    const data = scan(...args.map(value => value === '1'));
+    fs.writeFileSync(manifest, JSON.stringify(data), {mode: 0o600});
+} else {
+    const data = JSON.parse(fs.readFileSync(manifest, 'utf8'));
+    if (action === 'rows') {
+        for (const e of data.entries) console.log([e.id, e.kind, display(e.group || '-'), `${e.agent === 'codex' ? 'Codex' : 'Claude'} / ${display(e.name)} [${e.type}]`].join('\t'));
+    } else if (action === 'select') {
+        data.selected = [...new Set(args.map(Number))];
+        if (data.selected.some(id => !data.entries.some(e => e.id === id))) throw Error('Invalid removal selection');
+        fs.writeFileSync(manifest, JSON.stringify(data));
+    } else {
+        const items = selected(data);
+        if (!items.length) { console.log('No removal targets selected.'); process.exit(0); }
+        verify(data, items);
+        if (action === 'preview') {
+            console.log('Removal targets:');
+            for (const e of items) console.log(`  ${e.agent} / ${display(e.name)} [${e.type}]: ${red(display(full(e.relative)) + (e.type === 'block' ? ` # ${e.name}` : ''))}`);
+            const lock = readLock();
+            const names = items.filter(e => e.kind === 'skills' && e.agent === 'codex' && lock.valid && Object.hasOwn(lock.data.skills || {}, e.name)).map(e => e.name);
+            if (names.length) console.log(`  Remove lock entries (${names.map(display).join(', ')}): ${red(display(full(lockPath)))}`);
+            warnings(items);
+        } else if (action === 'remove') {
+            const lock = readLock();
+            const codexSkills = items.filter(e => e.kind === 'skills' && e.agent === 'codex');
+            if (codexSkills.length && !lock.valid) throw Error('Invalid skill lock; nothing removed');
+            const updatesLock = codexSkills.some(e => Object.hasOwn(lock.data.skills || {}, e.name));
+            const targets = [...new Set([...items.map(e => e.relative), ...(updatesLock ? [lockPath] : [])])];
+            const prefix = items.some(e => e.kind === 'rules') ? '.agent-rules-backup-' : '.agent-skills-backup-';
+            const backupDir = fs.mkdtempSync(path.join(home, prefix));
+            fs.chmodSync(backupDir, 0o700);
+            const backup = path.join(backupDir, 'removal.tar');
+            const result = cp.spawnSync('tar', ['-cf', backup, '-C', home, '--', ...targets], {stdio: 'inherit'});
+            if (result.status !== 0) throw Error('Backup failed; nothing removed');
+            console.log(cyan(`Backup: ${display(backup)}`));
+            console.log(cyan(`Restore: tar -xf ${quote(backup)} -C ${quote(home)}`));
+            verify(data, items);
+            let succeeded = 0, failed = 0;
+            const removedSkills = [], handled = new Set();
+            for (const item of items) {
+                if (handled.has(item.id)) continue;
+                const batch = item.type === 'block' ? items.filter(e => e.type === 'block' && e.relative === item.relative) : [item];
+                for (const e of batch) handled.add(e.id);
+                try {
+                    parents(item.relative);
+                    if (item.type === 'block') {
+                        const text = fs.readFileSync(full(item.relative), 'latin1'), names = new Set(batch.map(e => e.name));
+                        let next = text;
+                        for (const block of markers(text).filter(b => names.has(b.name)).reverse()) next = next.slice(0, block.start) + next.slice(block.end);
+                        atomicWrite(item.relative, Buffer.from(next, 'latin1'));
+                    } else fs.rmSync(full(item.relative), {recursive: true});
+                    for (const e of batch) {
+                        succeeded++;
+                        console.log(`  OK removed ${e.agent} / ${display(e.name)}: ${red(display(full(e.relative)) + (e.type === 'block' ? ` # ${e.name}` : ''))}`);
+                        if (e.kind === 'skills' && e.agent === 'codex') removedSkills.push(e.name);
+                    }
+                } catch (error) {
+                    failed += batch.length;
+                    for (const e of batch) console.error(red(`  FAIL ${e.agent} / ${display(e.name)}: ${display(full(e.relative))}: ${error.message}`));
+                }
+            }
+            if (updatesLock && removedSkills.length) {
+                try {
+                    if (fingerprint(lockPath) !== data.lockSnapshot) throw Error('Skill lock changed during deletion; restore from backup if needed');
+                    for (const name of removedSkills) delete lock.data.skills[name];
+                    atomicWrite(lockPath, JSON.stringify(lock.data, null, 2) + '\n');
+                    console.log(`Updated lock: ${red(display(full(lockPath)))}`);
+                } catch (error) { failed++; console.error(red(`  FAIL lock update: ${error.message}`)); }
+            }
+            console.log(`\nResults: ${succeeded} succeeded, ${failed} failed`);
+            if (items.some(e => e.kind === 'skills')) console.log('Remove skills for the selected agents; preserve .system entries.');
+            process.exitCode = failed ? 1 : 0;
+        } else throw Error('Unknown removal action');
+    }
+}
 JS
 }
 
-confirm_removal() {
-    local answer
-    require_command node
-    require_command tar
-    remove_installed_agent_skills preview
-    printf 'A tar backup is created before removal. Other agents may use shared skills.\n'
-    printf 'Type DELETE to confirm, or press Enter to cancel: '
-    IFS= read -r answer || return 0
-    [ "$answer" = DELETE ] || return 0
-    run_item 'Remove global skills' remove_installed_agent_skills
-    printf '\nRemove skills for the selected agents; preserve .system entries.\n'
-    print_summary
+scan_removal_inventory() {
+    local rows id kind group label
+    require_command node || return 1
+    if [ -n "$REMOVAL_TEMP" ]; then rm -rf -- "$REMOVAL_TEMP"; fi
+    REMOVAL_TEMP="$(mktemp -d)" || return 1
+    trap cleanup_setup_resources EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    removal_inventory scan "$REMOVE_CODEX" "$REMOVE_CLAUDE" "$REMOVE_RULES" "$REMOVE_SKILLS" || return 1
+    rows=$(removal_inventory rows) || return 1
+    REMOVAL_RULE_IDS=(); REMOVAL_RULE_LABELS=(); REMOVAL_SKILL_IDS=(); REMOVAL_SKILL_LABELS=(); REMOVAL_SKILL_GROUPS=()
+    REMOVAL_RULE_SELECTION=(); REMOVAL_SKILL_SELECTION=()
+    MENU_VISITED[12]=0; MENU_CURSORS[12]=0; MENU_CURSORS[13]=0
+    while IFS=$'\t' read -r id kind group label; do
+        [ -n "$id" ] || continue
+        if [ "$kind" = rules ]; then REMOVAL_RULE_IDS+=("$id"); REMOVAL_RULE_LABELS+=("$label");
+        else REMOVAL_SKILL_IDS+=("$id"); REMOVAL_SKILL_LABELS+=("$label"); REMOVAL_SKILL_GROUPS+=("$group"); fi
+    done <<<"$rows"
 }
 
-# Keep the rules directory itself, except when it is a symlink: unlink that
-# entry without touching its target. Back up hidden files and links as well.
-claude_rules() {
-    node - "$HOME" "$1" <<'JS'
-const fs = require('fs');
-const path = require('path');
-const cp = require('child_process');
-const [home, action] = process.argv.slice(2);
-if (!home || !path.isAbsolute(home) || path.resolve(home) === '/') throw Error('Unsafe HOME');
-const stat = full => {
-    try { return fs.lstatSync(full); } catch (e) { if (e.code !== 'ENOENT') throw e; }
-};
-if (stat(path.join(home, '.claude'))?.isSymbolicLink()) throw Error('Refusing symlinked .claude directory');
-const relative = '.claude/rules';
-const full = path.join(home, relative);
-const info = stat(full);
-const targets = info?.isSymbolicLink() ? [relative] : info?.isDirectory()
-    ? fs.readdirSync(full).map(name => path.join(relative, name)) : [];
-if (action === 'preview') {
-    console.log('Claude rules removal targets:\n' + (targets.map(p => path.join(home, p)).join('\n') || '(none)'));
-} else if (action === 'backup' && targets.length) {
-    const dir = fs.mkdtempSync(path.join(home, '.agent-rules-backup-'));
-    fs.chmodSync(dir, 0o700);
-    const backup = path.join(dir, 'rules.tar');
-    const result = cp.spawnSync('tar', ['-cf', backup, '-C', home, '--', ...targets], {stdio: 'inherit'});
-    if (result.status !== 0) throw Error('Rules backup failed; nothing removed');
-    const quote = value => "'" + value.replace(/'/g, "'\\''") + "'";
-    console.log(`Backup: ${backup}`);
-    console.log(`Restore: tar -xf ${quote(backup)} -C ${quote(home)}`);
-} else if (action === 'remove') {
-    for (const target of targets) fs.rmSync(path.join(home, target), {recursive: true, force: true});
+preview_selected_removal() {
+    local i ids=()
+    for i in "${REMOVAL_RULE_SELECTION[@]+"${REMOVAL_RULE_SELECTION[@]}"}"; do ids+=("${REMOVAL_RULE_IDS[i]}"); done
+    for i in "${REMOVAL_SKILL_SELECTION[@]+"${REMOVAL_SKILL_SELECTION[@]}"}"; do ids+=("${REMOVAL_SKILL_IDS[i]}"); done
+    if [ "${#ids[@]}" -eq 0 ]; then printf 'No removal targets selected.\n'; return 2; fi
+    removal_inventory select "${ids[@]}" || return 1
+    removal_inventory preview || return 1
 }
-JS
-}
-
-
-remove_global_rules() {
-    local relative destination backup_dir="" target=both
-    local files=()
-    if [ "$REMOVE_CODEX" -eq 1 ]; then files+=(.codex/AGENTS.md); fi
-    if [ "$REMOVE_CLAUDE" -eq 1 ]; then files+=(.claude/CLAUDE.md); fi
-    if [ "$REMOVE_CODEX" -eq 0 ]; then target=claude; fi
-    if [ "$REMOVE_CLAUDE" -eq 0 ]; then target=codex; fi
-    # Back up selected files before the first removal. cp restores through an
-    # existing file symlink, matching the rule installer's path handling.
-    for relative in "${files[@]}"; do
-        destination="$HOME/$relative"
-        [ -f "$destination" ] || continue
-        if [ -z "$backup_dir" ]; then
-            backup_dir=$(mktemp -d "$HOME/.agent-rules-backup-XXXXXX")
-        fi
-        cp -pL "$destination" "$backup_dir/${relative##*/}"
-    done
-    if [ -n "$backup_dir" ]; then
-        printf 'Backup: %s\n' "$backup_dir"
-        for relative in "${files[@]}"; do
-            [ -f "$backup_dir/${relative##*/}" ] || continue
-            printf 'Restore: cp -p %q %q\n' "$backup_dir/${relative##*/}" "$HOME/$relative"
-        done
-    fi
-    if [ "$REMOVE_CLAUDE_RULES" -eq 1 ]; then claude_rules backup; fi
-    apply_rule agent-behavior global "$target" remove </dev/null
-    if [ "$REMOVE_CLAUDE_RULES" -eq 1 ]; then claude_rules remove; fi
-}
-
-confirm_rule_removal() {
-    local answer
-    printf '\nRemove the managed agent-behavior rules from:\n'
-    if [ "$REMOVE_CODEX" -eq 1 ]; then printf '  %s/.codex/AGENTS.md\n' "$HOME"; fi
-    if [ "$REMOVE_CLAUDE" -eq 1 ]; then printf '  %s/.claude/CLAUDE.md\n' "$HOME"; fi
-    if [ "$REMOVE_CLAUDE_RULES" -eq 1 ]; then
-        require_command node
-        require_command tar
-        claude_rules preview
-    fi
-    printf 'Keep personal content and other rule blocks in AGENTS.md/CLAUDE.md. Back up existing files before removal.\n'
-    printf 'Type DELETE to confirm, or press Enter to cancel: '
-    IFS= read -r answer || return 0
-    [ "$answer" = DELETE ] || return 0
-    run_item 'Remove global rules' remove_global_rules
-    print_summary
-}
-
 
 list_setup_backups() {
     node - "$HOME" <<'JS'
@@ -1524,7 +1755,7 @@ for (const name of names) {
 for (const name of names) {
     const full = path.join(home, name);
     fs.rmSync(full, {recursive: true});
-    console.log(`Removed backup: ${full}`);
+    console.log(`Removed backup: \x1b[31m${full}\x1b[0m`);
 }
 JS
 }
@@ -1538,7 +1769,7 @@ confirm_backup_removal() {
     printf '\nRemove all setup backup directories listed below:\n'
     while IFS= read -r name; do
         backups+=("$name")
-        printf '  %s/%s\n' "$HOME" "$name"
+        printf '  \033[31m%s/%s\033[0m\n' "$HOME" "$name"
     done <<<"$names"
     printf 'This permanently deletes these backups and their restore data. No new backup is created.\n'
     printf 'Type DELETE to confirm, or press Enter to cancel: '
@@ -1552,10 +1783,10 @@ preflight() {
     local item
     for item in "$@"; do
         case "$item" in
-            0 | 1) require_command curl ;;
+            0 | 1) require_command curl || return 1 ;;
             2) : ;;
-            3) require_command node ;;
-            4) require_command curl; require_command node; require_command npx ;;
+            3) require_command node || return 1 ;;
+            4) require_command curl || return 1; require_command node || return 1; require_command npx || return 1 ;;
         esac
     done
 }
@@ -1604,7 +1835,7 @@ print_install_plan() {
     local labels=('Codex CLI' 'Claude Code CLI' 'Rules' 'Claude statusline')
     printf '\nExecution plan:\n'
     for i in "${AGENT_ITEMS[@]+"${AGENT_ITEMS[@]}"}"; do
-        [ "$i" -eq 2 ] || printf '  %s\n' "${labels[i]}"
+        [ "$i" -eq 2 ] || printf '  \033[32m%s\033[0m\n' "${labels[i]}"
     done
     if [ "${#SELECTED_RULES[@]}" -gt 0 ]; then
         for ((index=0; index<${#SELECTED_RULES[@]}; index++)); do
@@ -1616,82 +1847,144 @@ print_install_plan() {
             else
                 printf '  Rule source: %s/%s.md\n' "$RESOURCE_PATH" "$i"
             fi
-            printf '  %s / %s -> %s\n' "$RULE_SCOPE" "$i" "$RULE_TARGETS"
+            printf '  \033[32m%s / %s -> %s\033[0m\n' "$RULE_SCOPE" "$i" "$RULE_TARGETS"
             if [ "$RULE_SCOPE" = project ]; then
-                if [ "$RULE_TARGETS" != claude ]; then printf '    %s/AGENTS.md\n' "$PROJECT_TARGET"; fi
-                if [ "$RULE_TARGETS" != codex ]; then printf '    %s/.claude/rules/%s.md\n' "$PROJECT_TARGET" "$i"; fi
+                if [ "$RULE_TARGETS" != claude ]; then printf '    \033[32m%s/AGENTS.md\033[0m\n' "$PROJECT_TARGET"; fi
+                if [ "$RULE_TARGETS" != codex ]; then printf '    \033[32m%s/.claude/rules/%s.md\033[0m\n' "$PROJECT_TARGET" "$i"; fi
             else
-                if [ "$RULE_TARGETS" != claude ]; then printf '    %s/.codex/AGENTS.md\n' "$HOME"; fi
+                if [ "$RULE_TARGETS" != claude ]; then printf '    \033[32m%s/.codex/AGENTS.md\033[0m\n' "$HOME"; fi
                 if [ "$RULE_TARGETS" != codex ]; then
                     destination="$HOME/.claude/rules/$i.md"
                     if [ "$i" = agent-behavior ]; then destination="$HOME/.claude/CLAUDE.md"; fi
-                    printf '    %s\n' "$destination"
+                    printf '    \033[32m%s\033[0m\n' "$destination"
                 fi
             fi
         done
     fi
     for i in "${SELECTED_SKILLS[@]+"${SELECTED_SKILLS[@]}"}"; do
-        printf '  %s / %s -> %s\n' "${SKILL_GROUPS[i]}" "${SKILL_NAMES[i]}" "${TARGET_AGENTS[*]}"
+        printf '  \033[32m%s / %s -> %s\033[0m\n' "${SKILL_GROUPS[i]}" "${SKILL_NAMES[i]}" "${TARGET_AGENTS[*]}"
+        print_skill_targets "${SKILL_NAMES[i]}"
     done
     for i in "${FAILED[@]+"${FAILED[@]}"}"; do printf '  UNAVAILABLE: %s\n' "$i"; done
 }
 
+# Capture action failures without putting the action in a conditional, which
+# would disable errexit inside its file writes and backup steps.
+run_interactive_task() {
+    set +e
+    ( set -e; set -o pipefail; "$@" )
+    INTERACTIVE_RESULT=$?
+    set -e
+    if [ "$INTERACTIVE_RESULT" -ne 0 ]; then
+        printf 'Task failed (exit %s).\n' "$INTERACTIVE_RESULT" >&2
+    fi
+    return 0
+}
+
 interactive_setup() {
-    local page=main catalog_loaded=0 i task answer
+    local page=main catalog_loaded=0 i task answer menu_status removal_scanned=0 removal_signature="" signature
+    local session_status=0 INTERACTIVE_RESULT=0 show_summary=0
+    local catalog_failures=()
     local rule_labels=() rule_names=() rule_sources=() source_scope
     local task_labels=('Skills' 'Rules' 'Codex CLI' 'Claude Code CLI' 'Claude statusline')
-    local task_ids=(4 2 0 1 3) skill_labels=() tasks=()
+    local task_ids=(4 2 0 1 3) tasks=()
     while :; do
         case "$page" in
             main)
-                choose_items 0 'Agent setup' 0 0 'Install / Update' 'Remove global skills' 'Remove global rules' 'Remove all backups' 'Install / Update this command' 'Exit' || return 0
+                choose_items 0 'Agent setup' 0 0 'Install / Update' 'Remove' 'Remove all backups' 'Install / Update this command' 'Exit' || return "$session_status"
                 case "${MENU_SELECTED[0]}" in
                     0) page=tasks ;;
-                    1) page=remove_skills ;;
-                    2) page=remove_rule_agents ;;
-                    3) confirm_backup_removal; return $? ;;
-                    4) run_item 'Install / Update this command' install_setup_command; print_summary; return $? ;;
-                    5) return 0 ;;
+                    1) removal_scanned=0; page=remove_agents ;;
+                    2) run_interactive_task confirm_backup_removal; page=complete ;;
+                    3) run_item 'Install / Update this command' install_setup_command; print_summary || session_status=1; page=complete ;;
+                    4) return "$session_status" ;;
                 esac ;;
-            remove_skills | remove_rule_agents)
-                if [ "$page" = remove_skills ]; then i=4; answer='Remove global skills';
-                else i=5; answer='Remove global rules'; fi
-                choose_items "$i" "$answer: choose agents" 1 1 Codex 'Claude Code' || {
-                    [ "$?" -eq 2 ] || return 0
+            remove_agents)
+                choose_items 4 'Remove: choose agents' 1 1 Codex 'Claude Code' || {
+                    [ "$?" -eq 2 ] || return "$session_status"
                     page=main; continue
                 }
-                [ "${#MENU_SELECTED[@]}" -gt 0 ] || { printf 'No agents selected; cancelled.\n'; return 0; }
-                REMOVE_CODEX=0; REMOVE_CLAUDE=0; REMOVE_CLAUDE_RULES=0
+                [ "${#MENU_SELECTED[@]}" -gt 0 ] || { printf 'No agents selected; cancelled.\n'; page=complete; continue; }
+                REMOVE_CODEX=0; REMOVE_CLAUDE=0
                 for i in "${MENU_SELECTED[@]}"; do
                     if [ "$i" -eq 0 ]; then REMOVE_CODEX=1; else REMOVE_CLAUDE=1; fi
                 done
-                if [ "$page" = remove_skills ]; then confirm_removal; return $?; fi
-                if [ "$REMOVE_CLAUDE" -eq 1 ]; then page=remove_rules;
-                else confirm_rule_removal; return $?; fi ;;
-            remove_rules)
-                choose_items 6 'Also remove all Claude rules directory contents?' 0 0 \
-                    'Keep rules (default)' 'Remove rules directory contents' || {
-                    [ "$?" -eq 2 ] || return 0
-                    page=remove_rule_agents; continue
+                page=remove_categories ;;
+            remove_categories)
+                choose_items 5 'Remove: choose content' 1 0 Rules Skills || {
+                    [ "$?" -eq 2 ] || return "$session_status"
+                    page=remove_agents; continue
                 }
-                REMOVE_CLAUDE_RULES="${MENU_SELECTED[0]}"
-                confirm_rule_removal; return $? ;;
+                [ "${#MENU_SELECTED[@]}" -gt 0 ] || { printf 'No content selected; cancelled.\n'; page=complete; continue; }
+                REMOVE_RULES=0; REMOVE_SKILLS=0
+                for i in "${MENU_SELECTED[@]}"; do
+                    if [ "$i" -eq 0 ]; then REMOVE_RULES=1; else REMOVE_SKILLS=1; fi
+                done
+                signature="$REMOVE_CODEX/$REMOVE_CLAUDE/$REMOVE_RULES/$REMOVE_SKILLS"
+                if [ "$removal_scanned" -eq 0 ] || [ "$signature" != "$removal_signature" ]; then
+                    if ! scan_removal_inventory; then FAILED+=('Installed content scan failed'); show_summary=1; page=complete; continue; fi
+                    removal_signature="$signature"; removal_scanned=1
+                fi
+                page=remove_rules ;;
+            remove_rules)
+                if [ "$REMOVE_RULES" -eq 1 ] && [ "${#REMOVAL_RULE_IDS[@]}" -gt 0 ]; then
+                    choose_items 12 'Choose installed rules to remove' 1 0 "${REMOVAL_RULE_LABELS[@]}" || {
+                        [ "$?" -eq 2 ] || return "$session_status"
+                        page=remove_categories; continue
+                    }
+                    REMOVAL_RULE_SELECTION=("${MENU_SELECTED[@]+"${MENU_SELECTED[@]}"}")
+                fi
+                page=remove_skills ;;
+            remove_skills)
+                if [ "$REMOVE_SKILLS" -eq 1 ] && [ "${#REMOVAL_SKILL_IDS[@]}" -gt 0 ]; then
+                    REPO_ITEM_LABELS=("${REMOVAL_SKILL_LABELS[@]}"); REPO_ITEM_GROUPS=("${REMOVAL_SKILL_GROUPS[@]}")
+                    REPO_SELECTED=("${REMOVAL_SKILL_SELECTION[@]+"${REMOVAL_SKILL_SELECTION[@]}"}")
+                    choose_skill_repositories 13 'Remove skills by repository' 31 || {
+                        menu_status=$?
+                        REMOVAL_SKILL_SELECTION=("${REPO_SELECTED[@]+"${REPO_SELECTED[@]}"}")
+                        [ "$menu_status" -eq 2 ] || return "$session_status"
+                        if [ "$REMOVE_RULES" -eq 1 ] && [ "${#REMOVAL_RULE_IDS[@]}" -gt 0 ]; then page=remove_rules; else page=remove_categories; fi
+                        continue
+                    }
+                    REMOVAL_SKILL_SELECTION=("${REPO_SELECTED[@]+"${REPO_SELECTED[@]}"}")
+                fi
+                preview_selected_removal || {
+                    menu_status=$?
+                    if [ "$menu_status" -ne 2 ]; then FAILED+=('Removal preview failed; rescan required'); show_summary=1; fi
+                    page=complete; continue
+                }
+                printf 'All selected content is backed up before any removal.\nType DELETE to confirm, or press Enter to cancel (b: back | q: exit): '
+                IFS= read -r answer || return "$session_status"
+                case "$answer" in
+                    DELETE) run_interactive_task removal_inventory remove ;;
+                    q | Q) return "$session_status" ;;
+                    b | B)
+                        if [ "$REMOVE_SKILLS" -eq 1 ] && [ "${#REMOVAL_SKILL_IDS[@]}" -gt 0 ]; then page=remove_skills;
+                        elif [ "$REMOVE_RULES" -eq 1 ] && [ "${#REMOVAL_RULE_IDS[@]}" -gt 0 ]; then page=remove_rules;
+                        else page=remove_categories; fi
+                        continue ;;
+                    *) printf 'Cancelled.\n' ;;
+                esac
+                page=complete ;;
             tasks)
                 choose_items 1 'Choose installation tasks' 1 0 "${task_labels[@]}" || {
-                    [ "$?" -eq 2 ] || return 0
+                    [ "$?" -eq 2 ] || return "$session_status"
                     page=main; continue
                 }
                 tasks=("${MENU_SELECTED[@]+"${MENU_SELECTED[@]}"}")
-                [ "${#tasks[@]}" -gt 0 ] || return 0
+                [ "${#tasks[@]}" -gt 0 ] || { printf 'No tasks selected.\n'; page=complete; continue; }
                 AGENT_ITEMS=(); INSTALL_SKILLS=0
                 # Keep installation order independent of the menu's display order.
                 for i in 0 1 2 3 4; do
                     for task in "${tasks[@]}"; do
                         [ "${task_ids[task]}" -eq "$i" ] || continue
-                        preflight "$i"
+                        if ! preflight "$i" || { [ "$i" -eq 3 ] && ! resolve_resource scripts/statusline.sh; }; then
+                            FAILED+=("Installation preparation failed"); show_summary=1; page=complete; break 2
+                        fi
                         if [ "$i" -eq 4 ]; then INSTALL_SKILLS=1; else AGENT_ITEMS+=("$i"); fi
                     done
                 done
+                [ "$page" != complete ] || continue
                 if [[ " ${AGENT_ITEMS[*]+${AGENT_ITEMS[*]}} " = *" 2 "* ]]; then page=rule_choices;
                 else SELECTED_RULES=(); SELECTED_RULE_SOURCES=(); page=after_rules; fi ;;
             rule_choices)
@@ -1699,9 +1992,12 @@ interactive_setup() {
                 for source_scope in global project; do
                     if { [ "$source_scope" = global ] && [ "$RULE_CATALOG_GLOBAL" -eq 0 ]; } ||
                        { [ "$source_scope" = project ] && [ "$RULE_CATALOG_PROJECT" -eq 0 ]; }; then
-                        RULE_SCOPE="$source_scope" load_rule_catalog || return 1
+                        if ! RULE_SCOPE="$source_scope" load_rule_catalog; then
+                            FAILED+=("$source_scope rule catalog unavailable"); show_summary=1; page=complete; break
+                        fi
                     fi
                 done
+                [ "$page" != complete ] || continue
                 rule_labels=(); rule_names=(); rule_sources=()
                 for i in "${RULE_NAMES_GLOBAL[@]+"${RULE_NAMES_GLOBAL[@]}"}"; do
                     rule_labels+=("global / $i"); rule_names+=("$i"); rule_sources+=(global)
@@ -1709,9 +2005,9 @@ interactive_setup() {
                 for i in "${RULE_NAMES_PROJECT[@]+"${RULE_NAMES_PROJECT[@]}"}"; do
                     rule_labels+=("project / $i"); rule_names+=("$i"); rule_sources+=(project)
                 done
-                if [ "${#rule_labels[@]}" -eq 0 ]; then printf 'No rules available.\n'; return 1; fi
+                if [ "${#rule_labels[@]}" -eq 0 ]; then FAILED+=('No rules available'); show_summary=1; page=complete; continue; fi
                 choose_items 9 'Choose rules' 1 0 "${rule_labels[@]}" || {
-                    [ "$?" -eq 2 ] || return 0
+                    [ "$?" -eq 2 ] || return "$session_status"
                     page=tasks; continue
                 }
                 SELECTED_RULES=(); SELECTED_RULE_SOURCES=()
@@ -1721,10 +2017,10 @@ interactive_setup() {
                 if [ "${#SELECTED_RULES[@]}" -gt 0 ]; then page=rule_targets; else page=after_rules; fi ;;
             rule_targets)
                 choose_items 8 'Rules: choose agents' 1 1 Codex 'Claude Code' || {
-                    [ "$?" -eq 2 ] || return 0
+                    [ "$?" -eq 2 ] || return "$session_status"
                     page=rule_choices; continue
                 }
-                [ "${#MENU_SELECTED[@]}" -gt 0 ] || { printf 'No rule targets selected; cancelled.\n'; return 0; }
+                [ "${#MENU_SELECTED[@]}" -gt 0 ] || { printf 'No rule targets selected; cancelled.\n'; page=complete; continue; }
                 RULE_TARGETS=both
                 if [ "${#MENU_SELECTED[@]}" -eq 1 ]; then
                     if [ "${MENU_SELECTED[0]}" -eq 0 ]; then RULE_TARGETS=codex; else RULE_TARGETS=claude; fi
@@ -1732,7 +2028,7 @@ interactive_setup() {
                 page=rule_scope ;;
             rule_scope)
                 choose_items 7 'Rules: choose scope' 0 0 Global Project || {
-                    [ "$?" -eq 2 ] || return 0
+                    [ "$?" -eq 2 ] || return "$session_status"
                     page=rule_targets; continue
                 }
                 if [ "${MENU_SELECTED[0]}" -eq 0 ]; then RULE_SCOPE=global; else RULE_SCOPE=project; fi
@@ -1742,9 +2038,11 @@ interactive_setup() {
                     if [ "$catalog_loaded" -eq 0 ]; then
                         load_catalog
                         catalog_loaded=1
-                        for ((i=0; i<${#SKILL_NAMES[@]}; i++)); do
-                            skill_labels+=("${SKILL_GROUPS[i]} / ${SKILL_NAMES[i]}")
-                        done
+                        catalog_failures=("${FAILED[@]+"${FAILED[@]}"}")
+                    fi
+                    if [ "$catalog_loaded" -eq 1 ]; then
+                        FAILED=("${catalog_failures[@]+"${catalog_failures[@]}"}")
+                        [ "${#FAILED[@]}" -eq 0 ] || session_status=1
                     fi
                     if [ "${#SKILL_NAMES[@]}" -gt 0 ]; then page=skills; else page=review; fi
                 else
@@ -1752,16 +2050,21 @@ interactive_setup() {
                     page=review
                 fi ;;
             skills)
-                choose_items 2 'Choose skills by source' 1 0 "${skill_labels[@]}" || {
-                    [ "$?" -eq 2 ] || return 0
+                REPO_ITEM_LABELS=("${SKILL_NAMES[@]}"); REPO_ITEM_GROUPS=()
+                for i in "${SKILL_SOURCES[@]}"; do REPO_ITEM_GROUPS+=("${i#https://github.com/}"); done
+                REPO_SELECTED=("${SELECTED_SKILLS[@]+"${SELECTED_SKILLS[@]}"}")
+                choose_skill_repositories 2 'Install skills by repository' 32 || {
+                    menu_status=$?
+                    SELECTED_SKILLS=("${REPO_SELECTED[@]+"${REPO_SELECTED[@]}"}")
+                    [ "$menu_status" -eq 2 ] || return "$session_status"
                     if [[ " ${AGENT_ITEMS[*]+${AGENT_ITEMS[*]}} " = *" 2 "* ]]; then page=rule_scope; else page=tasks; fi
                     continue
                 }
-                SELECTED_SKILLS=("${MENU_SELECTED[@]+"${MENU_SELECTED[@]}"}")
+                SELECTED_SKILLS=("${REPO_SELECTED[@]+"${REPO_SELECTED[@]}"}")
                 if [ "${#SELECTED_SKILLS[@]}" -gt 0 ]; then page=targets; else page=review; fi ;;
             targets)
                 choose_items 3 'Install skills for' 1 1 Codex 'Claude Code' || {
-                    [ "$?" -eq 2 ] || return 0
+                    [ "$?" -eq 2 ] || return "$session_status"
                     page=skills; continue
                 }
                 TARGET_AGENTS=()
@@ -1769,28 +2072,63 @@ interactive_setup() {
                     if [ "$i" -eq 0 ]; then TARGET_AGENTS+=(codex); else TARGET_AGENTS+=(claude-code); fi
                 done
                 if [ "${#TARGET_AGENTS[@]}" -eq 0 ]; then
-                    printf 'No skill targets selected; cancelled.\n'; return 0
+                    printf 'No skill targets selected; cancelled.\n'; page=complete; continue
                 fi
                 page=review ;;
             review)
-                if [[ " ${AGENT_ITEMS[*]+${AGENT_ITEMS[*]}} " != *" 2 "* ]]; then break; fi
-                [ "$((${#AGENT_ITEMS[@]} + ${#SELECTED_SKILLS[@]}))" -gt 0 ] || { print_summary; return $?; }
-                choose_items 11 'Confirm installation' 0 0 Install Cancel || {
-                    [ "$?" -eq 2 ] || return 0
-                    if [ "$INSTALL_SKILLS" -eq 1 ] && [ "${#SELECTED_SKILLS[@]}" -gt 0 ]; then page=targets;
-                    elif [[ " ${AGENT_ITEMS[*]+${AGENT_ITEMS[*]}} " = *" 2 "* ]]; then page=rule_scope;
-                    else page=tasks; fi
-                    continue
-                }
-                [ "${MENU_SELECTED[0]}" -eq 0 ] || { printf 'Cancelled.\n'; return 0; }
-                execute_plan; return $? ;;
+                if [[ " ${AGENT_ITEMS[*]+${AGENT_ITEMS[*]}} " = *" 2 "* ]]; then
+                    choose_items 11 'Confirm installation' 0 0 Install Cancel || {
+                        menu_status=$?
+                        if [ "$menu_status" -eq 3 ]; then
+                            FAILED+=('Cannot prepare installation plan'); show_summary=1; page=complete; continue
+                        fi
+                        [ "$menu_status" -eq 2 ] || return "$session_status"
+                        if [ "$INSTALL_SKILLS" -eq 1 ] && [ "${#SELECTED_SKILLS[@]}" -gt 0 ]; then page=targets;
+                        else page=rule_scope; fi
+                        continue
+                    }
+                    if [ "${MENU_SELECTED[0]}" -ne 0 ]; then printf 'Cancelled.\n'; page=complete; continue; fi
+                else
+                    if ! print_install_plan; then FAILED+=('Cannot prepare installation plan'); show_summary=1; page=complete; continue; fi
+                    if [ "$((${#AGENT_ITEMS[@]} + ${#SELECTED_SKILLS[@]}))" -eq 0 ]; then
+                        show_summary=1; page=complete; continue
+                    fi
+                    printf 'Continue? [y/N] (b: back | q: exit) '
+                    IFS= read -r answer || return "$session_status"
+                    case "$answer" in
+                        y | Y) ;;
+                        q | Q) return "$session_status" ;;
+                        b | B)
+                            if [ "$INSTALL_SKILLS" -eq 1 ] && [ "${#SELECTED_SKILLS[@]}" -gt 0 ]; then page=targets;
+                            else page=tasks; fi
+                            continue ;;
+                        *) printf 'Cancelled.\n'; page=complete; continue ;;
+                    esac
+                fi
+                run_interactive_task execute_plan
+                page=complete ;;
+            complete)
+                if [ "$INTERACTIVE_RESULT" -ne 0 ] || [ "${#FAILED[@]}" -gt 0 ]; then session_status=1; fi
+                if [ "$show_summary" -eq 1 ]; then print_summary || true; fi
+                printf '\nPress Enter to return to the main menu (q: exit): '
+                while :; do
+                    read_key || return "$session_status"
+                    case "$KEY" in
+                        '') break ;;
+                        q | Q | $'\e') return "$session_status" ;;
+                    esac
+                done
+                # New actions start with defaults; Back within an action keeps selections.
+                SUCCEEDED=(); FAILED=(); MENU_SELECTED=(); MENU_CURSORS=(); MENU_CHOICES=(); MENU_VISITED=()
+                AGENT_ITEMS=(); SELECTED_SKILLS=(); SELECTED_RULES=(); SELECTED_RULE_SOURCES=()
+                TARGET_AGENTS=(codex claude-code); RULE_TARGETS=both; RULE_SCOPE=global
+                REMOVE_CODEX=1; REMOVE_CLAUDE=1; REMOVE_RULES=0; REMOVE_SKILLS=0
+                REMOVAL_RULE_SELECTION=(); REMOVAL_SKILL_SELECTION=(); removal_scanned=0
+                if [ -n "$REMOVAL_TEMP" ]; then rm -rf -- "$REMOVAL_TEMP"; REMOVAL_TEMP=""; fi
+                INTERACTIVE_RESULT=0; show_summary=0; INSTALL_SKILLS=0
+                page=main ;;
         esac
     done
-    print_install_plan
-    [ "$((${#AGENT_ITEMS[@]} + ${#SELECTED_SKILLS[@]}))" -gt 0 ] || { print_summary; return $?; }
-    printf 'Continue? [y/N] '
-    IFS= read -r answer || return 0
-    case "$answer" in y | Y) execute_plan ;; *) printf 'Cancelled.\n' ;; esac
 }
 
 main() {
