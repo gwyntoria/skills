@@ -60,6 +60,7 @@ REMOVE_CODEX=1
 REMOVE_CLAUDE=1
 REMOVE_RULES=0
 REMOVE_SKILLS=0
+REMOVE_SCOPE=global
 REMOVAL_TEMP=""
 REMOVAL_RULE_IDS=(); REMOVAL_RULE_LABELS=(); REMOVAL_SKILL_IDS=(); REMOVAL_SKILL_LABELS=(); REMOVAL_SKILL_GROUPS=()
 REMOVAL_RULE_SELECTION=(); REMOVAL_SKILL_SELECTION=()
@@ -1456,12 +1457,12 @@ choose_skill_repositories_page() {
 # The private manifest binds selection IDs to scanned paths and content hashes.
 # No source checkout or network access is required to remove installed content.
 removal_inventory() {
-    node - "$HOME" "$REMOVAL_TEMP/inventory.json" "$@" <<'JS'
+    node - "$HOME" "$PROJECT_TARGET" "$REMOVE_SCOPE" "$REMOVAL_TEMP/inventory.json" "$@" <<'JS'
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const cp = require('child_process');
-const [home, manifest, action, ...args] = process.argv.slice(2);
+const [home, project, scope, manifest, action, ...args] = process.argv.slice(2);
 const red = s => `\x1b[31m${s}\x1b[0m`;
 const cyan = s => `\x1b[36m${s}\x1b[0m`;
 const yellow = s => `\x1b[33m${s}\x1b[0m`;
@@ -1470,15 +1471,20 @@ const display = s => JSON.stringify(String(s)).slice(1, -1);
 const quote = s => "'" + s.replace(/'/g, "'\\''") + "'";
 const stat = p => { try { return fs.lstatSync(p); } catch (e) { if (e.code !== 'ENOENT') throw e; } };
 if (!home || !path.isAbsolute(home) || path.resolve(home) === '/') throw Error('Unsafe HOME');
+if (!['global', 'project'].includes(scope)) throw Error('Invalid removal scope');
+const root = scope === 'project' ? project : home;
+if (!root || !path.isAbsolute(root) || path.resolve(root) === '/') throw Error('Unsafe removal root');
+const rootInfo = fs.lstatSync(root);
+if (!rootInfo.isDirectory() || rootInfo.isSymbolicLink()) throw Error('Unsafe removal root directory');
 const full = relative => {
-    const value = path.resolve(home, relative);
-    if (!value.startsWith(path.resolve(home) + path.sep)) throw Error('Path outside HOME');
+    const value = path.resolve(root, relative);
+    if (!value.startsWith(path.resolve(root) + path.sep)) throw Error('Path outside removal root');
     return value;
 };
 function parents(relative) {
     let current = path.dirname(full(relative));
     const result = [];
-    while (current !== path.resolve(home)) {
+    while (current !== path.resolve(root)) {
         const info = stat(current);
         if (!info?.isDirectory() || info.isSymbolicLink()) throw Error(`Unsafe parent directory: ${current}`);
         result.push([current, info.dev, info.ino]);
@@ -1520,7 +1526,7 @@ function markers(text) {
     if (opened) throw Error('Unbalanced managed rule markers');
     return result;
 }
-const lockPath = '.agents/.skill-lock.json';
+const lockPath = scope === 'project' ? 'skills-lock.json' : '.agents/.skill-lock.json';
 function readLock() {
     const info = stat(full(lockPath));
     if (!info) return {data: {skills: {}}, valid: true};
@@ -1540,7 +1546,7 @@ function repository(record) {
     return match ? `${match[1]}/${match[2].replace(/\.git$/, '')}`.toLowerCase() : 'Unknown / local';
 }
 function scan(codex, claude, rules, skills) {
-    for (const directory of [...(skills ? ['.agents'] : []), ...(claude ? ['.claude'] : []), ...(rules && codex ? ['.codex'] : [])]) {
+    for (const directory of [...(skills ? ['.agents'] : []), ...(claude ? ['.claude'] : []), ...(rules && codex && scope === 'global' ? ['.codex'] : [])]) {
         if (stat(full(directory))?.isSymbolicLink()) throw Error(`Refusing symlinked directory: ${full(directory)}`);
     }
     const entries = [], lock = skills ? readLock() : {valid: true};
@@ -1550,8 +1556,9 @@ function scan(codex, claude, rules, skills) {
     for (const agent of ['codex', 'claude']) {
         if (!(agent === 'codex' ? codex : claude)) continue;
         if (rules) {
-            const relative = agent === 'codex' ? '.codex/AGENTS.md' : '.claude/CLAUDE.md';
-            const info = stat(full(relative));
+            const relative = agent === 'codex' ? (scope === 'project' ? 'AGENTS.md' : '.codex/AGENTS.md') :
+                (scope === 'global' ? '.claude/CLAUDE.md' : null);
+            const info = relative ? stat(full(relative)) : null;
             if (info?.isSymbolicLink()) add({kind: 'rules', type: 'link', agent, relative, name: path.basename(relative)});
             else if (info?.isFile()) {
                 parents(relative);
@@ -1594,13 +1601,19 @@ function scan(codex, claude, rules, skills) {
         }
     }
     if (skills && !lock.valid) console.error(yellow('Skill lock is unreadable; skills are grouped under Unknown / local. Codex deletion requires a valid lock.'));
-    return {entries, selected: [], lockSnapshot: skills ? fingerprint(lockPath) : null};
+    return {scope, root: path.resolve(root), rootIdentity: [rootInfo.dev, rootInfo.ino],
+        entries, selected: [], lockSnapshot: skills ? fingerprint(lockPath) : null};
 }
 function selected(data) {
     const ids = new Set(data.selected);
     return data.entries.filter(e => ids.has(e.id));
 }
 function verify(data, items) {
+    const info = fs.lstatSync(root);
+    if (!info.isDirectory() || info.isSymbolicLink() ||
+        JSON.stringify(data.rootIdentity) !== JSON.stringify([info.dev, info.ino])) {
+        throw Error('Removal root changed; rescan and select again');
+    }
     for (const entry of items) {
         if (JSON.stringify(parents(entry.relative)) !== JSON.stringify(entry.parents) || fingerprint(entry.relative) !== entry.snapshot) {
             throw Error(`Content changed; rescan and select again: ${full(entry.relative)}`);
@@ -1642,6 +1655,10 @@ if (action === 'scan') {
     fs.writeFileSync(manifest, JSON.stringify(data), {mode: 0o600});
 } else {
     const data = JSON.parse(fs.readFileSync(manifest, 'utf8'));
+    if (data.scope !== scope || data.root !== path.resolve(root) ||
+        JSON.stringify(data.rootIdentity) !== JSON.stringify([rootInfo.dev, rootInfo.ino])) {
+        throw Error('Removal scope or root changed; rescan and select again');
+    }
     if (action === 'rows') {
         for (const e of data.entries) console.log([e.id, e.kind, display(e.group || '-'), `${e.agent === 'codex' ? 'Codex' : 'Claude'} / ${display(e.name)} [${e.type}]`].join('\t'));
     } else if (action === 'select') {
@@ -1653,6 +1670,7 @@ if (action === 'scan') {
         if (!items.length) { console.log('No removal targets selected.'); process.exit(0); }
         verify(data, items);
         if (action === 'preview') {
+            console.log(`Removal scope: ${scope} (${display(root)})`);
             console.log('Removal targets:');
             for (const e of items) console.log(`  ${e.agent} / ${display(e.name)} [${e.type}]: ${red(display(full(e.relative)) + (e.type === 'block' ? ` # ${e.name}` : ''))}`);
             const lock = readLock();
@@ -1669,10 +1687,10 @@ if (action === 'scan') {
             const backupDir = fs.mkdtempSync(path.join(home, prefix));
             fs.chmodSync(backupDir, 0o700);
             const backup = path.join(backupDir, 'removal.tar');
-            const result = cp.spawnSync('tar', ['-cf', backup, '-C', home, '--', ...targets], {stdio: 'inherit'});
+            const result = cp.spawnSync('tar', ['-cf', backup, '-C', root, '--', ...targets], {stdio: 'inherit'});
             if (result.status !== 0) throw Error('Backup failed; nothing removed');
             console.log(cyan(`Backup: ${display(backup)}`));
-            console.log(cyan(`Restore: tar -xf ${quote(backup)} -C ${quote(home)}`));
+            console.log(cyan(`Restore: tar -xf ${quote(backup)} -C ${quote(root)}`));
             verify(data, items);
             let succeeded = 0, failed = 0;
             const removedSkills = [], handled = new Set();
@@ -1916,7 +1934,7 @@ interactive_setup() {
                 choose_items 0 'Agent setup' 0 0 'Install / Update' 'Remove' 'Remove all backups' 'Install / Update this command' 'Exit' || return "$session_status"
                 case "${MENU_SELECTED[0]}" in
                     0) page=tasks ;;
-                    1) removal_scanned=0; page=remove_agents ;;
+                    1) removal_scanned=0; page=remove_scope ;;
                     2) run_interactive_task confirm_backup_removal; page=complete ;;
                     3) page=command_confirm ;;
                     4) return "$session_status" ;;
@@ -1938,10 +1956,17 @@ interactive_setup() {
                     q | Q) return "$session_status" ;;
                     *) printf 'Cancelled.\n'; page=complete ;;
                 esac ;;
+            remove_scope)
+                choose_items 14 'Remove: choose scope' 0 0 Global Project || {
+                    [ "$?" -eq 2 ] || return "$session_status"
+                    page=main; continue
+                }
+                if [ "${MENU_SELECTED[0]}" -eq 0 ]; then REMOVE_SCOPE=global; else REMOVE_SCOPE=project; fi
+                page=remove_agents ;;
             remove_agents)
                 choose_items 4 'Remove: choose agents' 1 1 Codex 'Claude Code' || {
                     [ "$?" -eq 2 ] || return "$session_status"
-                    page=main; continue
+                    page=remove_scope; continue
                 }
                 [ "${#MENU_SELECTED[@]}" -gt 0 ] || { printf 'No agents selected; cancelled.\n'; page=complete; continue; }
                 REMOVE_CODEX=0; REMOVE_CLAUDE=0
@@ -1959,7 +1984,7 @@ interactive_setup() {
                 for i in "${MENU_SELECTED[@]}"; do
                     if [ "$i" -eq 0 ]; then REMOVE_RULES=1; else REMOVE_SKILLS=1; fi
                 done
-                signature="$REMOVE_CODEX/$REMOVE_CLAUDE/$REMOVE_RULES/$REMOVE_SKILLS"
+                signature="$REMOVE_SCOPE/$PROJECT_TARGET/$REMOVE_CODEX/$REMOVE_CLAUDE/$REMOVE_RULES/$REMOVE_SKILLS"
                 if [ "$removal_scanned" -eq 0 ] || [ "$signature" != "$removal_signature" ]; then
                     if ! scan_removal_inventory; then FAILED+=('Installed content scan failed'); show_summary=1; page=complete; continue; fi
                     removal_signature="$signature"; removal_scanned=1
@@ -2161,7 +2186,7 @@ interactive_setup() {
                 SUCCEEDED=(); FAILED=(); MENU_SELECTED=(); MENU_CURSORS=(); MENU_CHOICES=(); MENU_VISITED=()
                 AGENT_ITEMS=(); SELECTED_SKILLS=(); SELECTED_RULES=(); SELECTED_RULE_SOURCES=()
                 TARGET_AGENTS=(codex claude-code); RULE_TARGETS=both; RULE_SCOPE=global
-                REMOVE_CODEX=1; REMOVE_CLAUDE=1; REMOVE_RULES=0; REMOVE_SKILLS=0
+                REMOVE_CODEX=1; REMOVE_CLAUDE=1; REMOVE_RULES=0; REMOVE_SKILLS=0; REMOVE_SCOPE=global
                 REMOVAL_RULE_SELECTION=(); REMOVAL_SKILL_SELECTION=(); removal_scanned=0
                 if [ -n "$REMOVAL_TEMP" ]; then rm -rf -- "$REMOVAL_TEMP"; REMOVAL_TEMP=""; fi
                 INTERACTIVE_RESULT=0; show_summary=0; INSTALL_SKILLS=0

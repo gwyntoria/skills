@@ -164,16 +164,20 @@ class AgentSetupTests(unittest.TestCase):
     def calls(self):
         return [json.loads(line) for line in self.log.read_text().splitlines()] if self.log.exists() else []
 
-    def terminal(self):
-        terminal = Terminal(self.env)
+    def terminal(self, cwd=None):
+        terminal = Terminal(self.env, cwd=cwd)
         self.addCleanup(terminal.close)
         terminal.expect('Agent setup')
         terminal.expect('Item 1/5')
         return terminal
 
-    def removal_terminal(self, types=('Skills',), agents='both'):
-        term = self.terminal()
+    def removal_terminal(self, types=('Skills',), agents='both', scope='global', cwd=None):
+        term = self.terminal(cwd=cwd)
         term.send(b'\x1b[B\r')
+        term.expect('Remove: choose scope')
+        term.expect('Item 1/2')
+        if scope == 'project': term.send(b'\x1b[B')
+        term.send(b'\r')
         term.expect('Remove: choose agents')
         term.expect('Item 1/2')
         if agents == 'codex': term.send(b'\x1b[B ')
@@ -186,11 +190,11 @@ class AgentSetupTests(unittest.TestCase):
         term.send(b'\r')
         return term
 
-    def inventory(self, action, *args):
+    def inventory(self, action, *args, scope='global', cwd=None):
         folder = self.root / 'plan'
         folder.mkdir(mode=0o700, exist_ok=True)
-        command = f'REMOVAL_TEMP={shlex.quote(str(folder))}\nremoval_inventory {shlex.join([action, *map(str, args)])}'
-        return self.source(command)
+        command = f'REMOVE_SCOPE={shlex.quote(scope)}\nREMOVAL_TEMP={shlex.quote(str(folder))}\nremoval_inventory {shlex.join([action, *map(str, args)])}'
+        return self.source(command, cwd=cwd)
 
     def scan_entries(self, codex=True, claude=True, rules=True, skills=True):
         result = self.inventory('scan', *map(int, [codex, claude, rules, skills]))
@@ -211,6 +215,179 @@ class AgentSetupTests(unittest.TestCase):
         other.parent.mkdir()
         other.write_text('other skill')
         return lock, data
+
+    def project_removal_fixture(self):
+        # Outside HOME; spaces and quotes also exercise the recovery command.
+        project = self.root / "project's directory"
+        project.mkdir()
+        files = {
+            'AGENTS.md': 'personal\r\n<!-- gwyn-space-skills: one:start -->\r\nrule\r\n<!-- gwyn-space-skills: one:end -->\r\nend\r\n',
+            '.claude/rules/nested/.custom.md': 'custom rule',
+            '.claude/CLAUDE.md': '<!-- gwyn-space-skills: ignored:start -->\nkeep\n<!-- gwyn-space-skills: ignored:end -->\n',
+            '.codex/AGENTS.md': '<!-- gwyn-space-skills: ignored:start -->\nkeep\n<!-- gwyn-space-skills: ignored:end -->\n',
+            '.agents/skills/existing/SKILL.md': 'project skill',
+            '.agents/skills/.system/SKILL.md': 'system skill',
+            '.claude/skills/.system/SKILL.md': 'system skill',
+            'skills-lock.json': json.dumps({'version': 1, 'extra': 'keep', 'skills': {
+                'existing': {'source': 'project/repo', 'sourceType': 'github', 'computedHash': 'keep'},
+                'uninstalled': {'source': 'other/repo', 'sourceType': 'github'}}}),
+        }
+        for name, content in files.items():
+            target = project / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(content.encode())
+        (project / '.claude/skills/existing').symlink_to('../../.agents/skills/existing')
+        return project, files
+
+    def project_entries(self, project, codex=True, claude=True, rules=True, skills=True):
+        result = self.inventory('scan', *map(int, [codex, claude, rules, skills]), scope='project', cwd=project)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return json.loads((self.root / 'plan/inventory.json').read_text())['entries']
+
+    def test_project_removal_isolated_and_backup_restores_rules_skills_and_lock(self):
+        global_lock, _ = self.lock_fixture()
+        global_bytes = global_lock.read_bytes()
+        project, files = self.project_removal_fixture()
+        entries = self.project_entries(project)
+        self.assertEqual({e['relative'] for e in entries}, {
+            'AGENTS.md', '.claude/rules/nested/.custom.md',
+            '.agents/skills/existing', '.claude/skills/existing'})
+        self.assertTrue(all(e['group'] == 'project/repo' for e in entries if e['kind'] == 'skills'))
+        self.assertEqual(self.inventory('select', *(e['id'] for e in entries), scope='project', cwd=project).returncode, 0)
+        result = self.inventory('preview', scope='project', cwd=project)
+        self.assertIn(f'Removal scope: project ({project})', result.stdout)
+        result = self.inventory('remove', scope='project', cwd=project)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('4 succeeded, 0 failed', result.stdout)
+        self.assertEqual((project / 'AGENTS.md').read_bytes(), b'personal\r\nend\r\n')
+        self.assertFalse((project / '.agents/skills/existing').exists())
+        self.assertFalse((project / '.claude/skills/existing').is_symlink())
+        remaining = json.loads((project / 'skills-lock.json').read_text())
+        self.assertEqual(remaining['skills'], {'uninstalled': {'source': 'other/repo', 'sourceType': 'github'}})
+        self.assertEqual(remaining['extra'], 'keep')
+        self.assertEqual(global_lock.read_bytes(), global_bytes)
+        self.assertEqual(self.old.read_text(), 'keep me')
+        for name in ['.agents/skills/.system/SKILL.md', '.claude/skills/.system/SKILL.md', '.codex/AGENTS.md', '.claude/CLAUDE.md']:
+            self.assertEqual((project / name).read_bytes(), files[name].encode())
+        backup, = self.home.glob('.agent-rules-backup-*/removal.tar')
+        with tarfile.open(backup) as archive:
+            self.assertIn('AGENTS.md', archive.getnames())
+            self.assertIn('skills-lock.json', archive.getnames())
+        plain = re.sub(r'\x1b\[[0-9;]*m', '', result.stdout)
+        recovery = next(line.removeprefix('Restore: ') for line in plain.splitlines() if line.startswith('Restore: '))
+        # Execute the printed command, including its quoting and project destination.
+        subprocess.run(['bash', '-c', recovery], check=True)
+        for name, content in files.items():
+            self.assertEqual((project / name).read_bytes(), content.encode())
+        self.assertEqual(os.readlink(project / '.claude/skills/existing'), '../../.agents/skills/existing')
+
+    def test_project_claude_only_preserves_shared_skill_and_lock(self):
+        project, files = self.project_removal_fixture()
+        entries = self.project_entries(project, codex=False, rules=False)
+        self.assertEqual(len(entries), 1)
+        self.inventory('select', entries[0]['id'], scope='project', cwd=project)
+        result = self.inventory('remove', scope='project', cwd=project)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse((project / '.claude/skills/existing').is_symlink())
+        self.assertEqual((project / 'skills-lock.json').read_bytes(), files['skills-lock.json'].encode())
+        self.assertTrue((project / '.agents/skills/existing/SKILL.md').exists())
+
+    def test_project_invalid_lock_and_backup_failure_prevent_removal(self):
+        project, _ = self.project_removal_fixture()
+        lock = project / 'skills-lock.json'
+        lock.write_text('{broken')
+        entries = self.project_entries(project, claude=False, rules=False)
+        self.inventory('select', entries[0]['id'], scope='project', cwd=project)
+        result = self.inventory('remove', scope='project', cwd=project)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Invalid skill lock', result.stderr)
+        lock.unlink()
+        entries = self.project_entries(project, claude=False, rules=False)
+        self.inventory('select', entries[0]['id'], scope='project', cwd=project)
+        self.stub('tar', '#!/bin/sh\nexit 23\n')
+        result = self.inventory('remove', scope='project', cwd=project)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Backup failed; nothing removed', result.stderr)
+        self.assertTrue((project / '.agents/skills/existing/SKILL.md').exists())
+        self.assertFalse(lock.exists())
+
+    def test_removal_manifest_cannot_be_reused_in_another_scope_or_project(self):
+        project, _ = self.project_removal_fixture()
+        entries = self.project_entries(project)
+        self.inventory('select', *(e['id'] for e in entries), scope='project', cwd=project)
+        for scope, cwd in [('global', project), ('project', self.home)]:
+            result = self.inventory('remove', scope=scope, cwd=cwd)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('scope or root changed', result.stderr)
+        self.assertTrue((project / '.agents/skills/existing/SKILL.md').exists())
+        self.assertTrue(self.old.exists())
+
+    def test_project_scan_rejects_root_and_symlinked_parent(self):
+        result = self.inventory('scan', 1, 1, 1, 1, scope='project', cwd='/')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Unsafe removal root', result.stderr)
+        project, _ = self.project_removal_fixture()
+        shutil.rmtree(project / '.agents')
+        (project / '.agents').symlink_to(self.home / '.agents')
+        result = self.inventory('scan', 1, 1, 1, 1, scope='project', cwd=project)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Refusing symlinked directory', result.stderr)
+        self.assertTrue(self.old.exists())
+
+    def test_project_removal_ui_rules_and_skills(self):
+        project, _ = self.project_removal_fixture()
+        term = self.removal_terminal(types=('Rules', 'Skills'), scope='project', cwd=project)
+        term.expect('Choose installed rules to remove')
+        term.expect('Item 1/2')
+        term.send(b'a\r')
+        term.expect('Remove skills by repository')
+        term.expect('Item 1/2')
+        term.send(b' \x1b[A\r')
+        term.expect('Removal scope: project')
+        term.expect(str(project / 'skills-lock.json'))
+        term.expect('Type DELETE')
+        term.send(b'DELETE\n')
+        term.expect('4 succeeded, 0 failed')
+        self.assertEqual(term.finish_action(), 0)
+        self.assertTrue(self.old.exists())
+        self.assertFalse((project / '.agents/skills/existing').exists())
+
+    def test_removal_scope_back_rescans_project_and_preserves_agent_selection(self):
+        project, _ = self.project_removal_fixture()
+        global_rule = self.home / '.claude/rules/global.md'
+        global_rule.parent.mkdir(parents=True)
+        global_rule.write_text('global')
+        term = self.removal_terminal(types=('Rules',), agents='claude', cwd=project)
+        term.expect('global.md [file]')
+        term.send(b'b')
+        term.expect('Remove: choose content')
+        term.expect('Item 1/2')
+        term.send(b'b')
+        term.expect('Remove: choose agents')
+        term.expect('Item 1/2')
+        term.send(b'b')
+        term.expect('Remove: choose scope')
+        term.expect('Item 1/2')
+        term.send(b'\x1b[B\r')
+        term.expect('Remove: choose agents')
+        term.expect('[ ] Codex')
+        term.expect('[x] Claude Code')
+        term.expect('Item 1/2')
+        term.send(b'\r')
+        term.expect('Remove: choose content')
+        term.expect('Item 1/2')
+        term.send(b'\r')
+        term.expect('Choose installed rules to remove')
+        term.expect('.custom.md [file]')
+        term.expect('Item 1/1')
+        term.send(b' \r')
+        term.expect('Removal scope: project')
+        term.expect('Type DELETE')
+        term.send(b'DELETE\n')
+        term.expect('1 succeeded, 0 failed')
+        self.assertEqual(term.finish_action(), 0)
+        self.assertTrue(global_rule.exists())
+        self.assertFalse((project / '.claude/rules/nested/.custom.md').exists())
 
     def install_skill_terminal(self):
         term = self.terminal()
@@ -1025,10 +1202,19 @@ main"""]
     def test_removal_menu_defaults_back_cancel_q_and_fresh_scan(self):
         term = self.terminal()
         term.send(b'\x1b[B\r')
+        term.expect('Remove: choose scope')
+        term.expect('Item 1/2')
+        term.send(b'\r')
         term.expect('Remove: choose agents')
         term.expect('Item 1/2')
-        term.send(b' \x1b[Bb')  # Claude only; return home
+        term.send(b' \x1b[Bb')  # Claude only; return to scope
+        term.expect('Remove: choose scope')
+        term.expect('Item 1/2')
+        term.send(b'b')
         term.expect('Item 2/5')
+        term.send(b'\r')
+        term.expect('Remove: choose scope')
+        term.expect('Item 1/2')
         term.send(b'\r')
         term.expect('> [x] Claude Code')
         term.send(b'\r')
@@ -1045,6 +1231,9 @@ main"""]
         custom.parent.mkdir(parents=True)
         custom.write_text('new rule')
         term.send(b'\x1b[B\r')
+        term.expect('Remove: choose scope')
+        term.expect('Item 1/2')
+        term.send(b'\r')
         term.expect('Remove: choose agents')
         term.expect('Item 1/2')
         term.send(b'\r')
