@@ -242,6 +242,7 @@ print_catalog() {
 }
 
 cleanup_setup_resources() {
+    if [ -t 1 ]; then printf '\033[?25h'; fi
     if [ -n "$RESOURCE_TEMP" ]; then rm -rf -- "$RESOURCE_TEMP"; fi
     if [ -n "$REMOVAL_TEMP" ]; then rm -rf -- "$REMOVAL_TEMP"; fi
 }
@@ -1301,6 +1302,14 @@ read_key() {
 # Save each page's selection/cursor before reading a key, including Back/Exit.
 # Return 0 to continue, 1 to exit, 2 to go back, or 3 on plan preparation failure.
 choose_items() {
+    local status=0
+    printf '\033[?25l'
+    choose_items_page "$@" || status=$?
+    printf '\033[?25h'
+    return "$status"
+}
+
+choose_items_page() {
     local page="$1" title="$2" multiple="$3" defaults="$4"
     shift 4
     local options=("$@") selected=() restored=() cursor=0 i start end mark
@@ -1358,6 +1367,14 @@ choose_items() {
 # Shared repository/skill selector. REPO_SELECTED contains item indices, so
 # distinct agents or unknown local entries never collapse into one deletion.
 choose_skill_repositories() {
+    local status=0
+    printf '\033[?25l'
+    choose_skill_repositories_page "$@" || status=$?
+    printf '\033[?25h'
+    return "$status"
+}
+
+choose_skill_repositories_page() {
     local page="$1" title="$2" color="$3" cursor=0 child=-1 i j group found start end total chosen mark row key_page
     local groups=() item_groups=() selected=() children=()
     for ((i=0; i<${#REPO_ITEM_LABELS[@]}; i++)); do
@@ -1882,6 +1899,9 @@ run_interactive_task() {
 }
 
 interactive_setup() {
+    trap cleanup_setup_resources EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
     local page=main catalog_loaded=0 i task answer menu_status removal_scanned=0 removal_signature="" signature
     local session_status=0 INTERACTIVE_RESULT=0 show_summary=0
     local catalog_failures=()
