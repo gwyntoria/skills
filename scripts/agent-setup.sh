@@ -1902,7 +1902,7 @@ interactive_setup() {
     trap cleanup_setup_resources EXIT
     trap 'exit 130' INT
     trap 'exit 143' TERM
-    local page=main catalog_loaded=0 i task answer menu_status removal_scanned=0 removal_signature="" signature
+    local page=main catalog_loaded=0 i task answer menu_status removal_scanned=0 removal_signature="" signature command_action
     local session_status=0 INTERACTIVE_RESULT=0 show_summary=0
     local catalog_failures=()
     local rule_labels=() rule_names=() rule_sources=() source_scope
@@ -1916,8 +1916,25 @@ interactive_setup() {
                     0) page=tasks ;;
                     1) removal_scanned=0; page=remove_agents ;;
                     2) run_interactive_task confirm_backup_removal; page=complete ;;
-                    3) run_item 'Install / Update this command' install_setup_command; print_summary || session_status=1; page=complete ;;
+                    3) page=command_confirm ;;
                     4) return "$session_status" ;;
+                esac ;;
+            command_confirm)
+                command_action=Install
+                if [ -e "$HOME/.local/bin/agent-setup" ] || [ -L "$HOME/.local/bin/agent-setup" ]; then
+                    command_action=Update
+                fi
+                printf '\n%s this command?\nTarget: \033[32m%s/.local/bin/agent-setup\033[0m\n' "$command_action" "$HOME"
+                printf 'Continue? [y/N] (b: back | q: exit) '
+                IFS= read -r answer || return "$session_status"
+                case "$answer" in
+                    y | Y)
+                        run_item "$command_action this command" install_setup_command
+                        print_summary || session_status=1
+                        page=complete ;;
+                    b | B) page=main ;;
+                    q | Q) return "$session_status" ;;
+                    *) printf 'Cancelled.\n'; page=complete ;;
                 esac ;;
             remove_agents)
                 choose_items 4 'Remove: choose agents' 1 1 Codex 'Claude Code' || {

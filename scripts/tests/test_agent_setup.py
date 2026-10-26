@@ -514,6 +514,11 @@ class AgentSetupTests(unittest.TestCase):
         self.addCleanup(term.close)
         term.expect('Item 1/5')
         term.send(b'\x1b[B' * 3 + b'\r')
+        term.expect('Update this command?')
+        term.expect('Continue? [y/N]')
+        self.assertEqual(installed.read_bytes(), SCRIPT.read_bytes())
+        self.assertFalse((self.root / 'fetch.log').exists())
+        term.send(b'y\n')
         term.expect('used on next launch')
         term.expect('1 succeeded, 0 failed')
         self.assertEqual(term.finish_action(), 0)
@@ -521,6 +526,49 @@ class AgentSetupTests(unittest.TestCase):
         self.assertNotIn('new version\r\n', term.transcript.decode())
         result = subprocess.run([str(installed)], capture_output=True, text=True)
         self.assertEqual(result.stdout, 'new version\n')
+
+    def test_command_confirmation_install_update_cancel_back_and_exit(self):
+        destination = self.home / '.local/bin/agent-setup'
+        for installed in (False, True):
+            if installed:
+                destination.parent.mkdir(parents=True)
+                destination.write_text('existing command\n')
+            for answer in (b'\n', b'n\n', b'b\n', b'q\n'):
+                with self.subTest(installed=installed, answer=answer):
+                    term = self.terminal()
+                    term.send(b'\x1b[B' * 3 + b'\r')
+                    term.expect(('Update' if installed else 'Install') + ' this command?')
+                    term.expect(str(destination))
+                    term.expect('Continue? [y/N]')
+                    self.assertEqual(destination.exists(), installed)
+                    term.send(answer)
+                    if answer == b'b\n':
+                        term.expect('Agent setup')
+                        term.expect('Item 4/5')
+                        term.send(b'q')
+                        self.assertEqual(term.finish(), 0)
+                    elif answer == b'q\n':
+                        self.assertEqual(term.finish(), 0)
+                    else:
+                        term.expect('Cancelled.')
+                        self.assertEqual(term.finish_action(), 0)
+                    if installed:
+                        self.assertEqual(destination.read_text(), 'existing command\n')
+                    else:
+                        self.assertFalse(destination.parent.exists())
+                    self.assertFalse((self.root / 'fetch.log').exists())
+
+    def test_command_confirmation_installs_only_after_yes(self):
+        destination = self.home / '.local/bin/agent-setup'
+        term = self.terminal()
+        term.send(b'\x1b[B' * 3 + b'\r')
+        term.expect('Install this command?')
+        term.expect('Continue? [y/N]')
+        self.assertFalse(destination.parent.exists())
+        term.send(b'y\n')
+        term.expect('1 succeeded, 0 failed')
+        self.assertEqual(term.finish_action(), 0)
+        self.assertEqual(destination.read_bytes(), SCRIPT.read_bytes())
 
     def test_command_update_failure_keeps_existing_bytes(self):
         script = self.standalone()
