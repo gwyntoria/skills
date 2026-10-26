@@ -31,7 +31,10 @@ if '--list' in args:
     if os.environ.get('BAD_CATALOG'):
         print('unexpected CLI output')
         sys.exit(0)
-    names = ['waza-first', 'fail-middle', 'waza-last'] if '/waza' in source else ['kami']
+    if '/gwyntoria/skills' in source:
+        names = ['gwyntoria-first', 'gwyntoria-last']
+    else:
+        names = ['waza-first', 'fail-middle', 'waza-last'] if '/waza' in source else ['kami']
     print('\x1b[32m◇  Available Skills\x1b[0m')
     for name in names:
         print('│    ' + name + '\n│\n│      A fixture description.')
@@ -215,7 +218,7 @@ class AgentSetupTests(unittest.TestCase):
         term.expect('Item 1/5')
         term.send(b' \r')
         term.expect('Install skills by repository')
-        term.expect('Item 1/5')
+        term.expect('Item 1/6')
         return term
 
     def standalone(self):
@@ -751,7 +754,7 @@ main"""]
                 term.send(b' \r')
                 term.expect('[ ] tw93/waza')
         self.assertEqual(term.exit_home(), 0)
-        self.assertEqual(sum('--list' in call for call in self.calls()), 2)
+        self.assertEqual(sum('--list' in call for call in self.calls()), 3)
 
     def test_inventory_groups_by_actual_entries_and_separates_agents(self):
         lock, data = self.lock_fixture()
@@ -1175,8 +1178,10 @@ main"""]
     def test_list_is_read_only_and_has_all_sources(self):
         result = self.run_script('--list')
         self.assertEqual(result.returncode, 0, result.stderr)
-        for name in ['Waza', 'Kami', 'Matt Pocock', 'HumanLayer', 'show-me']:
+        for name in ['Waza', 'Kami', 'Matt Pocock', 'HumanLayer', 'show-me',
+                     'Gwyntoria', 'gwyntoria-first', 'gwyntoria-last']:
             self.assertIn(name, result.stdout)
+        self.assertTrue(any('https://github.com/gwyntoria/skills' in call for call in self.calls()))
         self.assertTrue(all('--list' in call for call in self.calls()))
         self.assertEqual(list(self.home.rglob('SKILL.md')), [self.old])
 
@@ -1187,8 +1192,9 @@ main"""]
         installed = [c[c.index('--skill') + 1:c.index('--agent')]
                      for c in self.calls() if '--list' not in c]
         self.assertEqual(installed, [['waza-first', 'fail-middle', 'waza-last'],
-                                    ['kami'], ['matt-a', 'matt-b'], ['show-me']])
-        self.assertIn('7 succeeded, 1 failed', result.stdout)
+                                    ['kami'], ['matt-a', 'matt-b'], ['show-me'],
+                                    ['gwyntoria-first', 'gwyntoria-last']])
+        self.assertIn('8 succeeded, 1 failed', result.stdout)
         self.assertIn('Waza: waza-first fail-middle waza-last (exit 9)', result.stdout)
         self.assertEqual(self.old.read_text(), 'keep me')
         self.assertTrue((self.home / '.claude/settings.json').is_file())

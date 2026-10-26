@@ -43,6 +43,7 @@ KAMI_SKILLS_URL="https://github.com/tw93/kami"
 MATTPOCOCK_SKILLS_URL="https://github.com/mattpocock/skills"
 MATTPOCOCK_SKILLS_PAGE_URL="https://www.aihero.dev/skills"
 HUMANLAYER_SKILLS_URL="https://github.com/humanlayer/skills"
+GWYNTORIA_SKILLS_URL="https://github.com/gwyntoria/skills"
 # Parallel arrays keep this compatible with the Bash shipped by macOS.
 SKILL_NAMES=()
 SKILL_SOURCES=()
@@ -198,12 +199,13 @@ fetch_mattpocock_skill_names() (
 load_catalog() {
     local group source names name
     SKILL_NAMES=(); SKILL_SOURCES=(); SKILL_GROUPS=()
-    for group in Waza Kami 'Matt Pocock' HumanLayer; do
+    for group in Waza Kami 'Matt Pocock' HumanLayer Gwyntoria; do
         case "$group" in
             Waza) source="$WAZA_SKILLS_URL" ;;
             Kami) source="$KAMI_SKILLS_URL" ;;
             'Matt Pocock') source="$MATTPOCOCK_SKILLS_URL" ;;
             HumanLayer) source="$HUMANLAYER_SKILLS_URL" ;;
+            Gwyntoria) source="$GWYNTORIA_SKILLS_URL" ;;
         esac
         printf 'Loading %s...\n' "$group" >&2
         if [ "$group" = 'Matt Pocock' ]; then
