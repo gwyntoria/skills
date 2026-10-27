@@ -147,11 +147,11 @@ print_summary() {
 
 print_skill_targets() {
     local name="$1" agent destination
-    printf '  \033[32mShared skill / %s -> %s/.agents/skills/%s\033[0m\n' "$name" "$HOME" "$name"
+    printf '    \033[32mShared skill / %s -> %s/.agents/skills/%s\033[0m\n' "$name" "$HOME" "$name"
     for agent in "${TARGET_AGENTS[@]}"; do
         if [ "$agent" = claude-code ]; then
             destination="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/skills/$name"
-            printf '  \033[32mClaude / %s -> %s\033[0m\n' "$name" "$destination"
+            printf '    \033[32mClaude / %s -> %s\033[0m\n' "$name" "$destination"
         fi
     done
 }
