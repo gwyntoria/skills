@@ -33,6 +33,8 @@ if '--list' in args:
         sys.exit(0)
     if '/gwyntoria/skills' in source:
         names = ['gwyntoria-first', 'gwyntoria-last']
+    elif '/titanwings/distilly' in source:
+        names = ['distilly']
     else:
         names = ['waza-first', 'fail-middle', 'waza-last'] if '/waza' in source else ['kami']
     print('\x1b[32m◇  Available Skills\x1b[0m')
@@ -395,7 +397,7 @@ class AgentSetupTests(unittest.TestCase):
         term.expect('Item 1/5')
         term.send(b' \r')
         term.expect('Install skills by repository')
-        term.expect('Item 1/6')
+        term.expect('Item 1/7')
         return term
 
     def standalone(self):
@@ -931,7 +933,7 @@ main"""]
                 term.send(b' \r')
                 term.expect('[ ] tw93/waza')
         self.assertEqual(term.exit_home(), 0)
-        self.assertEqual(sum('--list' in call for call in self.calls()), 3)
+        self.assertEqual(sum('--list' in call for call in self.calls()), 4)
 
     def test_inventory_groups_by_actual_entries_and_separates_agents(self):
         lock, data = self.lock_fixture()
@@ -1368,7 +1370,8 @@ main"""]
         result = self.run_script('--list')
         self.assertEqual(result.returncode, 0, result.stderr)
         for name in ['Waza', 'Kami', 'Matt Pocock', 'HumanLayer', 'show-me',
-                     'Gwyntoria', 'gwyntoria-first', 'gwyntoria-last']:
+                     'Gwyntoria', 'gwyntoria-first', 'gwyntoria-last',
+                     'Distilly', 'distilly']:
             self.assertIn(name, result.stdout)
         self.assertTrue(any('https://github.com/gwyntoria/skills' in call for call in self.calls()))
         self.assertTrue(all('--list' in call for call in self.calls()))
@@ -1382,8 +1385,8 @@ main"""]
                      for c in self.calls() if '--list' not in c]
         self.assertEqual(installed, [['waza-first', 'fail-middle', 'waza-last'],
                                     ['kami'], ['matt-a', 'matt-b'], ['show-me'],
-                                    ['gwyntoria-first', 'gwyntoria-last']])
-        self.assertIn('8 succeeded, 1 failed', result.stdout)
+                                    ['gwyntoria-first', 'gwyntoria-last'], ['distilly']])
+        self.assertIn('9 succeeded, 1 failed', result.stdout)
         self.assertIn('Waza: waza-first fail-middle waza-last (exit 9)', result.stdout)
         self.assertEqual(self.old.read_text(), 'keep me')
         self.assertTrue((self.home / '.claude/settings.json').is_file())
