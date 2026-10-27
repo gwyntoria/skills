@@ -391,13 +391,30 @@ class AgentSetupTests(unittest.TestCase):
         self.assertTrue(global_rule.exists())
         self.assertFalse((project / '.claude/rules/nested/.custom.md').exists())
 
-    def install_skill_terminal(self):
+    def install_skill_terminal(self, repos=(0,)):
+        """Choose skill repositories on the first page, then land on the picker.
+
+        repos is a sequence of source indices (0 = tw93/waza), or 'all'.
+        """
         term = self.terminal()
         term.send(b'\r')
         term.expect('Item 1/5')
         term.send(b' \r')
+        term.expect('Choose skill repositories')
+        term.expect('Item 1/6')
+        if repos == 'all':
+            term.send(b'a')
+        else:
+            cursor = 0
+            for repo in sorted(repos):
+                if repo > cursor:
+                    term.send(b'\x1b[B' * (repo - cursor))
+                    cursor = repo
+                term.send(b' ')
+        term.send(b'\r')
         term.expect('Install skills by repository')
-        term.expect('Item 1/7')
+        # Wait for the whole picker to redraw before the caller sends keys.
+        term.expect('Item 1/%d' % ((6 if repos == 'all' else len(repos)) + 1))
         return term
 
     def standalone(self):
@@ -866,14 +883,21 @@ main"""]
         term.send(b'\r')
         term.expect('Repository: tw93/waza')
         term.expect('Item 1/3')
-        term.send(b' \x1b[B\x1b[B b')
+        term.send(b'\x1b[B b')
         term.expect('Install skills by repository')
         term.expect('[-] tw93/waza')
         term.expect('(2/3)')
         term.send(b'b')
+        term.expect('Choose skill repositories')
+        term.expect('[x] tw93/waza')
+        term.send(b'b')
         term.expect('Choose installation tasks')
         term.expect('Item 1/5')
         term.send(b'\r')
+        term.expect('Choose skill repositories')
+        term.expect('[x] tw93/waza')
+        term.send(b'\r')
+        term.expect('Install skills by repository')
         term.expect('[-] tw93/waza')
         term.send(b'\r')
         term.expect('[x] waza-first')
@@ -889,13 +913,16 @@ main"""]
         term.send(b'y\n')
         term.expect('1 succeeded, 0 failed')
         self.assertEqual(term.finish_action(), 0)
-        calls = [c for c in self.calls() if '--list' not in c]
-        self.assertEqual(len(calls), 1)
-        self.assertEqual(calls[0][calls[0].index('--skill') + 1:calls[0].index('--agent')], ['waza-first', 'waza-last'])
-        self.assertEqual(calls[0][calls[0].index('--agent') + 1:], ['claude-code', '--global', '--yes'])
+        calls = self.calls()
+        # Only the chosen repository is pulled; the other sources stay untouched.
+        self.assertEqual(sum('--list' in call for call in calls), 1)
+        installs = [c for c in calls if '--list' not in c]
+        self.assertEqual(len(installs), 1)
+        self.assertEqual(installs[0][installs[0].index('--skill') + 1:installs[0].index('--agent')], ['waza-first', 'waza-last'])
+        self.assertEqual(installs[0][installs[0].index('--agent') + 1:], ['claude-code', '--global', '--yes'])
 
     def test_repository_select_all_none_partial_toggle_and_q(self):
-        term = self.install_skill_terminal()
+        term = self.install_skill_terminal(repos='all')
         term.send(b'an\r')
         term.expect('Repository: tw93/waza')
         term.expect('Item 1/3')
@@ -909,7 +936,7 @@ main"""]
         term.expect('[ ] tw93/waza')
         term.send(b'q')
         self.assertEqual(term.finish(), 0)
-        term = self.install_skill_terminal()
+        term = self.install_skill_terminal(repos='all')
         term.send(b'\r')
         term.expect('Repository: tw93/waza')
         term.send(b'q')
@@ -917,21 +944,23 @@ main"""]
         self.assertTrue(all('--list' in call for call in self.calls()))
 
     def test_repository_whole_selection_reuses_catalog_across_tasks(self):
-        term = self.install_skill_terminal()
+        term = self.install_skill_terminal(repos='all')
         for run in range(2):
-            term.send(b' \x1b[A\r')  # all Waza, then Continue
+            term.send(b'a\x1b[A\r')  # every skill, then Continue
             term.expect('Install skills for')
             term.expect('Item 1/2')
             term.send(b'\r')
             term.expect('Continue? [y/N]')
             term.send(b'y\n')
-            term.expect('1 succeeded, 0 failed')
+            term.expect('6 succeeded, 0 failed')
             term.return_home()
             if run == 0:
                 term.send(b'\r')
                 term.expect('Item 1/5')
                 term.send(b' \r')
-                term.expect('[ ] tw93/waza')
+                term.expect('Choose skill repositories')
+                term.send(b'a\r')
+                term.expect('Install skills by repository')
         self.assertEqual(term.exit_home(), 0)
         self.assertEqual(sum('--list' in call for call in self.calls()), 4)
 
