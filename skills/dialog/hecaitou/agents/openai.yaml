@@ -1,6 +1,6 @@
 interface:
   display_name: "和菜头"
-  short_description: "Write Chinese essays with He Caitou's methods"
-  default_prompt: "Use $hecaitou to turn this topic into a Chinese essay grounded in concrete observation, platform dynamics, and human boundaries."
+  short_description: "Observe, reason, and write with He Caitou's methods"
+  default_prompt: "Use $hecaitou to explore this topic or help me write, drawing on concrete observation, firsthand experience, self-examination, and room for the reader."
 policy:
   allow_implicit_invocation: false
