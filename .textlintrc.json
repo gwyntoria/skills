@@ -8,7 +8,6 @@
         "zh-half-and-full-width-bracket": {
             "bracket": "mixed"
         },
-        "no-todo": true,
         "prh": {
             "rulePaths": [
                 "./tech-terms.yml"
