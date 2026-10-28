@@ -87,7 +87,7 @@ No arguments: open the interactive menu (requires a terminal).
   --list      List available skills by source without installing
   -h, --help  Show help
 
-The menu also provides a separate, confirmed removal action with a backup.
+The menu also provides a separate, confirmed removal action with an optional backup (default: no).
 EOF
 }
 
@@ -1789,19 +1789,24 @@ if (action === 'scan') {
             if (names.length) console.log(`  Remove lock entries (${names.map(display).join(', ')}): ${red(display(full(lockPath)))}`);
             warnings(items);
         } else if (action === 'remove') {
+            const backupChoice = args[0] ?? '0';
+            if (args.length > 1 || !['0', '1'].includes(backupChoice)) throw Error('Invalid backup choice; nothing removed');
+            const createBackup = backupChoice === '1';
             const lock = readLock();
             const codexSkills = items.filter(e => e.kind === 'skills' && e.agent === 'codex');
             if (codexSkills.length && !lock.valid) throw Error('Invalid skill lock; nothing removed');
             const updatesLock = codexSkills.some(e => Object.hasOwn(lock.data.skills || {}, e.name));
-            const targets = [...new Set([...items.map(e => e.relative), ...(updatesLock ? [lockPath] : [])])];
-            const prefix = items.some(e => e.kind === 'rules') ? '.agent-rules-backup-' : '.agent-skills-backup-';
-            const backupDir = fs.mkdtempSync(path.join(home, prefix));
-            fs.chmodSync(backupDir, 0o700);
-            const backup = path.join(backupDir, 'removal.tar');
-            const result = cp.spawnSync('tar', ['-cf', backup, '-C', root, '--', ...targets], {stdio: 'inherit'});
-            if (result.status !== 0) throw Error('Backup failed; nothing removed');
-            console.log(cyan(`Backup: ${display(backup)}`));
-            console.log(cyan(`Restore: tar -xf ${quote(backup)} -C ${quote(root)}`));
+            if (createBackup) {
+                const targets = [...new Set([...items.map(e => e.relative), ...(updatesLock ? [lockPath] : [])])];
+                const prefix = items.some(e => e.kind === 'rules') ? '.agent-rules-backup-' : '.agent-skills-backup-';
+                const backupDir = fs.mkdtempSync(path.join(home, prefix));
+                fs.chmodSync(backupDir, 0o700);
+                const backup = path.join(backupDir, 'removal.tar');
+                const result = cp.spawnSync('tar', ['-cf', backup, '-C', root, '--', ...targets], {stdio: 'inherit'});
+                if (result.status !== 0) throw Error('Backup failed; nothing removed');
+                console.log(cyan(`Backup: ${display(backup)}`));
+                console.log(cyan(`Restore: tar -xf ${quote(backup)} -C ${quote(root)}`));
+            } else console.log('No backup will be created.');
             verify(data, items);
             let succeeded = 0, failed = 0;
             const removedSkills = [], handled = new Set();
@@ -1829,7 +1834,7 @@ if (action === 'scan') {
             }
             if (updatesLock && removedSkills.length) {
                 try {
-                    if (fingerprint(lockPath) !== data.lockSnapshot) throw Error('Skill lock changed during deletion; restore from backup if needed');
+                    if (fingerprint(lockPath) !== data.lockSnapshot) throw Error('Skill lock changed during deletion; ' + (createBackup ? 'restore from backup if needed' : 'no recovery backup was created'));
                     for (const name of removedSkills) delete lock.data.skills[name];
                     atomicWrite(lockPath, JSON.stringify(lock.data, null, 2) + '\n');
                     console.log(`Updated lock: ${red(display(full(lockPath)))}`);
@@ -2033,7 +2038,7 @@ interactive_setup() {
     trap cleanup_setup_resources EXIT
     trap 'exit 130' INT
     trap 'exit 143' TERM
-    local page=main i task answer menu_status removal_scanned=0 removal_signature="" signature command_action
+    local page=main i task answer menu_status removal_scanned=0 removal_signature="" signature command_action removal_backup=0
     local session_status=0 INTERACTIVE_RESULT=0 show_summary=0
     local repo_labels=() repo_group repo_url
     local rule_labels=() rule_names=() rule_sources=() source_scope
@@ -2128,16 +2133,34 @@ interactive_setup() {
                     if [ "$menu_status" -ne 2 ]; then FAILED+=('Removal preview failed; rescan required'); show_summary=1; fi
                     page=complete; continue
                 }
-                printf 'All selected content is backed up before any removal.\nType DELETE to confirm, or press Enter to cancel (b: back | q: exit): '
+                page=remove_backup ;;
+            remove_backup)
+                removal_backup=0
+                printf 'Create backup? [y/N] (b: back | q: exit): '
                 IFS= read -r answer || return "$session_status"
                 case "$answer" in
-                    DELETE) run_interactive_task removal_inventory remove ;;
+                    y | Y) removal_backup=1; page=remove_confirm ;;
+                    n | N | '') page=remove_confirm ;;
                     q | Q) return "$session_status" ;;
                     b | B)
                         if [ "$REMOVE_SKILLS" -eq 1 ] && [ "${#REMOVAL_SKILL_IDS[@]}" -gt 0 ]; then page=remove_skills;
                         elif [ "$REMOVE_RULES" -eq 1 ] && [ "${#REMOVAL_RULE_IDS[@]}" -gt 0 ]; then page=remove_rules;
                         else page=remove_categories; fi
                         continue ;;
+                    *) printf 'Please enter y or n (b: back | q: exit).\n' ;;
+                esac ;;
+            remove_confirm)
+                if [ "$removal_backup" -eq 1 ]; then
+                    printf 'All selected content will be backed up before removal.\n'
+                else
+                    printf 'No backup will be created.\n'
+                fi
+                printf 'Type DELETE to confirm, or press Enter to cancel (b: back | q: exit): '
+                IFS= read -r answer || return "$session_status"
+                case "$answer" in
+                    DELETE) run_interactive_task removal_inventory remove "$removal_backup" ;;
+                    q | Q) return "$session_status" ;;
+                    b | B) page=remove_backup; continue ;;
                     *) printf 'Cancelled.\n' ;;
                 esac
                 page=complete ;;
