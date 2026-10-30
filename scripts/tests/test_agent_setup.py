@@ -62,7 +62,8 @@ if '-o' in args:
 else:
     if os.environ.get('FAIL_MATT'):
         sys.exit(8)
-    print('<section aria-labelledby="skill-set-heading"><a href="/skills-matt-a">A</a><a href="/skills-matt-b">B</a></section>')
+    names = os.environ.get('MATT_SKILLS', 'matt-a matt-b').split()
+    print('<section aria-labelledby="skill-set-heading">' + ''.join('<a href="/skills-' + name + '">' + name + '</a>' for name in names) + '</section>')
 '''
 
 
@@ -946,6 +947,147 @@ main"""]
         term.send(b'q')
         self.assertEqual(term.finish(), 0)
         self.assertTrue(all('--list' in call for call in self.calls()))
+
+    def test_matt_dependency_selection_and_cascade(self):
+        self.env['MATT_SKILLS'] = 'implement tdd codebase-design code-review'
+        term = self.install_skill_terminal(repos=(2,))
+        term.send(b'\r')
+        term.expect('Repository: mattpocock/skills')
+        term.expect('Item 1/4')
+        term.send(b'n ')
+        term.expect('[x] implement')
+        term.expect('[x] tdd')
+        term.expect('[dependency: implement]')
+        term.expect('[x] codebase-design')
+        term.expect('[dependency: implement]')
+        term.send(b'\x1b[B ')
+        term.expect('Also deselected implement.')
+        term.expect('[ ] implement')
+        term.expect('[ ] tdd')
+        term.expect('[ ] codebase-design')
+        term.expect('[ ] code-review')
+        self.assertIn(b'Also deselected \x1b[32mimplement\x1b[0m.', term.transcript)
+        self.assertIn(b'Deselected \x1b[32mcodebase-design\x1b[0m.', term.transcript)
+        self.assertIn(b'[dependency: \x1b[32mimplement\x1b[0m]', term.transcript)
+        term.send(b'q')
+        self.assertEqual(term.finish(), 0)
+
+    def test_matt_branch_dependencies(self):
+        cases = [
+            ('retro', ['writing-for-agents']),
+            ('triage', ['grilling', 'domain-modeling']),
+            ('improve-codebase-architecture', ['codebase-design', 'grilling', 'domain-modeling']),
+            ('wayfinder', ['grilling', 'domain-modeling', 'prototype', 'research']),
+            ('implement-spec', ['tdd', 'code-review', 'codebase-design']),
+        ]
+        for root, dependencies in cases:
+            with self.subTest(skill=root):
+                self.env['MATT_SKILLS'] = ' '.join([root, *dependencies, 'independent'])
+                term = self.install_skill_terminal(repos=(2,))
+                term.send(b'\r')
+                term.expect('Item 1/%d' % (len(dependencies) + 2))
+                term.send(b'n ')
+                term.expect('[x] ' + root)
+                for dependency in dependencies:
+                    term.expect('[x] ' + dependency)
+                    term.expect('[dependency: ' + root + ']')
+                term.expect('[ ] independent')
+                term.send(b' ')
+                for dependency in dependencies:
+                    term.expect('[ ] ' + dependency)
+                term.send(b'q')
+                self.assertEqual(term.finish(), 0)
+
+    def test_matt_explicit_selection_survives_back_and_install(self):
+        self.env['MATT_SKILLS'] = 'implement tdd codebase-design code-review'
+        term = self.install_skill_terminal(repos=(2,))
+        term.send(b'\r')
+        term.expect('Item 1/4')
+        # Explicit tdd, then implement. Removing implement must keep tdd.
+        term.send(b'n\x1b[B \x1b[A b')
+        term.expect('Install skills by repository')
+        term.send(b'b')
+        term.expect('Choose skill repositories')
+        term.send(b'\r\r')
+        term.expect('Repository: mattpocock/skills')
+        term.expect('Item 1/4')
+        term.send(b' ')
+        term.expect('[ ] implement')
+        term.expect('[x] tdd')
+        term.expect('[x] codebase-design')
+        term.expect('[dependency: tdd]')
+        term.expect('[ ] code-review')
+        term.send(b'b\x1b[B\r')
+        term.expect('Install skills for')
+        term.expect('Item 1/2')
+        term.send(b'\r')
+        term.expect('Continue? [y/N]')
+        term.send(b'y\n')
+        term.expect('1 succeeded, 0 failed')
+        self.assertEqual(term.finish_action(), 0)
+        installs = [c for c in self.calls() if '--list' not in c]
+        self.assertEqual(len(installs), 1)
+        call = installs[0]
+        self.assertEqual(call[call.index('--skill') + 1:call.index('--agent')],
+                         ['tdd', 'codebase-design'])
+
+    def test_matt_shared_dependencies_and_bulk_selection(self):
+        self.env['MATT_SKILLS'] = 'grill-me grill-with-docs grilling domain-modeling'
+        term = self.install_skill_terminal(repos=(2,))
+        term.send(b'\r')
+        term.expect('Item 1/4')
+        term.send(b'n \x1b[B \x1b[A ')
+        term.expect('[ ] grill-me')
+        term.expect('[x] grill-with-docs')
+        term.expect('[x] grilling')
+        term.expect('[dependency: grill-with-docs]')
+        # All promotes dependencies to explicit choices; removing wrappers keeps them.
+        term.send(b'a \x1b[B ')
+        term.expect('[ ] grill-me')
+        term.expect('[ ] grill-with-docs')
+        term.expect('[x] grilling')
+        term.expect('[x] domain-modeling')
+        term.send(b'n')
+        term.expect('[ ] grilling')
+        term.expect('[ ] domain-modeling')
+        term.send(b'q')
+        self.assertEqual(term.finish(), 0)
+
+    def test_matt_missing_transitive_dependency_blocks_selection(self):
+        self.env['MATT_SKILLS'] = 'implement tdd code-review independent'
+        term = self.install_skill_terminal(repos=(2,))
+        self.assertIn(b'Cannot select \x1b[32mimplement\x1b[0m: missing dependency \x1b[32mcodebase-design\x1b[0m.', term.transcript)
+        self.assertIn(b'Cannot select \x1b[32mtdd\x1b[0m: missing dependency \x1b[32mcodebase-design\x1b[0m.', term.transcript)
+        term.send(b'\r')
+        term.expect('Item 1/4')
+        term.send(b' ')
+        term.expect('Cannot select implement: missing dependency codebase-design.')
+        term.expect('[ ] implement')
+        term.expect('[x] independent')
+        term.send(b'q')
+        self.assertEqual(term.finish(), 0)
+
+    def test_matt_removal_picker_does_not_complete_dependencies(self):
+        lock = self.home / '.agents/.skill-lock.json'
+        lock.write_text(json.dumps({'version': 3, 'skills': {
+            name: {'source': 'mattpocock/skills', 'sourceType': 'github'}
+            for name in ['tdd', 'codebase-design']}}))
+        for name in ['tdd', 'codebase-design']:
+            folder = self.home / '.agents/skills' / name
+            folder.mkdir(parents=True)
+            (folder / 'SKILL.md').write_text(name)
+        term = self.removal_terminal()
+        term.expect('Remove skills by repository')
+        term.expect('Item 1/3')
+        # Matt sorts before the separate Local group containing "existing".
+        term.send(b'\r')
+        term.expect('Repository: mattpocock/skills')
+        term.expect('Item 1/2')
+        term.send(b'\x1b[B ')
+        term.expect('[ ] Codex / codebase-design [directory]')
+        term.expect('[x] Codex / tdd [directory]')
+        term.send(b'q')
+        self.assertEqual(term.finish(), 0)
 
     def test_repository_whole_selection_reuses_catalog_across_tasks(self):
         term = self.install_skill_terminal(repos='all')

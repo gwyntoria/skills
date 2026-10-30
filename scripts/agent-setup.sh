@@ -51,6 +51,7 @@ SKILL_NAMES=()
 SKILL_SOURCES=()
 SKILL_GROUPS=()
 SKILL_PICKED=()
+SKILL_EXPLICIT=()
 CATALOG_CACHE_GROUPS=()
 CATALOG_CACHE_NAMES=()
 CATALOG_FAILURES=()
@@ -74,6 +75,7 @@ REMOVAL_TEMP=""
 REMOVAL_RULE_IDS=(); REMOVAL_RULE_LABELS=(); REMOVAL_SKILL_IDS=(); REMOVAL_SKILL_LABELS=(); REMOVAL_SKILL_GROUPS=()
 REMOVAL_RULE_SELECTION=(); REMOVAL_SKILL_SELECTION=()
 REPO_ITEM_LABELS=(); REPO_ITEM_GROUPS=(); REPO_SELECTED=()
+REPO_EXPLICIT=()
 
 log() { printf '\n==> %s\n' "$1"; }
 
@@ -281,12 +283,13 @@ catalog_add_group() {
         SKILL_SOURCES+=("$source")
         SKILL_GROUPS+=("$group")
         SKILL_PICKED+=(1)
+        SKILL_EXPLICIT+=(1)
     done <<<"$CATALOG_FETCHED_NAMES"
 }
 
 load_catalog() {
     local group name
-    SKILL_NAMES=(); SKILL_SOURCES=(); SKILL_GROUPS=(); SKILL_PICKED=()
+    SKILL_NAMES=(); SKILL_SOURCES=(); SKILL_GROUPS=(); SKILL_PICKED=(); SKILL_EXPLICIT=()
     for group in "${SKILL_SOURCE_GROUPS[@]}"; do
         catalog_add_group "$group"
     done
@@ -318,13 +321,14 @@ repo_group_selected() {
 # selection survives adding or dropping a repository between visits.
 catalog_build_view() {
     local i pos
-    REPO_ITEM_LABELS=(); REPO_ITEM_GROUPS=(); REPO_SELECTED=(); VIEW_SKILL_INDICES=()
+    REPO_ITEM_LABELS=(); REPO_ITEM_GROUPS=(); REPO_SELECTED=(); REPO_EXPLICIT=(); VIEW_SKILL_INDICES=()
     for ((i=0; i<${#SKILL_NAMES[@]}; i++)); do
         repo_group_selected "${SKILL_GROUPS[i]}" || continue
         REPO_ITEM_LABELS+=("${SKILL_NAMES[i]}")
         REPO_ITEM_GROUPS+=("${SKILL_SOURCES[i]#https://github.com/}")
         VIEW_SKILL_INDICES+=("$i")
         pos=$((${#VIEW_SKILL_INDICES[@]} - 1))
+        REPO_EXPLICIT+=("${SKILL_EXPLICIT[i]}")
         [ "${SKILL_PICKED[i]}" -eq 0 ] || REPO_SELECTED+=("$pos")
     done
 }
@@ -336,6 +340,7 @@ catalog_sync_selection() {
     for ((pos=0; pos<${#VIEW_SKILL_INDICES[@]}; pos++)); do
         i="${VIEW_SKILL_INDICES[pos]}"
         SKILL_PICKED[i]=0
+        SKILL_EXPLICIT[i]="${REPO_EXPLICIT[pos]}"
     done
     for pos in "${REPO_SELECTED[@]+"${REPO_SELECTED[@]}"}"; do
         i="${VIEW_SKILL_INDICES[pos]}"
@@ -1478,6 +1483,78 @@ choose_items_page() {
     done
 }
 
+# Dependency helpers use the picker's local arrays through Bash dynamic scope.
+# Keep this table in sync with upstream SKILL.md, not workflow/related links:
+# https://github.com/mattpocock/skills
+# https://www.aihero.dev/skills
+# Include calls in conditional branches so every supported path is available.
+matt_skill_dependencies() {
+    case "$1" in
+        grill-me) printf '%s\n' grilling ;;
+        grill-with-docs) printf '%s\n' grilling domain-modeling ;;
+        tdd) printf '%s\n' codebase-design ;;
+        implement | implement-spec) printf '%s\n' tdd code-review ;;
+        wayfinder) printf '%s\n' grilling domain-modeling prototype research ;;
+        improve-codebase-architecture) printf '%s\n' codebase-design grilling domain-modeling ;;
+        triage) printf '%s\n' grilling domain-modeling ;;
+        retro) printf '%s\n' writing-for-agents ;;
+    esac
+}
+
+picker_dependency_graph() {
+    local i j dependency match changed=1
+    for ((i=0; i<${#selected[@]}; i++)); do
+        requirements[i]=" $i "; missing[i]=''
+        [ "${REPO_ITEM_GROUPS[i]}" = mattpocock/skills ] || continue
+        while IFS= read -r dependency; do
+            [ -n "$dependency" ] || continue
+            match=-1
+            for ((j=0; j<${#selected[@]}; j++)); do
+                if [ "${REPO_ITEM_GROUPS[j]}" = mattpocock/skills ] && [ "${REPO_ITEM_LABELS[j]}" = "$dependency" ]; then match="$j"; break; fi
+            done
+            if [ "$match" -lt 0 ]; then missing[i]="$dependency";
+            else requirements[i]+="$match "; fi
+        done < <(matt_skill_dependencies "${REPO_ITEM_LABELS[i]}")
+    done
+    # Compute transitive closure once, including missing transitive dependencies.
+    # Membership checks also make cycles terminate.
+    while [ "$changed" -eq 1 ]; do
+        changed=0
+        for ((i=0; i<${#selected[@]}; i++)); do
+            for j in ${requirements[i]}; do
+                if [ -z "${missing[i]}" ] && [ -n "${missing[j]}" ]; then missing[i]="${missing[j]}"; changed=1; fi
+                for dependency in ${requirements[j]}; do
+                    if [[ "${requirements[i]}" != *" $dependency "* ]]; then requirements[i]+="$dependency "; changed=1; fi
+                done
+            done
+        done
+    done
+}
+
+picker_resolve_dependencies() {
+    local i dependency
+    for ((i=0; i<${#selected[@]}; i++)); do selected[i]=0; done
+    for ((i=0; i<${#selected[@]}; i++)); do
+        [ "${explicit[i]}" -ne 0 ] || continue
+        if [ -n "${missing[i]}" ]; then
+            explicit[i]=0
+            notice+="Cannot select "$'\033[32m'"${REPO_ITEM_LABELS[i]}"$'\033[0m'": missing dependency "$'\033[32m'"${missing[i]}"$'\033[0m'". "
+            continue
+        fi
+        for dependency in ${requirements[i]}; do selected[dependency]=1; done
+    done
+}
+
+picker_deselect_dependency() {
+    local target="$1" root
+    for ((root=0; root<${#explicit[@]}; root++)); do
+        if [ "${explicit[root]}" -eq 1 ] && [[ "${requirements[root]}" = *" $target "* ]]; then
+            explicit[root]=0
+            [ "$root" -eq "$target" ] || notice+="Also deselected "$'\033[32m'"${REPO_ITEM_LABELS[root]}"$'\033[0m'". "
+        fi
+    done
+}
+
 # Shared repository/skill selector. REPO_SELECTED contains item indices, so
 # distinct agents or unknown local entries never collapse into one deletion.
 choose_skill_repositories() {
@@ -1491,6 +1568,7 @@ choose_skill_repositories() {
 choose_skill_repositories_page() {
     local page="$1" title="$2" color="$3" cursor=0 child=-1 i j group found start end total chosen mark row key_page
     local groups=() item_groups=() selected=() children=()
+    local dependency_mode="${4:-0}" notice='' reasons explicit=() requirements=() missing=() before=() touched=()
     for ((i=0; i<${#REPO_ITEM_LABELS[@]}; i++)); do
         group="${REPO_ITEM_GROUPS[i]}"; found=-1
         for ((j=0; j<${#groups[@]}; j++)); do [ "${groups[j]}" != "$group" ] || { found="$j"; break; }; done
@@ -1498,11 +1576,18 @@ choose_skill_repositories_page() {
         item_groups+=("$found"); selected+=(0)
     done
     for i in "${REPO_SELECTED[@]+"${REPO_SELECTED[@]}"}"; do selected[i]=1; done
+    if [ "$dependency_mode" -eq 1 ]; then
+        explicit=("${REPO_EXPLICIT[@]}")
+        picker_dependency_graph
+        picker_resolve_dependencies
+    fi
     cursor="${MENU_CURSORS[page]:-0}"
     while :; do
         REPO_SELECTED=()
         for ((i=0; i<${#selected[@]}; i++)); do [ "${selected[i]}" -eq 0 ] || REPO_SELECTED+=("$i"); done
+        if [ "$dependency_mode" -eq 1 ]; then REPO_EXPLICIT=("${explicit[@]}"); fi
         printf '\033[H\033[2J%s\n' "$title"
+        [ -z "$notice" ] || printf '%s\n' "$notice"
         if [ "$child" -lt 0 ]; then
             printf 'Up/Down: move | Space: select repository | Enter: open / Continue | a: all | n: none | b: back | q: exit\n\n'
             total=$((${#groups[@]} + 1)); MENU_CURSORS[page]="$cursor"
@@ -1527,6 +1612,15 @@ choose_skill_repositories_page() {
             else
                 i="${children[row]}"; mark=' '; [ "${selected[i]}" -eq 0 ] || mark=x
                 printf '[%s] \033[%sm%s\033[0m\n' "$mark" "$color" "${REPO_ITEM_LABELS[i]}"
+                if [ "$dependency_mode" -eq 1 ] && [ "${selected[i]}" -eq 1 ] && [ "${explicit[i]}" -eq 0 ]; then
+                    reasons=''
+                    for ((j=0; j<${#selected[@]}; j++)); do
+                        if [ "${explicit[j]}" -eq 1 ] && [[ "${requirements[j]}" = *" $i "* ]]; then
+                            reasons+="${reasons:+, }"$'\033[32m'"${REPO_ITEM_LABELS[j]}"$'\033[0m'
+                        fi
+                    done
+                    printf '      [dependency: %s]\n' "$reasons"
+                fi
             fi
         done
         printf '\nItem %s/%s\n' "$((cursor + 1))" "$total"
@@ -1535,6 +1629,7 @@ choose_skill_repositories_page() {
             $'\e[A' | $'\eOA') cursor=$(((cursor + total - 1) % total)) ;;
             $'\e[B' | $'\eOB') cursor=$(((cursor + 1) % total)) ;;
             ' ' | a | n)
+                before=("${selected[@]}"); touched=(); notice=''
                 if [ "$child" -lt 0 ]; then
                     [ "$cursor" -lt "${#groups[@]}" ] || [ "$KEY" != ' ' ] || continue
                     found=1
@@ -1547,12 +1642,25 @@ choose_skill_repositories_page() {
                         [ "$chosen" -ne "$total" ] || found=0
                     fi
                     for ((i=0; i<${#selected[@]}; i++)); do
-                        if [ "$KEY" != ' ' ] || [ "${item_groups[i]}" -eq "$cursor" ]; then selected[i]="$found"; fi
+                        if [ "$KEY" != ' ' ] || [ "${item_groups[i]}" -eq "$cursor" ]; then selected[i]="$found"; touched+=("$i"); fi
                     done
-                elif [ "$KEY" = ' ' ]; then i="${children[cursor]}"; selected[i]=$((1 - selected[i]));
+                elif [ "$KEY" = ' ' ]; then i="${children[cursor]}"; selected[i]=$((1 - selected[i])); touched+=("$i");
                 else
                     found=1; [ "$KEY" != n ] || found=0
-                    for i in "${children[@]}"; do selected[i]="$found"; done
+                    for i in "${children[@]}"; do selected[i]="$found"; touched+=("$i"); done
+                fi
+                if [ "$dependency_mode" -eq 1 ]; then
+                    # All also promotes already checked dependencies to explicit.
+                    for i in "${touched[@]}"; do
+                        if [ "${selected[i]}" -eq 1 ]; then explicit[i]=1;
+                        else picker_deselect_dependency "$i"; fi
+                    done
+                    picker_resolve_dependencies
+                    for ((i=0; i<${#selected[@]}; i++)); do
+                        if [ "${before[i]}" -eq 1 ] && [ "${selected[i]}" -eq 0 ] && [ "${REPO_ITEM_GROUPS[i]}" = mattpocock/skills ]; then
+                            notice+="Deselected "$'\033[32m'"${REPO_ITEM_LABELS[i]}"$'\033[0m'". "
+                        fi
+                    done
                 fi ;;
             '')
                 if [ "$child" -ge 0 ]; then child=-1; cursor="${MENU_CURSORS[page]}";
@@ -2260,7 +2368,7 @@ interactive_setup() {
                 catalog_build_view
                 if [ "${#REPO_ITEM_LABELS[@]}" -gt 0 ]; then page=skills; else page=review; fi ;;
             skills)
-                choose_skill_repositories 2 'Install skills by repository' 32 || {
+                choose_skill_repositories 2 'Install skills by repository' 32 1 || {
                     menu_status=$?
                     catalog_sync_selection
                     [ "$menu_status" -eq 2 ] || return "$session_status"
@@ -2330,7 +2438,7 @@ interactive_setup() {
                 # The catalog cache survives so a later run never refetches a repository.
                 SUCCEEDED=(); FAILED=(); MENU_SELECTED=(); MENU_CURSORS=(); MENU_CHOICES=(); MENU_VISITED=()
                 AGENT_ITEMS=(); SELECTED_SKILLS=(); SELECTED_RULES=(); SELECTED_RULE_SOURCES=()
-                SKILL_NAMES=(); SKILL_SOURCES=(); SKILL_GROUPS=(); SKILL_PICKED=()
+                SKILL_NAMES=(); SKILL_SOURCES=(); SKILL_GROUPS=(); SKILL_PICKED=(); SKILL_EXPLICIT=()
                 SELECTED_REPOS=(); VIEW_SKILL_INDICES=()
                 TARGET_AGENTS=(codex claude-code); RULE_TARGETS=both; RULE_SCOPE=global
                 REMOVE_CODEX=1; REMOVE_CLAUDE=1; REMOVE_RULES=0; REMOVE_SKILLS=0; REMOVE_SCOPE=global
