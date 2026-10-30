@@ -61,7 +61,7 @@
 
 ### 补充说明
 
-- `hecaitou` 与 `wangshuo` 使用 [dot-skill](https://github.com/titanwings/colleague-skill) 从公开材料中提炼的写作和分析方法。输出具有一定启发性，但与本人仍有不少差别，感兴趣的可以阅读他们的文章，再用相同的话题提问 AI。
+- `hecaitou` 与 `wangshuo` 使用 [distilly](https://github.com/titanwings/distilly) 从公开材料中提炼的写作和分析方法。输出具有一定启发性，但与本人仍有不少差别，感兴趣的可以阅读他们的文章，再用相同的话题提问 AI。
 - `scan-codebase` 所执行的内容来自 [The Git Commands I Run Before Reading Any Code](https://piechowski.io/post/git-commands-before-reading-code/) 中提到的 git 命令，适合接手新代码库时运行，了解仓库现状。
 
 ## Rules
@@ -112,24 +112,7 @@ Project 规则安装到启动命令时的当前目录，包括 Git 子目录和�
 | [`statusline.sh`](scripts/statusline.sh) | Claude Code | 状态栏脚本，显示模型与思考等级、目录与 Git 分支、上下文余量、输入输出 token、速率限制和版本 |
 | [`list-skills.sh`](scripts/list-skills.sh) | 仓库维护 | 列出仓库内全部 skill 路径，并检查是否有重名 |
 
-### 补充说明
-
-- 无参数运行 `bash scripts/agent-setup.sh` 进入终端菜单：方向键移动、空格勾选、`a` 全选、`n` 取消全选、回车继续、下级选择页面按 `b` 返回上一级、`q` 退出整个流程。主菜单只显示适用的导航按键；安装任务顺序为 Skills、Rules、Codex CLI、Claude Code CLI、Claude 状态栏。返回后保留勾选与光标位置，同一次运行中按仓库复用已拉取的 skill 清单。Codex CLI、Claude Code CLI、Rules、Claude 状态栏可以分别选择；skills 分两步，先在来源页勾选要拉取的仓库（静态清单，只列仓库名，不联网），回车后仅拉取所选仓库，再在 skill 页按仓库分组多选，选择完成后通过 `Continue` 进入下一步；skill 页的仓库行按 Space 全选或取消该仓库，Enter 展开单个 skill 多选，`[ ]`、`[-]`、`[x]` 分别表示未选、部分选中和全选。仓库内 Enter 或 `b` 返回仓库行并保留选择，`a`、`n` 作用于当前层级。skill 页 `b` 返回来源页，来源页 `b` 返回上一级，两侧勾选都保留；新拉取的 skill 默认全选。安装目标可选 Codex、Claude Code 或两者。安装项目默认不选，执行前展示清单并确认。菜单使用 Bash 内置能力，不依赖额外的 TUI 工具。
-- 交互模式中，每项任务成功、失败、确认取消或没有可操作内容后，结果日志会停留，按 Enter 返回首页继续选择；结果页和各级菜单仍支持 `q` 退出，首页也可选 `Exit`，`b` 继续返回上一级。回到首页后重置本轮勾选、光标和结果统计，候选清单与临时资源在会话内复用；流程内返回上一级仍保留选择。依赖检查、资源获取或执行失败不会阻止下一项任务。只要会话中曾有失败，最终退出码就为非零，后续任务成功不会清除失败状态；Ctrl-C 和终端关闭仍可中断。非交互参数执行一次后退出。
-- `agent-setup.sh --agent` 安装两个 CLI、全局 `agent-behavior` 规则和状态栏（支持本地资源与远端回退）；`--skill` 安装全部候选 skills，保留已有内容；两个参数可以同时使用并保持非交互执行。`--list` 只列出可安装 skills，不执行安装，不能与安装参数组合。Waza、Kami、Gwyntoria（`gwyntoria/skills`）和 Distilly（`titanwings/distilly`）从来源仓库读取候选，Matt Pocock 沿用官网清单，HumanLayer 安装 `show-me`。候选获取失败后继续展示其他来源，同一来源仓库中选中的 skills 合并为一条安装命令，仓库批次失败后继续处理其他仓库，不自动逐项重试；结尾按安装批次汇总结果，有失败时返回非零退出码。无参数且没有终端时会提示使用参数并退出。
-- 首页统一使用 `Remove`：先单选 Global / Project（默认 Global），再多选 Agent（默认全选），再多选 Rules / Skills（默认不选），扫描所选范围内这些 Agent 的已安装内容，然后逐项选择并统一确认。Project 使用启动命令时的当前目录，不查找 Git 根目录，也不递归扫描子项目；范围同时作用于 rules 和 skills。删除不联网，不依赖源仓库；rules、skills 和仓库默认均不勾选。skills 使用与安装相同的仓库分层选择，同名 skill 按 Agent 显示为独立条目，可只删除某个 Agent 的某个 skill。没有可用来源记录的内容归入 `Unknown / local`，实际目录和链接决定候选，锁文件只辅助识别来源。
-- 删除 skills 时，Global 范围中 Codex 对应共享的 `~/.agents/skills` 条目，Claude 对应 `~/.claude/skills` 条目；Project 范围对应当前项目的 `.agents/skills` 和 `.claude/skills`，两种范围都保留 `.system`。全局锁文件使用 `~/.agents/.skill-lock.json`，项目锁文件使用项目根目录的 `skills-lock.json`，来源分组与锁记录更新只使用所选范围的锁文件。只清理已成功删除的共享 skill 对应的锁记录，保留其他 skill、锁文件顶层字段和未知字段；Claude-only 删除保留共享源和锁记录。未选中的 Claude 链接若会因共享源删除而失效，确认页用红色列出；其他 Agent 也可能使用共享目录。软链接只删除链接本身，不跟随目标；无法解析的锁文件会使 skill 归入未知来源，修改共享源前必须有可读取的锁文件（原本不存在锁文件时不创建）。
-- 删除 rules 时，Global 范围扫描 `~/.codex/AGENTS.md` 和 `~/.claude/CLAUDE.md` 中所有可识别的 `gwyn-space-skills` 托管块，按 Agent 分别列出，只移除所选块并保留个人文字和其他块；Claude `~/.claude/rules` 中的自定义文件、隐藏文件及子目录内文件也可逐项选择。Project 范围扫描项目根目录 `AGENTS.md` 的托管块及 `.claude/rules` 中的文件和链接，保留手写内容与未选块；不扫描项目的 `CLAUDE.md`、`.claude/CLAUDE.md` 或 `.codex/AGENTS.md`。文件和目录软链接作为独立链接列出，只删除链接本身。未选内容和实际目录本身保留，不再提供整目录清空询问。
-- 每次新删除流程重新扫描，并在预览、执行及所选备份完成后核对所选对象的路径及内容指纹；内容或锁文件变化时停止这一轮，需重新扫描选择。删除清单后先询问 `Create backup? [y/N]`，回车或 `n/N` 不备份，`y/Y` 选择备份，其他输入重新询问；随后输入 `DELETE` 才执行。备份询问处 `b` 返回内容选择，`q` 退出；`DELETE` 确认处 `b` 返回备份询问，每次重新进入备份询问都默认不备份。选择备份时，确认删除后先把所有所选文件、规则块所在文件、skill 目录、链接及需要更新的锁文件备份到权限为 `0700` 的 `~/.agent-rules-backup-*/removal.tar` 或 `~/.agent-skills-backup-*/removal.tar`，备份失败不删除任何条目；取消删除或退出时不创建备份。不备份时直接删除，不生成恢复归档；单项删除失败则继续其余项并逐项汇总。全局和项目备份均存放在 HOME，项目位于 HOME 外也可备份；恢复命令的目标目录与所选范围一致。日志记录范围、Agent、对象、路径及备份选择，创建备份后输出备份路径和 `tar -xf` 恢复命令；回滚前停止安装或删除操作，执行对应恢复命令并保留备份供核对。
-- 安装或更新目标使用绿色，删除目标使用红色，备份路径和恢复命令使用青色，风险提示使用黄色；确认页、执行日志与结果汇总标明操作对象及路径。受影响的未删除 Claude 链接继续用红色提醒。
-- 主菜单的 `Remove all backups` 清理 HOME 直属的安装器备份目录：`.agent-skills-backup-` 或 `.agent-rules-backup-` 加六位字母数字后缀。先列出实际路径，输入 `DELETE` 后只删除确认清单中的目录；跳过软链接、不匹配名称和其他备份文件。日志逐项记录删除结果。清理不会再创建备份，删除后无法使用这些备份回滚；仍需保留的备份应在执行前复制到其他位置。
-- 安装器的隔离回归检查使用 Python 3 标准库运行：`python3 scripts/tests/test_agent_setup.py`。检查不安装真实 CLI 或 skills，不修改当前用户配置。
-- `agent-setup.sh` 将全局 `agent-behavior.md` 分别写入 `~/.claude/CLAUDE.md` 和 `~/.codex/AGENTS.md` 的 `<!-- gwyn-space-skills: <规则>:start -->` 与 `:end` 托管块；项目规则仍使用 Claude Code 的 `.claude/rules/`，Codex 项目规则写入项目 `AGENTS.md` 的托管块。**块内手改会在下次安装时被覆盖**，块外内容不受影响。规则清单由 `rules/global/*.md` 和 `rules/project/*.md` 决定，加一个文件就多一条规则；安装范围由范围页决定，源目录用于标识规则来源。规则文件名只能使用字母、数字、点、下划线和连字符，并以字母或数字开头；内容必须以 Markdown H1 开头。
-- 从 `agent-setup.sh` 早期版本升级时，`~/.claude/CLAUDE.md` 与 `~/.codex/AGENTS.md` 可能是和 `agent-behavior.md` 逐字节相同的整文件副本。`agent-setup.sh` 检测到这种副本会先创建 `.pre-rules.bak-<时间戳>` 备份，再改成托管块。旧版 `~/.claude/rules/global.md` 与仓库内容完全相同时会移到 `~/.claude/` 下备份；文件已被修改或是软链接时会停止安装并保留原文件。迁移过程保留备份供恢复。
-- `env-update.sh` 按固定顺序执行更新，前置命令不存在时记为跳过而不是失败，最后打印成功、失败和跳过的清单；带 `-c` 时在 Homebrew 更新后追加 `brew cleanup`。交互终端使用 Bash 和终端控制序列把进度固定在最后一行，上方保留日志和普通确认输入；任务切换时更新底栏，退出或 Ctrl-C 时恢复终端。子程序清屏、全屏交互和运行中缩放窗口可能影响底栏，尺寸在下一次任务边界重新读取。重定向或定时任务保持普通输出。
-- `statusline.sh` 由 `agent-setup.sh` 从本地或远端资源复制到 `~/.claude/statusline.sh`，其中速率限制一段只在会话上报数据时显示。
-
-## 安装
+## Skills 安装
 
 ### npx skills
 
