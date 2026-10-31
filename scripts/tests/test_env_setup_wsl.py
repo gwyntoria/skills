@@ -73,6 +73,13 @@ elif name == 'chsh':
     if os.environ.get('FAIL_CHSH'): sys.exit(44)
     if not os.environ.get('UNCHANGED_SHELL'):
         Path(os.environ['SHELL_STATE']).write_text(args[1])
+elif name == 'starship':
+    if os.environ.get('FAIL_STARSHIP'): sys.exit(81)
+    if args[:1] == ['init']:
+        print("printf '%s\\n' starship-loaded >> \"$HOME/prompt-loads\"")
+    else: print('starship fixture version')
+elif name == 'wslpath':
+    print(r'C:\fixture dir')
 elif name == 'fzf':
     print('0.60.0')
 elif name in ('7zz', '7z'):
@@ -139,7 +146,10 @@ elif name == 'zsh':
 elif name == 'curl':
     url = args[-1]
     if os.environ.get('FAIL_DOWNLOAD'): sys.exit(51)
-    if 'astral.sh' in url:
+    if 'starship.rs' in url:
+        print('mkdir -p "$HOME/.local/bin"')
+        print('cp "$FIXTURE_BIN/starship-fixture" "$HOME/.local/bin/starship"')
+    elif 'astral.sh' in url:
         print('test "$UV_NO_MODIFY_PATH" = 1 || echo polluted >> "$HOME/.zshrc"')
         print('test -n "$UV_INSTALL_DIR"')
         print('cp "$FIXTURE_BIN/uv-fixture" "$UV_INSTALL_DIR/uv"')
@@ -290,12 +300,201 @@ class WslSetupTests(unittest.TestCase):
 
     def ai_fixture(self):
         self.dev_fixture()
-        for name in ['codex', 'claude', 'codex-fixture', 'claude-fixture']:
+        for name in ['codex', 'claude', 'codex-fixture', 'claude-fixture', 'starship']:
             self.stub(name, STUB)
         self.stub('npx', STUB)
         entry = self.root / 'agent-setup.sh'
         entry.write_text('#!/bin/bash\nexec agent-setup "$@"\n')
         self.stub('agent-setup', STUB)
+
+    def test_starship_defaults_install_and_bash_hooks_preserve_user_prompt(self):
+        self.stub('starship-fixture', STUB)
+        self.stub('wslpath', STUB)
+        self.bashrc.write_text('user_prompt() { echo user >> "$HOME/user-prompts"; }\nPROMPT_COMMAND=user_prompt\n')
+        term = self.terminal()
+        term.expect('[x] Starship')
+        term.send(b'q')
+        term.finish()
+        output, code = self.confirm(self.choose_only({8}))
+        self.assertEqual(code, 0, output)
+        self.assertIn('[成功] Starship', output)
+        self.assertEqual(self.zshrc.read_text(), '# untouched zsh\n')
+        loaded = subprocess.run(['/bin/bash', '--noprofile', '--norc', '-c',
+                                 'source "$HOME/.bashrc"; source "$HOME/.bashrc"; eval "$PROMPT_COMMAND"'],
+                                env=self.env, text=True, capture_output=True)
+        self.assertEqual(loaded.returncode, 0, loaded.stderr)
+        self.assertEqual((self.home / 'user-prompts').read_text().splitlines(), ['user'])
+        self.assertEqual((self.home / 'prompt-loads').read_text().splitlines(), ['starship-loaded'])
+        self.assertEqual(loaded.stdout.count('\x1b]9;9;C:\\fixture dir\x1b\\'), 1)
+        self.assertEqual(len([c for c in self.calls('curl') if 'starship.rs' in c[-1]]), 1)
+        output, code = self.confirm(self.choose_only({8}))
+        self.assertEqual(code, 0, output)
+        self.assertEqual(len([c for c in self.calls('curl') if 'starship.rs' in c[-1]]), 1)
+
+    def test_starship_zsh_theme_hooks_restore_on_deselection_and_reuse(self):
+        self.stub('zsh', STUB)
+        self.stub('starship', STUB)
+        self.stub('wslpath', STUB)
+        omz = self.home / '.oh-my-zsh'
+        omz.mkdir()
+        (omz / 'oh-my-zsh.sh').write_text('print "theme:$ZSH_THEME" >> "$HOME/theme-loads"\n')
+        self.bashrc.write_text('# keep bash\n')
+        self.zshrc.write_text('export ZSH="$HOME/.oh-my-zsh"\nZSH_THEME="custom-theme"\n'
+                             'user_prompt() { print user >> "$HOME/user-prompts"; }\n'
+                             'precmd_functions=(user_prompt)\nsource "$ZSH/oh-my-zsh.sh"\n')
+        for selected in [True, True, False]:
+            output, code = self.confirm(self.choose_only({8} if selected else set(), shell='zsh'))
+            self.assertEqual(code, 0, output)
+            for filename in ['prompt-loads', 'theme-loads', 'user-prompts']:
+                (self.home / filename).unlink(missing_ok=True)
+            loaded = subprocess.run([ZSH_BINARY, '-dfc',
+                                     'source "$HOME/.zshrc"; for hook in $precmd_functions; do "$hook"; done'],
+                                    env=self.env, text=True, capture_output=True)
+            self.assertEqual(loaded.returncode, 0, loaded.stderr)
+            self.assertEqual((self.home / 'theme-loads').read_text(), 'theme:' + ('' if selected else 'custom-theme') + '\n')
+            self.assertEqual((self.home / 'user-prompts').read_text(), 'user\n')
+            self.assertEqual(loaded.stdout.count('\x1b]9;9;C:\\fixture dir\x1b\\'), 1)
+            if selected:
+                self.assertEqual((self.home / 'prompt-loads').read_text().splitlines(), ['starship-loaded'])
+            else:
+                self.assertFalse((self.home / 'prompt-loads').exists())
+            self.assertEqual(self.bashrc.read_text(), '# keep bash\n')
+        self.assertFalse([c for c in self.calls('curl') if 'starship.rs' in c[-1]])
+
+    def test_starship_failure_keeps_prompt_and_allows_shell_switch(self):
+        for shell in ['bash', 'zsh']:
+            with self.subTest(shell=shell):
+                if shell == 'zsh': self.stub('zsh', STUB)
+                self.stub('starship', STUB)
+                self.env['FAIL_STARSHIP'] = '1'
+                rc = self.bashrc if shell == 'bash' else self.zshrc
+                rc.write_text('ZSH_THEME="kept-theme"\n# user prompt\n')
+                output, code = self.confirm(self.choose_only({8}, shell=shell))
+                self.assertEqual(code, 1, output)
+                self.assertIn('[失败] Starship', output)
+                self.assertIn('[成功] 默认 shell 切换', output)
+                self.assertIn('手动处理：', output)
+                config = rc.read_text()
+                self.assertIn('ZSH_THEME="kept-theme"', config)
+                self.assertNotIn('starship init', config)
+                self.assertNotIn('prompt-theme >>>', config)
+                self.env.pop('FAIL_STARSHIP')
+                output, code = self.confirm(self.choose_only({8}, shell=shell))
+                self.assertEqual(code, 0, output)
+                self.env['FAIL_STARSHIP'] = '1'
+                output, code = self.confirm(self.choose_only({8}, shell=shell))
+                self.assertEqual(code, 1, output)
+                self.assertIn('starship init ' + shell, rc.read_text())
+                if shell == 'zsh': self.assertIn('prompt-theme >>>', rc.read_text())
+                self.env.pop('FAIL_STARSHIP')
+
+    def test_starship_hook_preserves_bash_prompt_arrays_and_user_callback(self):
+        self.stub('starship', STUB)
+        self.stub('wslpath', STUB)
+        self.bashrc.write_text("PROMPT_COMMAND=('echo first' 'echo second')\n"
+                              'starship_precmd_user_func=user_callback\n')
+        output, code = self.confirm(self.choose_only({8}))
+        self.assertEqual(code, 0, output)
+        loaded = subprocess.run(['/bin/bash', '--noprofile', '--norc', '-c',
+                                 'source "$HOME/.bashrc"; source "$HOME/.bashrc"; '
+                                 'for cmd in "${PROMPT_COMMAND[@]}"; do eval "$cmd"; done; '
+                                 'printf "callback:%s" "$starship_precmd_user_func"'],
+                                env=self.env, text=True, capture_output=True)
+        self.assertEqual(loaded.returncode, 0, loaded.stderr)
+        self.assertIn('first\nsecond\n', loaded.stdout)
+        self.assertIn('callback:user_callback', loaded.stdout)
+        self.assertEqual(loaded.stdout.count('\x1b]9;9;C:\\fixture dir\x1b\\'), 1)
+
+    def test_starship_missing_download_dependency_cascades_and_skips_on_failure(self):
+        (self.bin / 'curl').unlink()
+        self.env['FAIL_UPDATE'] = '1'
+        term = self.choose_only({8})
+        term.send(b'\r')
+        term.expect('确认执行')
+        plan = re.sub(r'\x1b\[[0-9;?]*[a-zA-Z]', '', term.output.decode()).split('安装计划')[-1]
+        self.assertIn('安装组件：系统基础包（自动补齐）', plan)
+        self.assertIn('安装组件：Starship（手动选择）', plan)
+        term.send(b'y\r')
+        term.expect('安装结果')
+        self.assertEqual(term.finish(), 1)
+        self.assertIn('[因依赖失败跳过] Starship', re.sub(r'\x1b\[[0-9;?]*[a-zA-Z]', '', term.output.decode()))
+        self.assertNotIn('starship init', self.bashrc.read_text())
+        self.assertTrue(self.calls('chsh'))
+        self.assertFalse(self.calls('curl'))
+        term = self.choose_only({8})
+        term.send(b' \r')
+        term.expect('确认执行')
+        plan = re.sub(r'\x1b\[[0-9;?]*[a-zA-Z]', '', term.output.decode()).split('安装计划')[-1]
+        self.assertNotIn('安装组件：Starship', plan)
+        term.send(b'n\r')
+        self.assertEqual(term.finish(), 0)
+
+    def test_starship_configuration_guards_symlinks_permissions_and_malformed_hooks(self):
+        self.stub('starship', STUB)
+        target = self.home / 'custom rc'
+        target.write_text('# custom\n')
+        target.chmod(0o600)
+        self.bashrc.symlink_to(target)
+        output, code = self.confirm(self.choose_only({8}))
+        self.assertEqual(code, 0, output)
+        self.assertTrue(self.bashrc.is_symlink())
+        self.assertEqual(target.stat().st_mode & 0o777, 0o600)
+        self.assertIn('恢复命令：', output)
+        invalid = target.read_text() + '# >>> env-setup-wsl.sh Windows Terminal CWD hook >>>\n'
+        target.write_text(invalid)
+        output, code = self.confirm(self.choose_only({8}))
+        self.assertEqual(code, 1, output)
+        self.assertEqual(target.read_text(), invalid)
+        self.assertIn('[失败] Bash 配置', output)
+        self.assertIn('[因依赖失败跳过] 默认 shell 切换', output)
+        self.assertFalse(list(self.home.glob('.*.tmp.*')))
+        self.assertEqual(self.zshrc.read_text(), '# untouched zsh\n')
+
+    def test_starship_legacy_hook_migrates_without_duplicate_notifications(self):
+        self.stub('starship', STUB)
+        self.stub('wslpath', STUB)
+        self.bashrc.write_text('# >>> env-setup-wsl.sh Windows Terminal CWD hook >>>\n'
+                              'function __wt_update_cwd() { echo old; }\n'
+                              'starship_precmd_user_func="__wt_update_cwd"\n'
+                              'eval "$(starship init bash)"\n'
+                              '# <<< env-setup-wsl.sh Windows Terminal CWD hook <<<\n')
+        output, code = self.confirm(self.choose_only({8}))
+        self.assertEqual(code, 0, output)
+        loaded = subprocess.run(['/bin/bash', '--noprofile', '--norc', '-c',
+                                 'source "$HOME/.bashrc"; eval "$PROMPT_COMMAND"'],
+                                env=self.env, text=True, capture_output=True)
+        self.assertEqual(loaded.returncode, 0, loaded.stderr)
+        self.assertEqual((self.home / 'prompt-loads').read_text().splitlines(), ['starship-loaded'])
+        self.assertNotIn('__wt_update_cwd', self.bashrc.read_text())
+        self.assertEqual(loaded.stdout.count('\x1b]9;9;C:\\fixture dir\x1b\\'), 1)
+
+    def test_starship_bash_hook_accepts_user_command_terminators_and_comments(self):
+        self.stub('wslpath', STUB)
+        for command in ['user_prompt;', 'user_prompt # keep comment']:
+            with self.subTest(command=command):
+                self.bashrc.write_text('user_prompt() { echo user; }\nPROMPT_COMMAND=' + shlex.quote(command) + '\n')
+                output, code = self.confirm(self.choose_only(set()))
+                self.assertEqual(code, 0, output)
+                loaded = subprocess.run(['/bin/bash', '--noprofile', '--norc', '-c',
+                                         'source "$HOME/.bashrc"; source "$HOME/.bashrc"; eval "$PROMPT_COMMAND"'],
+                                        env=self.env, text=True, capture_output=True)
+                self.assertEqual(loaded.returncode, 0, loaded.stderr)
+                self.assertEqual(loaded.stdout.count('user\n'), 1)
+                self.assertEqual(loaded.stdout.count('\x1b]9;9;C:\\fixture dir\x1b\\'), 1)
+
+    def test_starship_deselection_migrates_legacy_owned_initialization(self):
+        self.bashrc.write_text('# >>> env-setup-wsl.sh Windows Terminal CWD hook >>>\n'
+                              'function __wt_update_cwd() { echo old; }\n'
+                              'starship_precmd_user_func="__wt_update_cwd"\n'
+                              'eval "$(starship init bash)"\n'
+                              '# <<< env-setup-wsl.sh Windows Terminal CWD hook <<<\n')
+        output, code = self.confirm(self.choose_only(set()))
+        self.assertEqual(code, 0, output)
+        self.assertNotIn('starship init', self.bashrc.read_text())
+        loaded = subprocess.run(['/bin/bash', '--noprofile', '--norc', '-c',
+                                 'source "$HOME/.bashrc"; eval "$PROMPT_COMMAND"'],
+                                env=self.env, text=True, capture_output=True)
+        self.assertEqual(loaded.returncode, 0, loaded.stderr)
 
     def test_zsh_selected_plugins_install_reuse_and_initialize_nvm_once(self):
         self.dev_fixture()
@@ -805,8 +1004,8 @@ class WslSetupTests(unittest.TestCase):
     def choose_only(self, chosen, shell="bash", plugins=()):
         term = self.terminal(shell)
         # Reset in dependency order, then express only the requested selections.
-        term.send(b'\x1b[B' * 7)
-        for row in range(7, 0, -1):
+        term.send(b'\x1b[B' * 8)
+        for row in range(8, 0, -1):
             term.send(b' \x1b[A')
         term.send(b' ')
         focus = 0
@@ -1096,7 +1295,7 @@ class WslSetupTests(unittest.TestCase):
         term.expect('[x] lazygit')
         term.expect('[x] uv/Python')
         term.expect('[x] nvm/Node.js')
-        term.send(b'\x1b[B' * 7 + b' \x1b[A \x1b[A ')
+        term.send(b'\x1b[B' * 8 + b' \x1b[A \x1b[A \x1b[A ')
         term.send(b'\r')
         term.expect('确认执行')
         term.send(b'y\r')
@@ -1366,7 +1565,7 @@ class WslSetupTests(unittest.TestCase):
         self.env['NO_COLOR'] = '1'
         term = self.terminal()
         term.expect('> [x] 系统基础包')
-        term.send(b'\x1b[B' * 8)
+        term.send(b'\x1b[B' * 9)
         term.expect('> 继续')
         term.send(b'q')
         self.assertEqual(term.finish(), 0)

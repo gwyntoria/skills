@@ -8,8 +8,7 @@ set -euo pipefail
 # Usage:
 #   ./env-setup-wsl.sh  Install
 #
-# Current wizard: Bash/Zsh, development runtimes and AI tools.
-# Other component installer functions are retained for follow-up tickets.
+# Interactive Bash/Zsh setup, plugins, prompts, development runtimes and AI tools.
 #
 # Target:
 #   - Ubuntu on WSL
@@ -67,7 +66,7 @@ ORIGINAL_SHELL=""
 STEP_LABELS=() STEP_STATES=() STEP_REMEDIES=() STEP_CODES=()
 readonly STEP_BREW=4 STEP_LAZYGIT=5 STEP_UV=6 STEP_NODE=7
 readonly STEP_USER_BIN=8 STEP_COMPLETION=9 STEP_LAZY_BREW=10
-readonly STEP_CODEX=11 STEP_CLAUDE=12 STEP_AGENT=13 STEP_OMZ=14 STEP_FZF=15 STEP_PLUGIN_BASE=16
+readonly STEP_CODEX=11 STEP_CLAUDE=12 STEP_AGENT=13 STEP_OMZ=14 STEP_FZF=15 STEP_PLUGIN_BASE=16 STEP_STARSHIP=24
 
 # ------------------------------------------------------------
 # Output helpers
@@ -257,7 +256,7 @@ remove_managed_block() {
 usage() {
     printf '用法：%s [选项]\n' "$PROGRAM_NAME"
     printf '\n交互式 Bash/Zsh 环境配置：选择 shell 和组件，确认后安装并设置默认 shell。\n'
-    printf '可选：系统基础包、Homebrew/eza、lazygit、uv/Python、nvm/Node.js。\n'
+    printf '可选：系统基础包、Homebrew/eza、lazygit、uv/Python、nvm/Node.js、Codex CLI、Claude Code、Agent/Skill 配置、Starship。\n'
     printf '\n选项：\n  -h, --help       显示帮助（无需交互终端）\n'
     printf '\n安装需要交互终端；NO_COLOR 可禁用颜色，不提供无人值守安装参数。\n'
     printf '保留版本环境变量：PYTHON_VERSION=3.14、NODE_VERSION=lts/*。\n'
@@ -399,37 +398,10 @@ configure_inputrc() {
 }
 
 install_starship() {
-    log "Installing Starship"
-
-    if command_exists starship; then
-        success "Starship already installed: $(starship --version)"
-    else
-        curl -sS https://starship.rs/install.sh |
-            sh -s -- -y -b "$LOCAL_BIN"
-
-        success "Starship installed"
+    if ! command_exists starship; then
+        curl -fsS https://starship.rs/install.sh | sh -s -- -y -b "$LOCAL_BIN"
     fi
-
-    remove_managed_block "$WT_HOOK_START" "$WT_HOOK_END" "$SHELL_RC" || return 1
-    remove_exact_line 'eval "$(starship init bash)"' "$SHELL_RC" || return 1
-    remove_exact_line 'starship_precmd_user_func="__wt_update_cwd"' "$SHELL_RC" || return 1
-
-    if ! active_line_contains 'function __wt_update_cwd()' "$SHELL_RC"; then
-        printf '\n%s\n' \
-            "$WT_HOOK_START" \
-            'function __wt_update_cwd() {' \
-            '    printf '\''\e]9;9;%s\e\\'\'' "$(wslpath -w "$PWD")"' \
-            '}' \
-            '' \
-            'starship_precmd_user_func="__wt_update_cwd"' \
-            '' \
-            'eval "$(starship init bash)"' \
-            "$WT_HOOK_END" \
-            >>"$SHELL_RC"
-    else
-        append_once 'starship_precmd_user_func="__wt_update_cwd"' "$SHELL_RC"
-        append_once 'eval "$(starship init bash)"' "$SHELL_RC"
-    fi
+    starship --version
 }
 
 install_uv() {
@@ -885,6 +857,78 @@ prepare_plugin_config() {
     cat "$staging" >"$file"
 }
 
+prepare_prompt_config() (
+    local file="$1" original="$2" staging keep_theme=0
+    if [ "${SELECTED[8]}" -eq 1 ] && [ -f "$original" ] &&
+        grep -Fqx '# >>> env-setup-wsl.sh prompt-theme >>>' "$original"; then keep_theme=1; fi
+    # Preserve an existing prompt on installation failure, including legacy blocks.
+    if [ "${STEP_STATES[STEP_STARSHIP]:-}" = '成功' ]; then
+        remove_managed_block "$WT_HOOK_START" "$WT_HOOK_END" "$file"
+        begin_component_config starship "$file"
+        if ! active_line_contains "starship init $SHELL_NAME" "$file"; then
+            printf 'if [ -z "${_ENV_SETUP_WSL_STARSHIP_LOADED:-}" ]; then\n    eval "$(starship init %s)"\n    _ENV_SETUP_WSL_STARSHIP_LOADED=1\nfi\n' "$SHELL_NAME" >>"$file"
+        fi
+        end_component_config starship "$file"
+    elif [ "${SELECTED[8]}" -eq 0 ]; then
+        remove_managed_block "$WT_HOOK_START" "$WT_HOOK_END" "$file"
+        remove_managed_block '# >>> env-setup-wsl.sh starship >>>' '# <<< env-setup-wsl.sh starship <<<' "$file"
+    fi
+    if [ "$SHELL_NAME" = zsh ] && { [ "${STEP_STATES[STEP_STARSHIP]:-}" = '成功' ] || [ "${SELECTED[8]}" -eq 0 ] || [ "$keep_theme" -eq 1 ]; }; then
+        remove_managed_block '# >>> env-setup-wsl.sh prompt-theme >>>' '# <<< env-setup-wsl.sh prompt-theme <<<' "$file"
+        if [ "${STEP_STATES[STEP_STARSHIP]:-}" = '成功' ] || [ "$keep_theme" -eq 1 ]; then
+            # Insert immediately before framework loading, after user theme assignments.
+            staging=$(mktemp "${file}.prompt.XXXXXX")
+            local cleanup_command
+            printf -v cleanup_command 'rm -f -- %q' "$staging"
+            # shellcheck disable=SC2064
+            trap "$cleanup_command" EXIT
+            if ! awk '
+                $0 !~ /^[[:space:]]*#/ && /(^|[;&|[:space:]])(source|[.]|\\[.])[[:space:]]+[^#]*oh-my-zsh\.sh/ {
+                    print "# >>> env-setup-wsl.sh prompt-theme >>>"
+                    print "ZSH_THEME=\"\""
+                    print "# <<< env-setup-wsl.sh prompt-theme <<<"
+                }
+                { print }
+            ' "$file" >"$staging"; then rm -f -- "$staging"; return 1; fi
+            cat "$staging" >"$file"
+            rm -f -- "$staging"
+        fi
+    fi
+    # A legacy hook already owns its registration when Starship failed to update.
+    if active_line_contains '__wt_update_cwd' "$file"; then return 0; fi
+    begin_component_config cwd "$file"
+    cat >>"$file" <<'HOOK'
+__env_setup_wsl_update_cwd() {
+    local windows_path
+    command -v wslpath >/dev/null 2>&1 || return 0
+    windows_path=$(wslpath -w "$PWD") || return 0
+    printf '\e]9;9;%s\e\\' "$windows_path"
+}
+HOOK
+    if [ "$SHELL_NAME" = bash ]; then
+        cat >>"$file" <<'HOOK'
+if [[ $(declare -p PROMPT_COMMAND 2>/dev/null) == 'declare -a '* ]]; then
+    if [[ ! " ${PROMPT_COMMAND[*]} " == *' __env_setup_wsl_update_cwd '* ]]; then
+        PROMPT_COMMAND+=(__env_setup_wsl_update_cwd)
+    fi
+else
+    case $'\n'"${PROMPT_COMMAND:-}"$'\n' in
+    *$'\n__env_setup_wsl_update_cwd\n'*) ;;
+    *) PROMPT_COMMAND="${PROMPT_COMMAND:+$PROMPT_COMMAND$'\n'}__env_setup_wsl_update_cwd" ;;
+    esac
+fi
+HOOK
+    else
+        cat >>"$file" <<'HOOK'
+typeset -ga precmd_functions
+if (( ! ${precmd_functions[(Ie)__env_setup_wsl_update_cwd]} )); then
+    precmd_functions+=(__env_setup_wsl_update_cwd)
+fi
+HOOK
+    fi
+    end_component_config cwd "$file"
+)
+
 prepare_shell_config() (
     local target directory filename temporary_file backup_file cleanup_command
     if [ -L "$SHELL_RC" ] && [ ! -e "$SHELL_RC" ]; then
@@ -935,7 +979,8 @@ prepare_shell_config() (
         if [ -n "$previous_plugins" ]; then printf '%s\n' "$previous_plugins" >>"$temporary_file"; fi
     fi
     if [ "${STEP_STATES[STEP_USER_BIN]:-}" = '成功' ] || [ "${STEP_STATES[STEP_UV]:-}" = '成功' ] ||
-        [ "${STEP_STATES[STEP_CODEX]:-}" = '成功' ] || [ "${STEP_STATES[STEP_CLAUDE]:-}" = '成功' ]; then
+        [ "${STEP_STATES[STEP_CODEX]:-}" = '成功' ] || [ "${STEP_STATES[STEP_CLAUDE]:-}" = '成功' ] ||
+        [ "${STEP_STATES[STEP_STARSHIP]:-}" = '成功' ]; then
         begin_component_config paths "$temporary_file"
         append_once 'export PATH="$HOME/.local/bin:$PATH"' "$temporary_file"
         end_component_config paths "$temporary_file"
@@ -989,6 +1034,7 @@ prepare_shell_config() (
     if [ "$SHELL_NAME" = zsh ] && [ "${STEP_STATES[STEP_OMZ]:-}" = '成功' ]; then
         prepare_plugin_config "$temporary_file"
     fi
+    prepare_prompt_config "$temporary_file" "$target"
     "$SHELL_PATH" -n "$temporary_file"
     if [ -f "$target" ] && cmp -s "$target" "$temporary_file"; then
         return 0
@@ -1052,10 +1098,10 @@ init_colors() {
     fi
 }
 
-COMPONENT_LABELS=('系统基础包' 'Homebrew/eza' 'lazygit' 'uv/Python' 'nvm/Node.js' 'Codex CLI' 'Claude Code' 'Agent/Skill 配置')
-EXPLICIT=(1 1 1 1 1 1 1 1)
-SELECTED=(1 1 1 1 1 1 1 1)
-COMPONENT_STEPS=(1 "$STEP_BREW" "$STEP_LAZYGIT" "$STEP_UV" "$STEP_NODE" "$STEP_CODEX" "$STEP_CLAUDE" "$STEP_AGENT")
+COMPONENT_LABELS=('系统基础包' 'Homebrew/eza' 'lazygit' 'uv/Python' 'nvm/Node.js' 'Codex CLI' 'Claude Code' 'Agent/Skill 配置' 'Starship')
+EXPLICIT=(1 1 1 1 1 1 1 1 1)
+SELECTED=(1 1 1 1 1 1 1 1 1)
+COMPONENT_STEPS=(1 "$STEP_BREW" "$STEP_LAZYGIT" "$STEP_UV" "$STEP_NODE" "$STEP_CODEX" "$STEP_CLAUDE" "$STEP_AGENT" "$STEP_STARSHIP")
 
 needs_system_packages() {
     case "$1" in
@@ -1071,6 +1117,7 @@ needs_system_packages() {
     5) ! command_exists codex && ! command_exists curl ;;
     6) ! command_exists claude && ! command_exists curl ;;
     7) ! command_exists curl ;;
+    8) ! command_exists starship && ! command_exists curl ;;
     *) return 1 ;;
     esac
 }
@@ -1082,7 +1129,7 @@ resolve_components() {
     if [ "${SELECTED[7]}" -eq 1 ]; then
         SELECTED[4]=1 SELECTED[5]=1 SELECTED[6]=1
     fi
-    for id in 1 2 3 4 5 6 7; do
+    for id in 1 2 3 4 5 6 7 8; do
         if [ "${SELECTED[id]}" -eq 1 ] && needs_system_packages "$id"; then SELECTED[0]=1; fi
     done
     SYSTEM_SELECTED=${SELECTED[0]}
@@ -1125,7 +1172,7 @@ choose_components() {
                         notice+='连带取消 Agent/Skill 配置；'
                     fi
                     if [ "$focus" -eq 0 ]; then
-                        for id in 1 2 3 4 5 6 7; do
+                        for id in 1 2 3 4 5 6 7 8; do
                             if [ "${SELECTED[id]}" -eq 1 ] && needs_system_packages "$id"; then
                                 EXPLICIT[id]=0
                                 if [ "$SHELL_NAME" = zsh ] && [ "$id" -eq 4 ] && [ "${PLUGIN_SELECTED[PLUGIN_NVM]}" -eq 1 ]; then
@@ -1288,7 +1335,7 @@ run_install() {
     fi
     local step_id installer dependency_failed runtime_command
     printf -v runtime_command 'PYTHON_VERSION=%q NODE_VERSION=%q %s' "$PYTHON_VERSION" "$NODE_VERSION" "$rerun_command"
-    for component_id in 1 2 3 4 5 6; do
+    for component_id in 1 2 3 4 5 6 8; do
         step_id=${COMPONENT_STEPS[component_id]}
         case "$component_id" in
         1) installer=install_homebrew ;;
@@ -1297,6 +1344,7 @@ run_install() {
         4) installer=install_nvm ;;
         5) installer=install_codex ;;
         6) installer=install_claude ;;
+        8) installer=install_starship ;;
         esac
         if [ "${SELECTED[component_id]}" -eq 0 ]; then
             skip_step "$step_id" "${COMPONENT_LABELS[component_id]}" '用户未选择'
