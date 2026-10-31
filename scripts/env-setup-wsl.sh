@@ -8,7 +8,7 @@ set -euo pipefail
 # Usage:
 #   ./env-setup-wsl.sh  Install
 #
-# Current wizard: Bash and apt system packages.
+# Current wizard: Bash, system packages and development runtimes.
 # Other component installer functions are retained for follow-up tickets.
 #
 # Target:
@@ -60,7 +60,9 @@ SHELL_BLOCK_END='# <<< env-setup-wsl.sh shell <<<'
 SHELL_PATH=""
 ACCOUNT_NAME=""
 ORIGINAL_SHELL=""
-STEP_LABELS=() STEP_STATES=() STEP_REMEDIES=()
+STEP_LABELS=() STEP_STATES=() STEP_REMEDIES=() STEP_CODES=()
+readonly STEP_BREW=4 STEP_LAZYGIT=5 STEP_UV=6 STEP_NODE=7
+readonly STEP_USER_BIN=8 STEP_COMPLETION=9 STEP_LAZY_BREW=10
 
 # ------------------------------------------------------------
 # Output helpers
@@ -250,10 +252,10 @@ remove_managed_block() {
 usage() {
     printf '用法：%s [选项]\n' "$PROGRAM_NAME"
     printf '\n交互式 Bash 环境配置：选择系统基础包，确认后安装并设置默认 shell。\n'
-    printf '当前阶段仅开放 Bash 和系统基础包，其他组件将在后续任务接入。\n'
+    printf '可选：系统基础包、Homebrew/eza、lazygit、uv/Python、nvm/Node.js。\n'
     printf '\n选项：\n  -h, --help       显示帮助（无需交互终端）\n'
     printf '\n安装需要交互终端；NO_COLOR 可禁用颜色，不提供无人值守安装参数。\n'
-    printf '保留版本环境变量：PYTHON_VERSION=3.14、NODE_VERSION=lts/*（后续组件使用）。\n'
+    printf '保留版本环境变量：PYTHON_VERSION=3.14、NODE_VERSION=lts/*。\n'
 }
 
 # 解析命令行选项。
@@ -321,31 +323,26 @@ install_system_packages() {
     fi
 }
 
+# Homebrew's installer prints shell setup instructions; it does not write profiles.
+ensure_homebrew() {
+    if ! command_exists brew; then
+        if [ ! -x "$HOMEBREW_BIN" ]; then
+            local installer
+            installer=$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)
+            NONINTERACTIVE=1 /bin/bash -c "$installer"
+        fi
+        export PATH="${HOMEBREW_BIN%/*}:$PATH"
+    fi
+    local shell_environment
+    shell_environment=$(brew shellenv bash)
+    eval "$shell_environment"
+    brew --version
+}
+
 install_homebrew() {
-    log "Checking Homebrew"
-
-    if [ -x "$HOMEBREW_BIN" ]; then
-        eval "$("$HOMEBREW_BIN" shellenv)"
-        success "Homebrew already installed: $(brew --version | head -n 1)"
-    else
-        NONINTERACTIVE=1 /bin/bash -c \
-            "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-
-        eval "$("$HOMEBREW_BIN" shellenv)"
-        success "Homebrew installed"
-    fi
-
-    append_once 'eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"' "$BASHRC"
-
-    if brew list --formula eza >/dev/null 2>&1; then
-        success "eza already installed: $(eza --version | head -n 1)"
-    else
-        brew install eza
-        success "eza installed with Homebrew"
-    fi
-
-    append_once 'alias ls="eza -al --git --group-directories-first --icons=auto"' "$BASHRC"
-    append_once 'alias la="eza -alG --git --group-directories-first --icons=auto"' "$BASHRC"
+    ensure_homebrew
+    if ! command_exists eza; then brew install eza; fi
+    eza --version
 }
 
 check_git() {
@@ -357,40 +354,43 @@ check_git() {
 }
 
 install_lazygit() {
-    log "Installing lazygit"
-
     if command_exists lazygit; then
-        success "lazygit already installed: $(lazygit --version)"
-    elif apt-cache show lazygit >/dev/null 2>&1 && sudo apt install -y lazygit; then
-        success "lazygit installed with apt"
-    else
-        warn "lazygit could not be installed with apt; falling back to Homebrew"
-        brew install lazygit
-        success "lazygit installed with Homebrew"
+        lazygit --version
+        return
     fi
+    if apt-cache show lazygit >/dev/null 2>&1 && sudo apt install -y lazygit; then
+        lazygit --version
+        return
+    fi
+    # A distinct result requests the separately reported Homebrew fallback step.
+    return 20
+}
+
+install_lazygit_brew() {
+    local shell_environment
+    shell_environment=$(brew shellenv bash)
+    eval "$shell_environment"
+    brew install lazygit
+    lazygit --version
 }
 
 configure_user_bin() {
-    log "Configuring user binary directory"
+    printf '配置用户工具目录：%s%s%s\n' "$BLUE" "$LOCAL_BIN" "$RESET"
 
     mkdir -p "$LOCAL_BIN"
 
     install -m 0755 "$SCRIPT_DIR/env-update.sh" "$LOCAL_BIN/toria-update"
-    success "toria-update installed"
-
-    append_once 'export PATH="$HOME/.local/bin:$PATH"' "$BASHRC"
+    printf 'toria-update 已安装\n'
 
     export PATH="$LOCAL_BIN:$PATH"
-
-    success "$HOME/.local/bin configured"
 }
 
 configure_inputrc() {
-    log "Configuring case-insensitive completion"
+    printf '配置 Bash 大小写不敏感补全\n'
 
     append_once 'set completion-ignore-case on' "$INPUTRC"
 
-    success "$HOME/.inputrc configured"
+    printf 'Bash 补全已配置\n'
 }
 
 install_starship() {
@@ -428,76 +428,46 @@ install_starship() {
 }
 
 install_uv() {
-    log "Installing uv"
-
-    if command_exists uv; then
-        success "uv already installed: $(uv --version)"
-    else
-        curl -LsSf https://astral.sh/uv/install.sh | sh
-
-        export PATH="$LOCAL_BIN:$PATH"
-
-        success "uv installed"
+    if ! command_exists uv; then
+        curl -LsSf https://astral.sh/uv/install.sh |
+            UV_NO_MODIFY_PATH=1 UV_INSTALL_DIR="$LOCAL_BIN" sh
     fi
+    uv --version
+    install_python
 }
 
 install_python() {
-    log "Checking Python ${PYTHON_VERSION}"
+    printf '检查 Python %s\n' "$PYTHON_VERSION"
 
     if uv python find "$PYTHON_VERSION" >/dev/null 2>&1; then
-        success "Python ${PYTHON_VERSION} already installed"
+        printf 'Python %s 已安装\n' "$PYTHON_VERSION"
     else
         uv python install "$PYTHON_VERSION"
-        success "Python ${PYTHON_VERSION} installed"
+        printf 'Python %s 已安装\n' "$PYTHON_VERSION"
     fi
 
+    uv python find "$PYTHON_VERSION"
     uv python list --only-installed
 }
 
 install_nvm() {
-    log "Installing nvm"
-
     export NVM_DIR
-
-    if [ -s "$NVM_DIR/nvm.sh" ]; then
-        success "nvm already installed"
-    else
-        curl -o- \
-            https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.6/install.sh |
-            bash
-
-        success "nvm installed"
+    if [ ! -s "$NVM_DIR/nvm.sh" ]; then
+        curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.6/install.sh |
+            PROFILE=/dev/null NODE_VERSION='' bash
     fi
-
-    append_unless_active_line_contains \
-        'export NVM_DIR="$HOME/.nvm"' \
-        'export NVM_DIR="$HOME/.nvm"' \
-        "$BASHRC"
-
-    append_unless_active_line_contains \
-        '"$NVM_DIR/nvm.sh"' \
-        '[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"  # This loads nvm' \
-        "$BASHRC"
-
-    append_unless_active_line_contains \
-        '"$NVM_DIR/bash_completion"' \
-        '[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"  # This loads nvm bash_completion' \
-        "$BASHRC"
-
-    # 在本脚本里加载 nvm，后面的 install_node 依赖它。
-    # 有意写成 if：放到函数末尾的 `[ -s ... ] && source ...` 在条件不成立时
-    # 会让函数返回 1，set -e 会直接终止脚本。
-    if [ -s "$NVM_DIR/nvm.sh" ]; then
-        # shellcheck disable=SC1090
-        source "$NVM_DIR/nvm.sh"
-    fi
+    [ -s "$NVM_DIR/nvm.sh" ]
+    # shellcheck disable=SC1090
+    source "$NVM_DIR/nvm.sh"
+    nvm --version
+    install_node
 }
 
 install_node() {
     local installed_version
     local version_status
 
-    log "Checking Node.js ${NODE_VERSION}"
+    printf '检查 Node.js %s\n' "$NODE_VERSION"
 
     # nvm 用 N/A 和退出码 3 表示未安装；其他错误仍向调用者传播。
     if installed_version="$(nvm version "$NODE_VERSION")"; then
@@ -510,15 +480,16 @@ install_node() {
     fi
 
     if [ "$installed_version" != "N/A" ]; then
-        success "Node.js already installed: $installed_version"
+        printf 'Node.js 已安装：%s\n' "$installed_version"
     else
         nvm install "$NODE_VERSION" || return "$?"
-        nvm alias default "$NODE_VERSION" || return "$?"
     fi
 
     nvm use "$NODE_VERSION" || return "$?"
-    success "Node.js active: $(node --version)"
-    success "npm available: $(npm --version)"
+    node --version
+    npm --version
+    # Persist the verified request: run_step's active version dies with its subshell.
+    nvm alias default "$NODE_VERSION"
 }
 
 install_codex() {
@@ -544,41 +515,25 @@ install_claude() {
     fi
 }
 
-report_installed_versions() {
-    log "Development environment summary"
-
-    printf '\n'
-
-    printf "Git:       "
-    git --version
-
-    printf "Homebrew:  "
-    brew --version | head -n 1
-
-    printf "lazygit:   "
-    lazygit --version
-
-    printf "Starship:  "
-    starship --version
-
-    printf "uv:        "
-    uv --version
-
-    printf "Python:    "
-    uv run python --version
-
-    printf "Node.js:   "
-    node --version
-
-    printf "npm:       "
-    npm --version
-
-    printf "Codex:     "
-    codex --version
-
-    printf "Claude:    "
-    claude --version
-}
+report_installed_versions() (
+    printf '\n可用工具版本\n'
+    local command shell_environment
+    if [ "${STEP_STATES[STEP_BREW]:-}" = '成功' ] || [ "${STEP_STATES[STEP_LAZY_BREW]:-}" = '成功' ]; then
+        if shell_environment=$(brew shellenv bash); then eval "$shell_environment"; fi
+    fi
+    if [ "${STEP_STATES[STEP_NODE]:-}" = '成功' ]; then
+        # Report the verified request, rather than an unrelated inherited Node.
+        # shellcheck disable=SC1090
+        source "$NVM_DIR/nvm.sh" --no-use || return 1
+        nvm use "$NODE_VERSION" || return 1
+    fi
+    for command in git brew eza lazygit starship uv node npm codex claude; do
+        if command_exists "$command"; then
+            printf '%s%s%s: ' "$CYAN" "$command" "$RESET"
+            "$command" --version || printf '%s版本查询失败%s\n' "$YELLOW" "$RESET"
+        fi
+    done
+)
 
 # ------------------------------------------------------------
 # Orchestration
@@ -594,6 +549,7 @@ run_step() {
     ( set -e; set -o pipefail; "$@" )
     result=$?
     set -e
+    STEP_CODES[$id]="$result"
     STEP_LABELS[$id]="$label"
     STEP_REMEDIES[$id]="$remedy"
     if [ "$result" -eq 0 ]; then
@@ -634,6 +590,18 @@ install_bash() {
     "$shell_path" --version
 }
 
+# Sub-blocks let a successful component update its paths without removing a
+# failed or unselected component's previous initialization. Only staged files enter here.
+begin_component_config() {
+    local name="$1" file="$2"
+    remove_managed_block "# >>> env-setup-wsl.sh $name >>>" "# <<< env-setup-wsl.sh $name <<<" "$file"
+    printf '# >>> env-setup-wsl.sh %s >>>\n' "$name" >>"$file"
+}
+
+end_component_config() {
+    printf '# <<< env-setup-wsl.sh %s <<<\n' "$1" >>"$2"
+}
+
 prepare_shell_config() (
     local target directory filename temporary_file backup_file cleanup_command
     if [ -L "$BASHRC" ] && [ ! -e "$BASHRC" ]; then
@@ -660,8 +628,42 @@ prepare_shell_config() (
         cp -p -- "$target" "$temporary_file"
     fi
     remove_managed_block "$SHELL_BLOCK_START" "$SHELL_BLOCK_END" "$temporary_file"
-    printf '%s\n# 目标 shell：Bash；此块由环境安装向导管理。\n%s\n' \
-        "$SHELL_BLOCK_START" "$SHELL_BLOCK_END" >>"$temporary_file"
+    printf '%s\n# 目标 shell：Bash；此块由环境安装向导管理。\n' "$SHELL_BLOCK_START" >>"$temporary_file"
+    # Keep failed/unselected component blocks; replace only successful components.
+    if [ -f "$target" ]; then
+        awk -v start="$SHELL_BLOCK_START" -v end="$SHELL_BLOCK_END" '
+            $0 == start { inside=1; next }
+            $0 == end { inside=0; next }
+            inside && $0 !~ /^# 目标 shell/ { print }
+        ' "$target" >>"$temporary_file"
+    fi
+    if [ "${STEP_STATES[STEP_USER_BIN]:-}" = '成功' ] || [ "${STEP_STATES[STEP_UV]:-}" = '成功' ]; then
+        begin_component_config paths "$temporary_file"
+        append_once 'export PATH="$HOME/.local/bin:$PATH"' "$temporary_file"
+        end_component_config paths "$temporary_file"
+    fi
+    if [ "${STEP_STATES[STEP_BREW]:-}" = '成功' ] || [ "${STEP_STATES[STEP_LAZY_BREW]:-}" = '成功' ]; then
+        local brew_path brew_line
+        brew_path=$(type -P brew)
+        printf -v brew_line 'eval "$(%q shellenv bash)"' "$brew_path"
+        begin_component_config homebrew "$temporary_file"
+        append_once "$brew_line" "$temporary_file"
+        end_component_config homebrew "$temporary_file"
+    fi
+    if [ "${STEP_STATES[STEP_BREW]:-}" = '成功' ]; then
+        begin_component_config eza "$temporary_file"
+        append_once 'alias ls="eza -al --git --group-directories-first --icons=auto"' "$temporary_file"
+        append_once 'alias la="eza -alG --git --group-directories-first --icons=auto"' "$temporary_file"
+        end_component_config eza "$temporary_file"
+    fi
+    if [ "${STEP_STATES[STEP_NODE]:-}" = '成功' ]; then
+        begin_component_config nvm "$temporary_file"
+        append_unless_active_line_contains 'export NVM_DIR=' 'export NVM_DIR="$HOME/.nvm"' "$temporary_file"
+        append_unless_active_line_contains '"$NVM_DIR/nvm.sh"' '[ ! -s "$NVM_DIR/nvm.sh" ] || . "$NVM_DIR/nvm.sh"' "$temporary_file"
+        append_unless_active_line_contains '"$NVM_DIR/bash_completion"' '[ ! -s "$NVM_DIR/bash_completion" ] || . "$NVM_DIR/bash_completion"' "$temporary_file"
+        end_component_config nvm "$temporary_file"
+    fi
+    printf '%s\n' "$SHELL_BLOCK_END" >>"$temporary_file"
     "$SHELL_PATH" -n "$temporary_file"
     if [ -f "$target" ] && cmp -s "$target" "$temporary_file"; then
         return 0
@@ -725,25 +727,75 @@ init_colors() {
     fi
 }
 
+COMPONENT_LABELS=('系统基础包' 'Homebrew/eza' 'lazygit' 'uv/Python' 'nvm/Node.js')
+EXPLICIT=(1 1 1 1 1)
+SELECTED=(1 1 1 1 1)
+COMPONENT_STEPS=(1 "$STEP_BREW" "$STEP_LAZYGIT" "$STEP_UV" "$STEP_NODE")
+
+needs_system_packages() {
+    case "$1" in
+    1) ! command_exists brew && { ! command_exists curl || ! command_exists git || ! command_exists make; } ;;
+    2) ! command_exists lazygit && ! command_exists brew && { ! command_exists curl || ! command_exists git || ! command_exists make; } ;;
+    3) ! command_exists uv && ! command_exists curl ;;
+    4)
+        if [ ! -s "$NVM_DIR/nvm.sh" ]; then
+            ! command_exists curl || ! command_exists git
+        else
+            [ "$NVM_TARGET_INSTALLED" -eq 0 ] && ! command_exists curl && ! command_exists wget
+        fi ;;
+    *) return 1 ;;
+    esac
+}
+
+resolve_components() {
+    SELECTED=("${EXPLICIT[@]}")
+    local id
+    for id in 1 2 3 4; do
+        if [ "${EXPLICIT[id]}" -eq 1 ] && needs_system_packages "$id"; then SELECTED[0]=1; fi
+    done
+    SYSTEM_SELECTED=${SELECTED[0]}
+}
+
 choose_components() {
-    local key focus=0 mark
-    SYSTEM_SELECTED=1
+    local key focus=0 mark id reason notice=''
+    EXPLICIT=(1 1 1 1 1)
     while :; do
+        resolve_components
         [ -z "$RESET" ] || printf '\033[H\033[2J'
-        printf '\n选择安装组件（当前阶段：Bash / 系统基础包）\n'
-        mark='x'
-        [ "$SYSTEM_SELECTED" -eq 1 ] || mark=' '
-        if [ "$focus" -eq 0 ]; then printf '%s> ' "$FOCUS"; else printf '  '; fi
-        printf '[%s] %s系统基础包%s\n' "$mark" "$CYAN" "$RESET"
-        if [ "$focus" -eq 1 ]; then printf '%s> ' "$FOCUS"; else printf '  '; fi
+        printf '\n选择安装组件（Bash）\n'
+        for id in 0 1 2 3 4; do
+            mark=' '; reason=''
+            if [ "${SELECTED[id]}" -eq 1 ]; then
+                mark=x
+                if [ "${EXPLICIT[id]}" -eq 1 ]; then reason='手动选择'; else reason='自动补齐'; fi
+            fi
+            if [ "$focus" -eq "$id" ]; then printf '%s> ' "$FOCUS"; else printf '  '; fi
+            printf '[%s] %s%s%s %s%s%s\n' "$mark" "$CYAN" "${COMPONENT_LABELS[id]}" "$RESET" "$YELLOW" "$reason" "$RESET"
+        done
+        if [ "$focus" -eq 5 ]; then printf '%s> ' "$FOCUS"; else printf '  '; fi
         printf '继续%s\n' "$RESET"
-        printf '方向键移动 · 空格勾选 · 回车继续 · q 取消\n'
+        printf '%s%s%s\n方向键移动 · 空格勾选 · 回车继续 · q 取消\n' "$YELLOW" "$notice" "$RESET"
         IFS= read -rsn1 key || return 1
         case "$key" in
         $'\e')
             IFS= read -rsn2 -t 0.2 key || :
-            case "$key" in '[A'|'[B') focus=$((1 - focus)) ;; esac ;;
-        ' ') [ "$focus" -ne 0 ] || SYSTEM_SELECTED=$((1 - SYSTEM_SELECTED)) ;;
+            case "$key" in '[A') focus=$(((focus + 5) % 6)) ;; '[B') focus=$(((focus + 1) % 6)) ;; esac ;;
+        ' ')
+            notice=''
+            if [ "$focus" -lt 5 ]; then
+                if [ "${SELECTED[focus]}" -eq 1 ]; then
+                    EXPLICIT[focus]=0
+                    if [ "$focus" -eq 0 ]; then
+                        for id in 1 2 3 4; do
+                            if [ "${SELECTED[id]}" -eq 1 ] && needs_system_packages "$id"; then
+                                EXPLICIT[id]=0
+                                notice+="连带取消 ${COMPONENT_LABELS[id]}；"
+                            fi
+                        done
+                    fi
+                else EXPLICIT[focus]=1
+                fi
+            fi ;;
         '') return 0 ;;
         q|Q) return 1 ;;
         esac
@@ -760,16 +812,35 @@ run_install() {
         printf '错误：无法读取当前账号信息，未执行安装。\n' >&2
         return 1
     fi
+    # Discover existing installations before calculating dependencies; no files are changed.
+    export PATH="$LOCAL_BIN:$PATH"
+    if ! command_exists brew && [ -x "$HOMEBREW_BIN" ]; then
+        export PATH="${HOMEBREW_BIN%/*}:$PATH"
+    fi
+    NVM_TARGET_INSTALLED=0
+    if [ -s "$NVM_DIR/nvm.sh" ] && (
+        # Query without activating the previous default in this planning subprocess.
+        # shellcheck disable=SC1090
+        source "$NVM_DIR/nvm.sh" --no-use || exit "$?"
+        nvm version "$NODE_VERSION"
+    ) >/dev/null 2>&1; then NVM_TARGET_INSTALLED=1; fi
     if ! choose_components; then
         printf '已取消，未执行安装计划。\n'
         return 0
     fi
     printf '\n安装计划\n目标 shell：%sBash%s\n配置路径：%s%s%s\n' "$CYAN" "$RESET" "$BLUE" "$BASHRC" "$RESET"
-    if [ "$SYSTEM_SELECTED" -eq 1 ]; then
-        printf '安装组件：%s系统基础包%s\n' "$CYAN" "$RESET"
-    else
-        printf '系统基础包：用户未选择\n'
+    local component_id
+    for component_id in 0 1 2 3 4; do
+        if [ "${SELECTED[component_id]}" -eq 1 ]; then
+            printf '安装组件：%s%s%s（' "$CYAN" "${COMPONENT_LABELS[component_id]}" "$RESET"
+            if [ "${EXPLICIT[component_id]}" -eq 1 ]; then printf '手动选择'; else printf '%s自动补齐%s' "$YELLOW" "$RESET"; fi
+            printf '）\n'
+        fi
+    done
+    if [ "${SELECTED[2]}" -eq 1 ] && ! command_exists lazygit; then
+        printf 'lazygit：优先 apt；失败时使用 Homebrew（按需安装，依赖 curl/git/make）。\n'
     fi
+    printf '请求版本：Python %s%s%s；Node.js %s%s%s\n' "$CYAN" "$PYTHON_VERSION" "$RESET" "$CYAN" "$NODE_VERSION" "$RESET"
     printf '原默认 shell：%s%s%s\n' "$BLUE" "$ORIGINAL_SHELL" "$RESET"
     if [ "$SYSTEM_SELECTED" -eq 1 ]; then
         printf '系统包：%s' "$CYAN"
@@ -792,7 +863,7 @@ run_install() {
     if ! grep -qi microsoft /proc/version 2>/dev/null; then
         printf '%s警告：此脚本面向 WSL，当前未检测到 WSL 标记。%s\n' "$YELLOW" "$RESET"
     fi
-    STEP_LABELS=() STEP_STATES=() STEP_REMEDIES=()
+    STEP_LABELS=() STEP_STATES=() STEP_REMEDIES=() STEP_CODES=()
     local rerun_command config_command bash_command
     printf -v rerun_command 'bash %q' "$SCRIPT_DIR/$PROGRAM_NAME"
     printf -v config_command 'bash -n %q && %s' "$BASHRC" "$rerun_command"
@@ -813,6 +884,47 @@ run_install() {
     else
         skip_step 1 '系统基础包' '用户未选择'
     fi
+    run_step "$STEP_USER_BIN" '用户工具目录 / toria-update' "$rerun_command" configure_user_bin
+    export PATH="$LOCAL_BIN:$PATH"
+    if ! command_exists brew && [ -x "$HOMEBREW_BIN" ]; then
+        export PATH="${HOMEBREW_BIN%/*}:$PATH"
+    fi
+    local step_id installer dependency_failed runtime_command
+    for component_id in 1 2 3 4; do
+        step_id=${COMPONENT_STEPS[component_id]}
+        case "$component_id" in
+        1) installer=install_homebrew ;;
+        2) installer=install_lazygit ;;
+        3) installer=install_uv ;;
+        4) installer=install_nvm ;;
+        esac
+        if [ "${SELECTED[component_id]}" -eq 0 ]; then
+            skip_step "$step_id" "${COMPONENT_LABELS[component_id]}" '用户未选择'
+            continue
+        fi
+        printf -v runtime_command 'PYTHON_VERSION=%q NODE_VERSION=%q %s' "$PYTHON_VERSION" "$NODE_VERSION" "$rerun_command"
+        dependency_failed=0
+        if needs_system_packages "$component_id" && [ "${STEP_STATES[1]}" != '成功' ]; then dependency_failed=1; fi
+        if [ "$component_id" -eq 3 ] && ! command_exists uv && [ "${STEP_STATES[STEP_USER_BIN]}" != '成功' ]; then dependency_failed=1; fi
+        if [ "$dependency_failed" -eq 1 ]; then
+            skip_step "$step_id" "${COMPONENT_LABELS[component_id]}" '因依赖失败跳过' "$runtime_command"
+        else
+            run_step "$step_id" "${COMPONENT_LABELS[component_id]}" "$runtime_command" "$installer"
+            if [ "$component_id" -eq 2 ] && [ "${STEP_CODES[STEP_LAZYGIT]:-0}" -eq 20 ]; then
+                printf '%s警告：lazygit 的 apt 安装不可用，使用计划中的 Homebrew 后备路径。%s\n' "$YELLOW" "$RESET"
+                run_step "$STEP_LAZY_BREW" 'Homebrew（lazygit 自动依赖）' "$runtime_command" ensure_homebrew
+                if ! command_exists brew && [ -x "$HOMEBREW_BIN" ]; then export PATH="${HOMEBREW_BIN%/*}:$PATH"; fi
+                if [ "${STEP_STATES[STEP_LAZY_BREW]}" = '成功' ]; then
+                    run_step "$STEP_LAZYGIT" 'lazygit' "$runtime_command" install_lazygit_brew
+                else
+                    skip_step "$STEP_LAZYGIT" 'lazygit' '因依赖失败跳过' "$runtime_command"
+                fi
+            fi
+        fi
+    done
+    # Each step runs in a subshell; rediscover installed command paths in the parent.
+    if ! command_exists brew && [ -x "$HOMEBREW_BIN" ]; then export PATH="${HOMEBREW_BIN%/*}:$PATH"; fi
+    run_step "$STEP_COMPLETION" 'Bash 补全' "$rerun_command" configure_inputrc
     if [ "${STEP_STATES[0]}" = '成功' ]; then
         run_step 2 'Bash 配置' "检查路径、权限及托管块，修复后运行：$config_command" prepare_shell_config
     else
@@ -825,6 +937,7 @@ run_install() {
     else
         skip_step 3 '默认 shell 切换' '因依赖失败跳过' "先修复 Bash 安装或配置，再运行：$rerun_command"
     fi
+    report_installed_versions || printf '%s部分版本查询失败，继续显示安装结果。%s\n' "$YELLOW" "$RESET"
     print_results
 }
 
