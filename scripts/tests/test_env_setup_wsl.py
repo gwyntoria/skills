@@ -72,6 +72,14 @@ elif name in ('7zz', '7z'):
     print('7-Zip fixture')
 elif name == 'node':
     print('v' + os.environ.get('FIXTURE_NODE_VERSION', '24'))
+elif name in ('codex', 'claude'):
+    if os.environ.get('FAIL_' + name.upper()): sys.exit(61)
+    print(name + ' fixture version')
+elif name == 'agent-setup':
+    if os.environ.get('SHELL') != '/bin/bash': sys.exit(68)
+    print('fixture: raw agent/skill log', flush=True)
+    print('fixture: active node ' + os.environ.get('FIXTURE_NODE_VERSION', 'none'), flush=True)
+    sys.exit(int(os.environ.get('AGENT_EXIT', '0')))
 elif name in ('brew', 'eza', 'lazygit', 'uv', 'npm', 'git'):
     if name == 'uv' and args[:2] == ['python', 'find'] and os.environ.get('MISSING_PYTHON'):
         state = Path(os.environ['PACKAGE_STATE'] + '.python')
@@ -110,6 +118,16 @@ elif name == 'curl':
     elif 'Homebrew' in url:
         print('test "$NONINTERACTIVE" = 1')
         print('cp "$FIXTURE_BIN/brew-fixture" "$FIXTURE_BIN/brew"')
+    elif 'codex/install.sh' in url or 'claude.ai/install.sh' in url:
+        tool = 'codex' if 'codex' in url else 'claude'
+        if tool == 'codex' and os.environ.get('FAIL_CODEX_DOWNLOAD'): sys.exit(62)
+        if tool == 'codex':
+            print('test "$CODEX_INSTALL_DIR" = "$HOME/.local/bin" || exit 66')
+            print('test "$CODEX_NON_INTERACTIVE" = true || exit 67')
+        print('test "$SHELL" = /bin/bash || echo polluted >> "$HOME/.zshrc"')
+        print('case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) echo polluted >> "$HOME/.profile" ;; esac')
+        print('mkdir -p "$HOME/.local/bin"')
+        print('cp "$FIXTURE_BIN/' + tool + '-fixture" "$HOME/.local/bin/' + tool + '"')
     else: sys.exit(98)
 else:
     print('UNEXPECTED external command: ' + name, file=sys.stderr)
@@ -230,14 +248,142 @@ class WslSetupTests(unittest.TestCase):
         nvm.mkdir(exist_ok=True)
         (nvm / 'nvm.sh').write_text((self.bin / 'nvm-fixture').read_text())
 
+    def ai_fixture(self):
+        self.dev_fixture()
+        for name in ['codex', 'claude', 'codex-fixture', 'claude-fixture']:
+            self.stub(name, STUB)
+        self.stub('npx', STUB)
+        entry = self.root / 'agent-setup.sh'
+        entry.write_text('#!/bin/bash\nexec agent-setup "$@"\n')
+        self.stub('agent-setup', STUB)
+
+    def test_native_clis_install_and_verify_without_touching_other_profiles(self):
+        self.ai_fixture()
+        (self.bin / 'codex').unlink()
+        (self.bin / 'claude').unlink()
+        profile = self.home / '.profile'
+        profile.write_text('# keep profile\n')
+        self.env['SHELL'] = '/bin/zsh'
+        output, code = self.confirm(self.choose_only({5, 6}))
+        self.assertEqual(code, 0, output)
+        self.assertIn(['curl', '-fsSL', 'https://chatgpt.com/codex/install.sh'], self.calls())
+        self.assertIn(['curl', '-fsSL', 'https://claude.ai/install.sh'], self.calls())
+        self.assertIn(['codex', '--version'], self.calls())
+        self.assertIn(['claude', '--version'], self.calls())
+        self.assertIn('[成功] Codex CLI', output)
+        self.assertIn('[成功] Claude Code', output)
+        self.assertEqual(self.zshrc.read_text(), '# untouched zsh\n')
+        self.assertEqual(profile.read_text(), '# keep profile\n')
+        self.assertFalse([call for call in self.calls('npm') if 'install' in call])
+
+    def test_agent_combined_entrypoint_reuses_clis_and_reports_real_exit(self):
+        for status in (0, 73):
+            with self.subTest(status=status):
+                self.ai_fixture()
+                self.env['AGENT_EXIT'] = str(status)
+                output, code = self.confirm(self.choose_only({7}))
+                self.assertEqual(code, int(status != 0), output)
+                self.assertIn(['agent-setup', '--agent', '--skill'], self.calls())
+                for label in ['nvm/Node.js', 'Codex CLI', 'Claude Code']:
+                    self.assertIn('安装组件：' + label + '（自动补齐）', output)
+                self.assertIn('fixture: raw agent/skill log', output)
+                self.assertIn(('[成功]' if status == 0 else '[失败]') + ' Agent/Skill 配置', output)
+                self.assertTrue(self.calls('chsh'))
+                self.assertFalse(self.calls('curl'))
+                if status:
+                    self.assertIn('agent-setup.sh --agent --skill', output)
+                    self.assertIn('失败（退出码 73）', output)
+
+    def test_usable_cli_gets_path_even_when_updater_install_fails(self):
+        self.ai_fixture()
+        local_bin = self.home / '.local/bin'
+        local_bin.mkdir(parents=True)
+        shutil.copy2(self.bin / 'codex', local_bin / 'codex')
+        (self.bin / 'codex').unlink()
+        self.stub('install', 'import sys; sys.exit(64)')
+        output, code = self.confirm(self.choose_only({5}))
+        self.assertEqual(code, 1, output)
+        self.assertIn('[成功] Codex CLI', output)
+        self.assertIn('export PATH="$HOME/.local/bin:$PATH"', self.bashrc.read_text())
+
+    def test_agent_dependency_failures_skip_delegate_and_keep_shell_switch(self):
+        self.ai_fixture()
+        for failure in ['FAIL_CODEX', 'FAIL_CLAUDE', 'NVM_ERROR']:
+            with self.subTest(failure=failure):
+                self.env[failure] = '1'
+                self.log.write_text('')
+                output, code = self.confirm(self.choose_only({7}))
+                self.assertEqual(code, 1, output)
+                self.assertIn('[因依赖失败跳过] Agent/Skill 配置', output)
+                self.assertFalse(self.calls('agent-setup'))
+                self.assertIn('[成功] 默认 shell 切换', output)
+                self.assertIn('手动处理：', output)
+                self.env.pop(failure)
+
+    def test_native_download_failure_continues_independent_cli_and_preserves_config(self):
+        self.ai_fixture()
+        (self.bin / 'codex').unlink()
+        (self.bin / 'claude').unlink()
+        self.env['FAIL_CODEX_DOWNLOAD'] = '1'
+        self.bashrc.write_text('# user settings\n')
+        output, code = self.confirm(self.choose_only({5, 6}))
+        self.assertEqual(code, 1, output)
+        self.assertIn('[失败] Codex CLI', output)
+        self.assertIn('[成功] Claude Code', output)
+        self.assertIn('[成功] 默认 shell 切换', output)
+        self.assertIn('# user settings', self.bashrc.read_text())
+        self.assertEqual(self.zshrc.read_text(), '# untouched zsh\n')
+
+    def test_failed_system_dependency_skips_missing_clis_and_delegate(self):
+        self.ai_fixture()
+        for name in ['curl', 'codex', 'claude']:
+            (self.bin / name).unlink()
+        self.env['FAIL_UPDATE'] = '1'
+        output, code = self.confirm(self.choose_only({7}))
+        self.assertEqual(code, 1, output)
+        for label in ['Codex CLI', 'Claude Code', 'Agent/Skill 配置']:
+            self.assertIn('[因依赖失败跳过] ' + label, output)
+        self.assertIn('[成功] nvm/Node.js', output)
+        self.assertFalse(self.calls('curl'))
+        self.assertFalse(self.calls('agent-setup'))
+        self.assertTrue(self.calls('chsh'))
+
+    def test_agent_uses_requested_node_and_defaults_reuse_all_components(self):
+        self.ai_fixture()
+        self.env['NODE_VERSION'] = '22'
+        term = self.terminal()
+        output, code = self.confirm(term)
+        self.assertEqual(code, 0, output)
+        self.assertIn('fixture: active node 22', output)
+        self.assertIn('[成功] Agent/Skill 配置', output)
+        self.assertFalse(self.calls('curl'))
+
+    def test_agent_deselection_retains_explicit_shared_dependencies(self):
+        self.ai_fixture()
+        term = self.choose_only({4, 5, 7})
+        term.send(b'\x1b[B' * 7 + b' ')
+        term.send(b'\r')
+        term.expect('确认执行')
+        plan = re.sub(r'\x1b\[[0-9;?]*[a-zA-Z]', '', term.output.decode()).split('安装计划')[-1]
+        self.assertIn('安装组件：nvm/Node.js（手动选择）', plan)
+        self.assertIn('安装组件：Codex CLI（手动选择）', plan)
+        self.assertNotIn('安装组件：Claude Code', plan)
+        self.assertNotIn('安装组件：Agent/Skill', plan)
+        term.send(b'n\r')
+        self.assertEqual(term.finish(), 0)
+
     def choose_only(self, chosen):
         term = self.terminal()
-        # Deselect optional rows before the system package row to avoid cascading.
-        for row in range(1, 5):
-            term.send(b'\x1b[B')
-            if row not in chosen: term.send(b' ')
-        term.send(b'\x1b[A' * 4)
-        if 0 not in chosen: term.send(b' ')
+        # Reset in dependency order, then express only the requested selections.
+        term.send(b'\x1b[B' * 7)
+        for row in range(7, 0, -1):
+            term.send(b' \x1b[A')
+        term.send(b' ')
+        focus = 0
+        for row in sorted(chosen):
+            term.send(b'\x1b[B' * (row - focus) + b' ')
+            focus = row
+        term.send(b'\x1b[A' * focus)
         return term
 
     def confirm(self, term):
@@ -247,6 +393,31 @@ class WslSetupTests(unittest.TestCase):
         term.expect('安装结果')
         code = term.finish()
         return re.sub(r'\x1b\[[0-9;?]*[a-zA-Z]', '', term.output.decode()), code
+
+    def test_ai_components_default_selected(self):
+        term = self.terminal()
+        term.expect('[x] Codex CLI')
+        term.expect('[x] Claude Code')
+        term.expect('[x] Agent/Skill 配置')
+        term.send(b'q')
+        self.assertEqual(term.finish(), 0)
+
+    def test_agent_selection_pulls_clis_node_and_cascades_on_dependency_cancel(self):
+        self.dev_fixture()
+        term = self.choose_only(set())
+        term.send(b'\x1b[B' * 7 + b' ')
+        term.expect('[x] nvm/Node.js')
+        term.expect('自动补齐')
+        term.expect('[x] Codex CLI')
+        term.expect('[x] Claude Code')
+        term.send(b'\x1b[A' * 2 + b' ')
+        term.expect('连带取消 Agent/Skill 配置')
+        term.send(b'\r')
+        term.expect('确认执行')
+        plan = term.output.decode().split('安装计划')[-1]
+        self.assertNotIn('安装组件：', plan)
+        term.send(b'n\r')
+        self.assertEqual(term.finish(), 0)
 
     def test_requested_versions_installed_and_activated_with_profiles_untouched(self):
         self.dev_fixture()
@@ -486,6 +657,7 @@ class WslSetupTests(unittest.TestCase):
         term.expect('[x] lazygit')
         term.expect('[x] uv/Python')
         term.expect('[x] nvm/Node.js')
+        term.send(b'\x1b[B' * 7 + b' \x1b[A \x1b[A ')
         term.send(b'\r')
         term.expect('确认执行')
         term.send(b'y\r')
@@ -513,10 +685,7 @@ class WslSetupTests(unittest.TestCase):
         self.assertEqual(term.before, termios.tcgetattr(term.master))
 
     def install(self, selected=True):
-        term = self.terminal()
-        # Existing foundation cases request only system packages.
-        term.send(b'\x1b[B \x1b[B \x1b[B \x1b[B ' + b'\x1b[A' * 4)
-        if not selected: term.send(b' ')
+        term = self.choose_only({0} if selected else set())
         term.send(b'\r')
         term.expect('确认执行')
         term.send(b'y\r')
@@ -700,8 +869,7 @@ class WslSetupTests(unittest.TestCase):
                 self.env['TERM'] = 'xterm-256color'
 
     def test_arrow_navigation_toggle_and_color_roles(self):
-        term = self.terminal()
-        term.send(b'\x1b[B \x1b[B \x1b[B \x1b[B ' + b'\x1b[A' * 4 + b' ')
+        term = self.choose_only(set())
         term.expect('[ ]')
         term.send(b'\r')
         term.expect('确认执行')
@@ -759,7 +927,7 @@ class WslSetupTests(unittest.TestCase):
         self.env['NO_COLOR'] = '1'
         term = self.terminal()
         term.expect('> [x] 系统基础包')
-        term.send(b'\x1b[B' * 5)
+        term.send(b'\x1b[B' * 8)
         term.expect('> 继续')
         term.send(b'q')
         self.assertEqual(term.finish(), 0)

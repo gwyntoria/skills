@@ -109,7 +109,7 @@ Project 规则安装到启动命令时的当前目录，包括 Git 子目录和�
 | 脚本 | 运行环境 | 说明 |
 | --- | --- | --- |
 | [`agent-setup.sh`](scripts/agent-setup.sh) | macOS / Linux | 统一交互安装全局或项目 rules、Agent 配置和第三方 skills；支持安装本地命令、非交互安装及 `--list` 候选清单 |
-| [`env-setup-wsl.sh`](scripts/env-setup-wsl.sh) | WSL Ubuntu | 通过中文 TUI 选择基础包与开发环境、准备 Bash 配置并切换默认 shell |
+| [`env-setup-wsl.sh`](scripts/env-setup-wsl.sh) | WSL Ubuntu | 通过中文 TUI 选择基础包、开发环境与 AI 工具，准备 Bash 配置并切换默认 shell |
 | [`env-update.sh`](scripts/env-update.sh) | macOS / Linux | 依次更新 skills、Codex、Claude Code 和 Homebrew，末尾汇总每个任务的结果 |
 | [`statusline.sh`](scripts/statusline.sh) | Claude Code | 状态栏脚本，显示模型与思考等级、目录与 Git 分支、上下文余量、输入输出 token、速率限制和版本 |
 | [`list-skills.sh`](scripts/list-skills.sh) | 仓库维护 | 列出仓库内全部 skill 路径，并检查是否有重名 |
@@ -122,10 +122,17 @@ Project 规则安装到启动命令时的当前目录，包括 Git 子目录和�
 bash scripts/env-setup-wsl.sh
 ```
 
-当前 Bash 向导提供系统基础包、Homebrew/eza、lazygit、uv/Python、nvm/Node.js，默认全选。
+当前 Bash 向导提供系统基础包、Homebrew/eza、lazygit、uv/Python、nvm/Node.js、Codex CLI、Claude Code、Agent/Skill 配置，默认全选。
 方向键移动、空格勾选、回车进入计划确认，`q` 取消；`>` 标记当前焦点。列表与计划区分手动选择和自动补齐：缺失的安装依赖会自动选中系统基础包，共享依赖保留到所有请求都取消；取消依赖会连带取消需要它的组件并显示提示。已有程序按需复用，未选中的工具不会卸载。
 确认前会显示配置路径、原默认 shell、完整包清单与版本。确认后仅补装缺失包，准备 Bash 启动配置，并在流程末尾将 Bash 设置为账号默认 shell。
-AI 工具、Zsh、插件与 Starship 的选择将在后续任务接入，已有安装函数保留。
+Zsh、插件与 Starship 的选择将在后续任务接入，已有安装函数保留。
+
+选择 Agent/Skill 会自动补齐两个 CLI 和 nvm/Node.js；取消其中一个依赖会连带取消 Agent/Skill，移除 Agent/Skill 后仍保留手动选择的依赖。
+Codex CLI 和 Claude Code 优先复用已有命令，缺失时使用各自的[原生 Codex 安装器](https://chatgpt.com/codex/install.sh)和[原生 Claude 安装器](https://claude.ai/install.sh)，安装或复用后执行版本检查。
+原生安装进程使用目标 `SHELL=/bin/bash`，提前将 `~/.local/bin` 加入 PATH，并将 Codex 安装目录固定到该路径；启动 PATH 由向导托管，避免沿用旧默认 shell 的配置目标。
+
+Agent/Skill 在所选 Node.js 环境中执行 `bash scripts/agent-setup.sh --agent --skill`，沿用全局规则、Claude 状态栏以及 Waza、Kami、Matt Pocock、HumanLayer、Gwyntoria、Distilly 六个技能源的发现机制，技能名称和数量由组合入口动态读取。
+组合入口的原始日志直接显示，真实退出码决定成功或失败；CLI、Node.js 或下载依赖失败时跳过 Agent/Skill，汇总给出重试命令。CLI 或技能失败仍继续独立步骤和符合条件的默认 shell 切换。
 
 Homebrew/eza 保留 shellenv 和 `ls`、`la` 别名。lazygit 优先复用，其次尝试 apt，失败则使用计划列出的 Homebrew 后备路径；按需安装的 Homebrew 依赖单独报告，不会因此安装 eza 或添加文件列表别名。
 uv/Python 默认使用 Python `3.14`，nvm/Node.js 默认使用 `lts/*`，可以通过环境变量指定请求版本。Node.js 安装或复用后验证可用，再设为 nvm 默认版本，供新终端加载：
@@ -149,7 +156,7 @@ PYTHON_VERSION=3.13 NODE_VERSION=22 bash scripts/env-setup-wsl.sh
 使用 `NO_COLOR=1 bash scripts/env-setup-wsl.sh` 禁用颜色；没有颜色能力的终端也会使用文字状态。
 `bash scripts/env-setup-wsl.sh --help` 无需交互终端，安装不提供无人值守参数。
 
-隔离回归测试使用临时 HOME、PATH 命令替身和 PTY，并将脚本副本中的固定 Homebrew 外部路径替换为临时目录，避免调用本机 Homebrew。测试不安装软件或更改当前账号：
+隔离回归测试使用临时 HOME、PATH 命令替身和 PTY，并将脚本副本中的固定 Homebrew 外部路径替换为临时目录，避免调用本机 Homebrew。Agent/Skill 组合入口也使用替身，核对传参、原始日志和退出结果，不安装远程技能。测试不安装软件或更改当前账号：
 
 ```bash
 python3 -m unittest discover -s scripts/tests -p 'test_env_setup_wsl.py'

@@ -8,7 +8,7 @@ set -euo pipefail
 # Usage:
 #   ./env-setup-wsl.sh  Install
 #
-# Current wizard: Bash, system packages and development runtimes.
+# Current wizard: Bash, system packages, development runtimes and AI tools.
 # Other component installer functions are retained for follow-up tickets.
 #
 # Target:
@@ -63,6 +63,7 @@ ORIGINAL_SHELL=""
 STEP_LABELS=() STEP_STATES=() STEP_REMEDIES=() STEP_CODES=()
 readonly STEP_BREW=4 STEP_LAZYGIT=5 STEP_UV=6 STEP_NODE=7
 readonly STEP_USER_BIN=8 STEP_COMPLETION=9 STEP_LAZY_BREW=10
+readonly STEP_CODEX=11 STEP_CLAUDE=12 STEP_AGENT=13
 
 # ------------------------------------------------------------
 # Output helpers
@@ -493,26 +494,29 @@ install_node() {
 }
 
 install_codex() {
-    log "Checking Codex CLI"
-
-    if command_exists codex; then
-        success "Codex already installed"
-    else
-        curl -fsSL https://chatgpt.com/codex/install.sh | sh
-        success "Codex installed"
+    if ! command_exists codex; then
+        curl -fsSL https://chatgpt.com/codex/install.sh |
+            SHELL=/bin/bash CODEX_INSTALL_DIR="$LOCAL_BIN" CODEX_NON_INTERACTIVE=true sh
     fi
+    codex --version
 }
 
 install_claude() {
-    log "Checking Claude Code"
-
-    if command_exists claude; then
-        success "Claude Code already installed"
-    else
-        curl -fsSL https://claude.ai/install.sh | bash
-        command_exists claude
-        success "Claude Code installed"
+    if ! command_exists claude; then
+        curl -fsSL https://claude.ai/install.sh | SHELL=/bin/bash bash
     fi
+    claude --version
+}
+
+configure_agents() {
+    # run_step owns this subshell; activate the verified Node for the delegated entrypoint.
+    # shellcheck disable=SC1090
+    source "$NVM_DIR/nvm.sh" --no-use
+    nvm use "$NODE_VERSION"
+    command_exists node
+    command_exists npm
+    command_exists npx
+    SHELL=/bin/bash bash "$SCRIPT_DIR/agent-setup.sh" --agent --skill
 }
 
 report_installed_versions() (
@@ -637,7 +641,8 @@ prepare_shell_config() (
             inside && $0 !~ /^# 目标 shell/ { print }
         ' "$target" >>"$temporary_file"
     fi
-    if [ "${STEP_STATES[STEP_USER_BIN]:-}" = '成功' ] || [ "${STEP_STATES[STEP_UV]:-}" = '成功' ]; then
+    if [ "${STEP_STATES[STEP_USER_BIN]:-}" = '成功' ] || [ "${STEP_STATES[STEP_UV]:-}" = '成功' ] ||
+        [ "${STEP_STATES[STEP_CODEX]:-}" = '成功' ] || [ "${STEP_STATES[STEP_CLAUDE]:-}" = '成功' ]; then
         begin_component_config paths "$temporary_file"
         append_once 'export PATH="$HOME/.local/bin:$PATH"' "$temporary_file"
         end_component_config paths "$temporary_file"
@@ -727,10 +732,10 @@ init_colors() {
     fi
 }
 
-COMPONENT_LABELS=('系统基础包' 'Homebrew/eza' 'lazygit' 'uv/Python' 'nvm/Node.js')
-EXPLICIT=(1 1 1 1 1)
-SELECTED=(1 1 1 1 1)
-COMPONENT_STEPS=(1 "$STEP_BREW" "$STEP_LAZYGIT" "$STEP_UV" "$STEP_NODE")
+COMPONENT_LABELS=('系统基础包' 'Homebrew/eza' 'lazygit' 'uv/Python' 'nvm/Node.js' 'Codex CLI' 'Claude Code' 'Agent/Skill 配置')
+EXPLICIT=(1 1 1 1 1 1 1 1)
+SELECTED=(1 1 1 1 1 1 1 1)
+COMPONENT_STEPS=(1 "$STEP_BREW" "$STEP_LAZYGIT" "$STEP_UV" "$STEP_NODE" "$STEP_CODEX" "$STEP_CLAUDE" "$STEP_AGENT")
 
 needs_system_packages() {
     case "$1" in
@@ -743,6 +748,9 @@ needs_system_packages() {
         else
             [ "$NVM_TARGET_INSTALLED" -eq 0 ] && ! command_exists curl && ! command_exists wget
         fi ;;
+    5) ! command_exists codex && ! command_exists curl ;;
+    6) ! command_exists claude && ! command_exists curl ;;
+    7) ! command_exists curl ;;
     *) return 1 ;;
     esac
 }
@@ -750,20 +758,23 @@ needs_system_packages() {
 resolve_components() {
     SELECTED=("${EXPLICIT[@]}")
     local id
-    for id in 1 2 3 4; do
-        if [ "${EXPLICIT[id]}" -eq 1 ] && needs_system_packages "$id"; then SELECTED[0]=1; fi
+    if [ "${SELECTED[7]}" -eq 1 ]; then
+        SELECTED[4]=1 SELECTED[5]=1 SELECTED[6]=1
+    fi
+    for id in 1 2 3 4 5 6 7; do
+        if [ "${SELECTED[id]}" -eq 1 ] && needs_system_packages "$id"; then SELECTED[0]=1; fi
     done
     SYSTEM_SELECTED=${SELECTED[0]}
 }
 
 choose_components() {
     local key focus=0 mark id reason notice=''
-    EXPLICIT=(1 1 1 1 1)
+    EXPLICIT=(1 1 1 1 1 1 1 1)
     while :; do
         resolve_components
         [ -z "$RESET" ] || printf '\033[H\033[2J'
         printf '\n选择安装组件（Bash）\n'
-        for id in 0 1 2 3 4; do
+        for id in "${!COMPONENT_LABELS[@]}"; do
             mark=' '; reason=''
             if [ "${SELECTED[id]}" -eq 1 ]; then
                 mark=x
@@ -772,24 +783,32 @@ choose_components() {
             if [ "$focus" -eq "$id" ]; then printf '%s> ' "$FOCUS"; else printf '  '; fi
             printf '[%s] %s%s%s %s%s%s\n' "$mark" "$CYAN" "${COMPONENT_LABELS[id]}" "$RESET" "$YELLOW" "$reason" "$RESET"
         done
-        if [ "$focus" -eq 5 ]; then printf '%s> ' "$FOCUS"; else printf '  '; fi
+        if [ "$focus" -eq "${#COMPONENT_LABELS[@]}" ]; then printf '%s> ' "$FOCUS"; else printf '  '; fi
         printf '继续%s\n' "$RESET"
         printf '%s%s%s\n方向键移动 · 空格勾选 · 回车继续 · q 取消\n' "$YELLOW" "$notice" "$RESET"
         IFS= read -rsn1 key || return 1
         case "$key" in
         $'\e')
             IFS= read -rsn2 -t 0.2 key || :
-            case "$key" in '[A') focus=$(((focus + 5) % 6)) ;; '[B') focus=$(((focus + 1) % 6)) ;; esac ;;
+            case "$key" in '[A') focus=$(((focus + ${#COMPONENT_LABELS[@]}) % (${#COMPONENT_LABELS[@]} + 1))) ;; '[B') focus=$(((focus + 1) % (${#COMPONENT_LABELS[@]} + 1))) ;; esac ;;
         ' ')
             notice=''
-            if [ "$focus" -lt 5 ]; then
+            if [ "$focus" -lt "${#COMPONENT_LABELS[@]}" ]; then
                 if [ "${SELECTED[focus]}" -eq 1 ]; then
                     EXPLICIT[focus]=0
+                    if [ "$focus" -ge 4 ] && [ "$focus" -le 6 ] && [ "${SELECTED[7]}" -eq 1 ]; then
+                        EXPLICIT[7]=0
+                        notice+='连带取消 Agent/Skill 配置；'
+                    fi
                     if [ "$focus" -eq 0 ]; then
-                        for id in 1 2 3 4; do
+                        for id in 1 2 3 4 5 6 7; do
                             if [ "${SELECTED[id]}" -eq 1 ] && needs_system_packages "$id"; then
                                 EXPLICIT[id]=0
                                 notice+="连带取消 ${COMPONENT_LABELS[id]}；"
+                                if [ "$id" -ge 4 ] && [ "$id" -le 6 ] && [ "${SELECTED[7]}" -eq 1 ] && [ "${EXPLICIT[7]}" -eq 1 ]; then
+                                    EXPLICIT[7]=0
+                                    notice+='连带取消 Agent/Skill 配置；'
+                                fi
                             fi
                         done
                     fi
@@ -830,7 +849,7 @@ run_install() {
     fi
     printf '\n安装计划\n目标 shell：%sBash%s\n配置路径：%s%s%s\n' "$CYAN" "$RESET" "$BLUE" "$BASHRC" "$RESET"
     local component_id
-    for component_id in 0 1 2 3 4; do
+    for component_id in "${!COMPONENT_LABELS[@]}"; do
         if [ "${SELECTED[component_id]}" -eq 1 ]; then
             printf '安装组件：%s%s%s（' "$CYAN" "${COMPONENT_LABELS[component_id]}" "$RESET"
             if [ "${EXPLICIT[component_id]}" -eq 1 ]; then printf '手动选择'; else printf '%s自动补齐%s' "$YELLOW" "$RESET"; fi
@@ -839,6 +858,11 @@ run_install() {
     done
     if [ "${SELECTED[2]}" -eq 1 ] && ! command_exists lazygit; then
         printf 'lazygit：优先 apt；失败时使用 Homebrew（按需安装，依赖 curl/git/make）。\n'
+    fi
+    if [ "${SELECTED[7]}" -eq 1 ]; then
+        printf 'Agent/Skill：复用组合入口 %s' "$MAGENTA"
+        printf 'bash %q --agent --skill' "$SCRIPT_DIR/agent-setup.sh"
+        printf '%s（全局规则、Claude 状态栏和动态发现的技能）。\n' "$RESET"
     fi
     printf '请求版本：Python %s%s%s；Node.js %s%s%s\n' "$CYAN" "$PYTHON_VERSION" "$RESET" "$CYAN" "$NODE_VERSION" "$RESET"
     printf '原默认 shell：%s%s%s\n' "$BLUE" "$ORIGINAL_SHELL" "$RESET"
@@ -890,13 +914,15 @@ run_install() {
         export PATH="${HOMEBREW_BIN%/*}:$PATH"
     fi
     local step_id installer dependency_failed runtime_command
-    for component_id in 1 2 3 4; do
+    for component_id in 1 2 3 4 5 6; do
         step_id=${COMPONENT_STEPS[component_id]}
         case "$component_id" in
         1) installer=install_homebrew ;;
         2) installer=install_lazygit ;;
         3) installer=install_uv ;;
         4) installer=install_nvm ;;
+        5) installer=install_codex ;;
+        6) installer=install_claude ;;
         esac
         if [ "${SELECTED[component_id]}" -eq 0 ]; then
             skip_step "$step_id" "${COMPONENT_LABELS[component_id]}" '用户未选择'
@@ -922,6 +948,18 @@ run_install() {
             fi
         fi
     done
+    local agent_command
+    printf -v agent_command 'source %q && nvm use %q && bash %q --agent --skill' \
+        "$NVM_DIR/nvm.sh" "$NODE_VERSION" "$SCRIPT_DIR/agent-setup.sh"
+    if [ "${SELECTED[7]}" -eq 0 ]; then
+        skip_step "$STEP_AGENT" 'Agent/Skill 配置' '用户未选择'
+    elif [ "${STEP_STATES[STEP_NODE]}" != '成功' ] || [ "${STEP_STATES[STEP_CODEX]}" != '成功' ] ||
+        [ "${STEP_STATES[STEP_CLAUDE]}" != '成功' ] ||
+        { needs_system_packages 7 && [ "${STEP_STATES[1]}" != '成功' ]; }; then
+        skip_step "$STEP_AGENT" 'Agent/Skill 配置' '因依赖失败跳过' "$runtime_command"
+    else
+        run_step "$STEP_AGENT" 'Agent/Skill 配置' "$agent_command" configure_agents
+    fi
     # Each step runs in a subshell; rediscover installed command paths in the parent.
     if ! command_exists brew && [ -x "$HOMEBREW_BIN" ]; then export PATH="${HOMEBREW_BIN%/*}:$PATH"; fi
     run_step "$STEP_COMPLETION" 'Bash 补全' "$rerun_command" configure_inputrc
