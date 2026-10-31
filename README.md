@@ -109,10 +109,44 @@ Project 规则安装到启动命令时的当前目录，包括 Git 子目录和�
 | 脚本 | 运行环境 | 说明 |
 | --- | --- | --- |
 | [`agent-setup.sh`](scripts/agent-setup.sh) | macOS / Linux | 统一交互安装全局或项目 rules、Agent 配置和第三方 skills；支持安装本地命令、非交互安装及 `--list` 候选清单 |
-| [`env-setup-wsl.sh`](scripts/env-setup-wsl.sh) | WSL Ubuntu | 装配 Homebrew、Git、lazygit、Starship、uv、Python、nvm、Node.js 和 Codex CLI |
+| [`env-setup-wsl.sh`](scripts/env-setup-wsl.sh) | WSL Ubuntu | 通过中文 TUI 选择系统基础包、准备 Bash 配置并切换默认 shell |
 | [`env-update.sh`](scripts/env-update.sh) | macOS / Linux | 依次更新 skills、Codex、Claude Code 和 Homebrew，末尾汇总每个任务的结果 |
 | [`statusline.sh`](scripts/statusline.sh) | Claude Code | 状态栏脚本，显示模型与思考等级、目录与 Git 分支、上下文余量、输入输出 token、速率限制和版本 |
 | [`list-skills.sh`](scripts/list-skills.sh) | 仓库维护 | 列出仓库内全部 skill 路径，并检查是否有重名 |
+
+### WSL 环境配置
+
+在 WSL Ubuntu 的交互终端中运行：
+
+```bash
+bash scripts/env-setup-wsl.sh
+```
+
+当前向导开放 Bash 和系统基础包。方向键移动、空格勾选、回车进入计划确认，`q` 取消；基础包默认勾选，`>` 标记当前焦点。
+确认前会显示配置路径、原默认 shell 和完整包清单。确认后仅补装缺失包，准备 Bash 启动配置，并在流程末尾将 Bash 设置为账号默认 shell。
+Homebrew、开发运行环境、AI 工具、Zsh、插件与 Starship 的选择将在后续任务接入，已有安装函数保留。
+
+基础包新增 `shellcheck` 和 `7zip`，保留 `unzip`；不再安装 `tree`、`gcc-arm-none-eabi` 和 `zip`，已有软件不会被卸载。
+安装器会检查目标软件源是否提供 `7zip`，并检查 `7zz` 或 `7z` 命令是否可用。
+
+步骤失败后继续独立步骤，依赖失败则跳过，末尾显示各项结果及手动处理命令；有失败时退出码为 `1`。
+只有 Bash 和启动配置准备成功才切换默认 shell，切换后回读账号记录并提示重新打开终端。其他组件失败不阻止符合条件的切换。
+
+只修改 Bash 启动配置，保留 Zsh 配置、配置符号链接和文件权限。已有文件有实际变化时，先在目标文件所在目录保存备份并打印恢复命令；异常托管块、配置语法错误或与 Zsh 共用同一配置文件时，会阻止修改和切换。
+汇总保留原默认 shell 及恢复命令；软件包安装不提供全局回滚。
+
+使用 `NO_COLOR=1 bash scripts/env-setup-wsl.sh` 禁用颜色；没有颜色能力的终端也会使用文字状态。
+`bash scripts/env-setup-wsl.sh --help` 无需交互终端，安装不提供无人值守参数。
+
+隔离回归测试只使用临时 HOME、命令替身和 PTY，不安装软件或更改当前账号：
+
+```bash
+python3 -m unittest discover -s scripts/tests -p 'test_env_setup_wsl.py'
+bash -n scripts/env-setup-wsl.sh
+shellcheck -S warning scripts/env-setup-wsl.sh
+```
+
+真实 WSL 安装、新终端启动和默认 shell 生效情况需要另外验收。
 
 ## Skills 安装
 
