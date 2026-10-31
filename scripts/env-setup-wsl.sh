@@ -60,13 +60,14 @@ SHELL_BLOCK_END='# <<< env-setup-wsl.sh shell <<<'
 SHELL_NAME=bash
 SHELL_LABEL=Bash
 OMZ_DIR=""
+OMZ_CUSTOM=""
 SHELL_PATH=""
 ACCOUNT_NAME=""
 ORIGINAL_SHELL=""
 STEP_LABELS=() STEP_STATES=() STEP_REMEDIES=() STEP_CODES=()
 readonly STEP_BREW=4 STEP_LAZYGIT=5 STEP_UV=6 STEP_NODE=7
 readonly STEP_USER_BIN=8 STEP_COMPLETION=9 STEP_LAZY_BREW=10
-readonly STEP_CODEX=11 STEP_CLAUDE=12 STEP_AGENT=13 STEP_OMZ=14
+readonly STEP_CODEX=11 STEP_CLAUDE=12 STEP_AGENT=13 STEP_OMZ=14 STEP_FZF=15 STEP_PLUGIN_BASE=16
 
 # ------------------------------------------------------------
 # Output helpers
@@ -610,11 +611,66 @@ install_oh_my_zsh() {
     test -s "$OMZ_DIR/oh-my-zsh.sh"
 }
 
-discover_oh_my_zsh() {
-    OMZ_DIR="${ZSH:-$HOME/.oh-my-zsh}"
-    [ -f "$SHELL_RC" ] || return 0
+install_fzf() {
+    if ! command_exists fzf; then
+        sudo apt update
+        sudo apt install -y fzf
+    fi
+    fzf --version
+}
+
+install_plugin() (
+    local name="$1" temporary_file
+    if plugin_file "$name" >/dev/null; then return 0; fi
+    if ! command_exists git; then
+        sudo apt update
+        sudo apt install -y git
+    fi
+    mkdir -p "$OMZ_CUSTOM/plugins"
+    case "$name" in
+    zsh-autosuggestions|zsh-syntax-highlighting)
+        git clone --depth=1 "https://github.com/zsh-users/$name.git" "$OMZ_CUSTOM/plugins/$name" ;;
+    *)
+        # Recover a missing bundled plugin without replacing an existing framework.
+        temporary_file=$(mktemp -d)
+        trap 'rm -rf -- "$temporary_file"' EXIT
+        git clone --depth=1 https://github.com/ohmyzsh/ohmyzsh.git "$temporary_file/framework"
+        cp -R -- "$temporary_file/framework/plugins/$name" "$OMZ_CUSTOM/plugins/$name" ;;
+    esac
+    plugin_file "$name" >/dev/null
+)
+
+install_plugins() {
+    local rerun_command="$1" runtime_command="$2"
+    local id step label
+    if [ "${PLUGIN_SELECTED[PLUGIN_FZF]}" -eq 0 ]; then
+        skip_step "$STEP_FZF" 'fzf 程序' '用户未选择'
+    elif [ "${STEP_STATES[STEP_OMZ]}" != '成功' ]; then
+        skip_step "$STEP_FZF" 'fzf 程序' '因依赖失败跳过' "$rerun_command"
+    else
+        run_step "$STEP_FZF" 'fzf 程序（自动依赖）' 'sudo apt update && sudo apt install -y fzf && fzf --version' install_fzf
+    fi
+    for id in "${!PLUGIN_NAMES[@]}"; do
+        step=$((STEP_PLUGIN_BASE + id))
+        label="Zsh 插件 ${PLUGIN_NAMES[id]}"
+        if [ "${PLUGIN_SELECTED[id]}" -eq 0 ]; then
+            skip_step "$step" "$label" '用户未选择'
+        elif [ "${STEP_STATES[STEP_OMZ]}" != '成功' ] ||
+            { [ "$id" -eq "$PLUGIN_FZF" ] && [ "${STEP_STATES[STEP_FZF]}" != '成功' ]; } ||
+            { [ "$id" -eq "$PLUGIN_NVM" ] && [ "${STEP_STATES[STEP_NODE]}" != '成功' ]; }; then
+            skip_step "$step" "$label" '因依赖失败跳过' "$runtime_command"
+        else
+            run_step "$step" "$label" "$rerun_command" install_plugin "${PLUGIN_NAMES[id]}"
+        fi
+    done
+}
+
+discover_zsh_path() {
+    local variable="$1"
+    local result="$2"
+    [ -f "$SHELL_RC" ] || { printf -v "$variable" '%s' "$result"; return 0; }
     local line value
-    local assignment='^[[:space:]]*(export[[:space:]]+)?ZSH=(.*)$'
+    local assignment="^[[:space:]]*(export[[:space:]]+)?$variable=(.*)$"
     local double_quoted='^"([^"]*)"[[:space:]]*(#.*)?$'
     local single_quoted="^'([^']*)'[[:space:]]*(#.*)?$"
     local unquoted='^([^[:space:];]+)[[:space:]]*(#.*)?$'
@@ -629,15 +685,61 @@ discover_oh_my_zsh() {
             case "$value" in
             '$HOME/'*) value="$HOME/${value#\$HOME/}" ;;
             '${HOME}/'*) value="$HOME/${value#\$\{HOME\}/}" ;;
+            '$ZSH/'*) value="$OMZ_DIR/${value#\$ZSH/}" ;;
+            '${ZSH}/'*) value="$OMZ_DIR/${value#\$\{ZSH\}/}" ;;
             \~/*) value="$HOME/${value:2}" ;;
             esac
         else
             continue
         fi
         if [[ "$value" == /* && "$value" != *'$'* && "$value" != *'`'* ]]; then
-            OMZ_DIR="$value"
+            result="$value"
         fi
     done <"$SHELL_RC"
+    printf -v "$variable" '%s' "$result"
+}
+
+readonly PLUGIN_FZF=3 PLUGIN_NVM=4 PLUGIN_HIGHLIGHT=6
+PLUGIN_NAMES=(git copypath z fzf nvm zsh-autosuggestions zsh-syntax-highlighting extract)
+PLUGIN_SELECTED=(1 1 1 1 1 1 1 1)
+
+plugin_file() {
+    local name="$1" directory
+    for directory in "$OMZ_CUSTOM/plugins/$name" "$OMZ_DIR/plugins/$name"; do
+        if [ -f "$directory/$name.plugin.zsh" ] && [ -r "$directory/$name.plugin.zsh" ]; then
+            printf '%s\n' "$directory/$name.plugin.zsh"; return 0
+        elif [ -f "$directory/_$name" ] && [ -r "$directory/_$name" ]; then
+            printf '%s\n' "$directory/_$name"; return 0
+        fi
+    done
+    return 1
+}
+
+choose_plugins() {
+    local focus=0 id key mark state color
+    while :; do
+        [ -z "$RESET" ] || printf '\033[H\033[2J'
+        printf '\n选择 Zsh 插件\n'
+        for id in "${!PLUGIN_NAMES[@]}"; do
+            mark=' '; [ "${PLUGIN_SELECTED[id]}" -eq 0 ] || mark=x
+            state=未安装 color="$YELLOW"
+            if plugin_file "${PLUGIN_NAMES[id]}" >/dev/null; then state=已安装 color="$GREEN"; fi
+            if [ "$focus" -eq "$id" ]; then printf '%s> ' "$FOCUS"; else printf '  '; fi
+            printf '[%s] %s%s%s %s%s%s\n' "$mark" "$CYAN" "${PLUGIN_NAMES[id]}" "$RESET" "$color" "$state" "$RESET"
+        done
+        if [ "$focus" -eq 8 ]; then printf '%s> ' "$FOCUS"; else printf '  '; fi
+        printf '继续%s\n方向键移动 · 空格勾选 · 回车继续 · b 返回组件 · q 取消\n' "$RESET"
+        IFS= read -rsn1 key || return 1
+        case "$key" in
+        $'\e')
+            IFS= read -rsn2 -t 0.2 key || :
+            case "$key" in '[A') focus=$(((focus + 8) % 9)) ;; '[B') focus=$(((focus + 1) % 9)) ;; esac ;;
+        ' ') if [ "$focus" -lt 8 ]; then PLUGIN_SELECTED[focus]=$((1 - PLUGIN_SELECTED[focus])); fi ;;
+        '') resolve_components; return 0 ;;
+        b|B) return 2 ;;
+        q|Q) return 1 ;;
+        esac
+    done
 }
 
 choose_shell() {
@@ -659,7 +761,12 @@ choose_shell() {
         '')
             if [ "$focus" -eq 0 ]; then SHELL_NAME=bash SHELL_LABEL=Bash; else SHELL_NAME=zsh SHELL_LABEL=Zsh; fi
             SHELL_RC="$HOME/.$SHELL_NAME"rc
-            if [ "$SHELL_NAME" = zsh ]; then discover_oh_my_zsh; fi
+            if [ "$SHELL_NAME" = zsh ]; then
+                discover_zsh_path ZSH "${ZSH:-$HOME/.oh-my-zsh}"
+                OMZ_DIR="$ZSH"
+                discover_zsh_path ZSH_CUSTOM "${ZSH_CUSTOM:-$OMZ_DIR/custom}"
+                OMZ_CUSTOM="$ZSH_CUSTOM"
+            fi
             return 0 ;;
         q|Q) return 1 ;;
         esac
@@ -676,6 +783,106 @@ begin_component_config() {
 
 end_component_config() {
     printf '# <<< env-setup-wsl.sh %s <<<\n' "$1" >>"$2"
+}
+
+prepare_plugin_config() {
+    local file="$1" block staging id name step cleanup_command
+    block=$(mktemp "${file}.plugins.XXXXXX")
+    printf -v cleanup_command 'rm -f -- %q %q' "$file" "$block"
+    # shellcheck disable=SC2064
+    trap "$cleanup_command" EXIT
+    staging=$(mktemp "${file}.stage.XXXXXX")
+    # The parent configuration transaction owns every temporary file.
+    printf -v cleanup_command 'rm -f -- %q %q %q' "$file" "$block" "$staging"
+    # shellcheck disable=SC2064
+    trap "$cleanup_command" EXIT
+    awk '
+        $0 == "# >>> env-setup-wsl.sh plugins >>>" { inside=1; next }
+        $0 == "# <<< env-setup-wsl.sh plugins <<<" { inside=0; next }
+        inside { print }
+    ' "$file" >"$block"
+    remove_managed_block '# >>> env-setup-wsl.sh plugins >>>' '# <<< env-setup-wsl.sh plugins <<<' "$file"
+    remove_managed_block '# >>> env-setup-wsl.sh plugin-paths >>>' '# <<< env-setup-wsl.sh plugin-paths <<<' "$block"
+    printf '# >>> env-setup-wsl.sh plugin-paths >>>\ntypeset -a plugins\nexport ZSH_CUSTOM=%q\n# <<< env-setup-wsl.sh plugin-paths <<<\n' "$OMZ_CUSTOM" >"$staging"
+    cat "$block" >>"$staging"
+    cat "$staging" >"$block"
+    # Zsh syntax highlighting must load after the other selected plugins.
+    for id in 0 1 2 "$PLUGIN_FZF" "$PLUGIN_NVM" 5 7 "$PLUGIN_HIGHLIGHT"; do
+        name=${PLUGIN_NAMES[id]} step=$((STEP_PLUGIN_BASE + id))
+        if [ "${PLUGIN_SELECTED[id]}" -eq 0 ] || [ "${STEP_STATES[step]}" = '成功' ]; then
+            begin_component_config "plugin-$name" "$block"
+            printf 'plugins=("${(@)plugins:#%s}")\n' "$name" >>"$block"
+            if [ "${PLUGIN_SELECTED[id]}" -eq 1 ]; then
+                if [ "$id" -eq "$PLUGIN_NVM" ]; then printf 'export NVM_DIR="$HOME/.nvm"\n' >>"$block"; fi
+                printf 'plugins+=(%s)\n' "$name" >>"$block"
+            fi
+            end_component_config "plugin-$name" "$block"
+        fi
+    done
+    # The override must precede OMZ, including when the user already loads it.
+    awk -v block="$block" '
+        !inserted && $0 !~ /^[[:space:]]*#/ && /(^|[;&|[:space:]])(source|[.]|\\[.])[[:space:]]+[^#]*oh-my-zsh\.sh/ {
+            print "# >>> env-setup-wsl.sh plugins >>>"
+            while ((getline line < block) > 0) print line
+            close(block)
+            print "# <<< env-setup-wsl.sh plugins <<<"
+            inserted=1
+        }
+        { print }
+        END { if (!inserted) exit 1 }
+    ' "$file" >"$staging"
+    cat "$staging" >"$file"
+    # Keep original user initialization lines, guarding them instead of deleting them.
+    # The plugin owns initialization when enabled; otherwise the first source owns it.
+    if [ "${PLUGIN_SELECTED[PLUGIN_NVM]}" -eq 0 ] || [ "${STEP_STATES[STEP_PLUGIN_BASE+PLUGIN_NVM]}" = '成功' ]; then
+        remove_managed_block '# >>> env-setup-wsl.sh nvm-owner >>>' '# <<< env-setup-wsl.sh nvm-owner <<<' "$file"
+        printf '# >>> env-setup-wsl.sh nvm-owner >>>\n_ENV_SETUP_WSL_NVM_PLUGIN=%s\n# <<< env-setup-wsl.sh nvm-owner <<<\n' "${PLUGIN_SELECTED[PLUGIN_NVM]}" >"$staging"
+    else
+        : >"$staging"
+    fi
+    awk '
+        function quoted_prefix(text, quote, i, c) {
+            quote=""
+            for (i=1; i<=length(text); i++) {
+                c=substr(text,i,1)
+                if (c == "\\" && quote != sprintf("%c",39)) { i++; continue }
+                if (quote == "" && (c == "\"" || c == sprintf("%c",39))) quote=c
+                else if (c == quote) quote=""
+            }
+            return quote != ""
+        }
+        function guard_sources(line, result, prefix, command, suffix) {
+            result=""
+            while (match(line, /(^|[;&|[:space:]])(source|[.]|\\[.])[[:space:]]+("[^"]*nvm[.]sh"|\047[^\047]*nvm[.]sh\047|[^[:space:];|&"]*nvm[.]sh)([[:space:]]+--no-use)?/)) {
+                prefix=substr(line,1,RSTART-1)
+                command=substr(line,RSTART,RLENGTH)
+                suffix=substr(line,RSTART+RLENGTH)
+                if (command ~ /^[;&|[:space:]]/) {
+                    prefix=prefix substr(command,1,1)
+                    command=substr(command,2)
+                }
+                if (quoted_prefix(prefix)) return result line
+                result=result prefix "{ if [[ ${_ENV_SETUP_WSL_NVM_PLUGIN:-0} != 1 ]] && (( ! $+functions[nvm] )); then " command "; fi; }"
+                line=suffix
+                changed=1
+            }
+            return result line
+        }
+        $0 == "# >>> env-setup-wsl.sh nvm-source >>>" { guarded=1 }
+        !guarded && $0 !~ /^[[:space:]]*#/ {
+            changed=0
+            replacement=guard_sources($0)
+            if (changed) {
+                print "# >>> env-setup-wsl.sh nvm-source >>>"
+                print replacement
+                print "# <<< env-setup-wsl.sh nvm-source <<<"
+                next
+            }
+        }
+        { print }
+        $0 == "# <<< env-setup-wsl.sh nvm-source <<<" { guarded=0 }
+    ' "$file" >>"$staging"
+    cat "$staging" >"$file"
 }
 
 prepare_shell_config() (
@@ -715,6 +922,18 @@ prepare_shell_config() (
             inside && $0 !~ /^# 目标 shell/ { print }
         ' "$target" >>"$temporary_file"
     fi
+    if [ "$SHELL_NAME" = zsh ] && [ "${STEP_STATES[STEP_OMZ]:-}" = '成功' ] && [ -f "$target" ]; then
+        local previous_plugins
+        previous_plugins=$(awk '
+            $0 == "# >>> env-setup-wsl.sh plugins >>>" { inside=1 }
+            inside { print }
+            $0 == "# <<< env-setup-wsl.sh plugins <<<" { inside=0 }
+        ' "$target")
+        remove_managed_block '# >>> env-setup-wsl.sh plugins >>>' '# <<< env-setup-wsl.sh plugins <<<' "$temporary_file"
+        # Move the previous selection out of the OMZ sub-block before refreshing it.
+        # Failed plugins keep their prior initialization while successful ones update.
+        if [ -n "$previous_plugins" ]; then printf '%s\n' "$previous_plugins" >>"$temporary_file"; fi
+    fi
     if [ "${STEP_STATES[STEP_USER_BIN]:-}" = '成功' ] || [ "${STEP_STATES[STEP_UV]:-}" = '成功' ] ||
         [ "${STEP_STATES[STEP_CODEX]:-}" = '成功' ] || [ "${STEP_STATES[STEP_CLAUDE]:-}" = '成功' ]; then
         begin_component_config paths "$temporary_file"
@@ -735,7 +954,9 @@ prepare_shell_config() (
         append_once 'alias la="eza -alG --git --group-directories-first --icons=auto"' "$temporary_file"
         end_component_config eza "$temporary_file"
     fi
-    if [ "${STEP_STATES[STEP_NODE]:-}" = '成功' ]; then
+    if [ "$SHELL_NAME" = zsh ] && [ "${STEP_STATES[STEP_PLUGIN_BASE+PLUGIN_NVM]:-}" = '成功' ]; then
+        remove_managed_block '# >>> env-setup-wsl.sh nvm >>>' '# <<< env-setup-wsl.sh nvm <<<' "$temporary_file"
+    elif [ "${STEP_STATES[STEP_NODE]:-}" = '成功' ]; then
         begin_component_config nvm "$temporary_file"
         append_unless_active_line_contains 'export NVM_DIR=' 'export NVM_DIR="$HOME/.nvm"' "$temporary_file"
         append_unless_active_line_contains '"$NVM_DIR/nvm.sh"' '[ ! -s "$NVM_DIR/nvm.sh" ] || . "$NVM_DIR/nvm.sh"' "$temporary_file"
@@ -765,6 +986,9 @@ prepare_shell_config() (
         fi
     fi
     printf '%s\n' "$SHELL_BLOCK_END" >>"$temporary_file"
+    if [ "$SHELL_NAME" = zsh ] && [ "${STEP_STATES[STEP_OMZ]:-}" = '成功' ]; then
+        prepare_plugin_config "$temporary_file"
+    fi
     "$SHELL_PATH" -n "$temporary_file"
     if [ -f "$target" ] && cmp -s "$target" "$temporary_file"; then
         return 0
@@ -854,6 +1078,7 @@ needs_system_packages() {
 resolve_components() {
     SELECTED=("${EXPLICIT[@]}")
     local id
+    if [ "$SHELL_NAME" = zsh ] && [ "${PLUGIN_SELECTED[PLUGIN_NVM]}" -eq 1 ]; then SELECTED[4]=1; fi
     if [ "${SELECTED[7]}" -eq 1 ]; then
         SELECTED[4]=1 SELECTED[5]=1 SELECTED[6]=1
     fi
@@ -865,7 +1090,6 @@ resolve_components() {
 
 choose_components() {
     local key focus=0 mark id reason notice=''
-    EXPLICIT=(1 1 1 1 1 1 1 1)
     while :; do
         resolve_components
         [ -z "$RESET" ] || printf '\033[H\033[2J'
@@ -892,6 +1116,10 @@ choose_components() {
             if [ "$focus" -lt "${#COMPONENT_LABELS[@]}" ]; then
                 if [ "${SELECTED[focus]}" -eq 1 ]; then
                     EXPLICIT[focus]=0
+                    if [ "$SHELL_NAME" = zsh ] && [ "$focus" -eq 4 ] && [ "${PLUGIN_SELECTED[PLUGIN_NVM]}" -eq 1 ]; then
+                        PLUGIN_SELECTED[PLUGIN_NVM]=0
+                        notice+='连带取消 nvm 插件；'
+                    fi
                     if [ "$focus" -ge 4 ] && [ "$focus" -le 6 ] && [ "${SELECTED[7]}" -eq 1 ]; then
                         EXPLICIT[7]=0
                         notice+='连带取消 Agent/Skill 配置；'
@@ -900,6 +1128,10 @@ choose_components() {
                         for id in 1 2 3 4 5 6 7; do
                             if [ "${SELECTED[id]}" -eq 1 ] && needs_system_packages "$id"; then
                                 EXPLICIT[id]=0
+                                if [ "$SHELL_NAME" = zsh ] && [ "$id" -eq 4 ] && [ "${PLUGIN_SELECTED[PLUGIN_NVM]}" -eq 1 ]; then
+                                    PLUGIN_SELECTED[PLUGIN_NVM]=0
+                                    notice+='连带取消 nvm 插件；'
+                                fi
                                 notice+="连带取消 ${COMPONENT_LABELS[id]}；"
                                 if [ "$id" -ge 4 ] && [ "$id" -le 6 ] && [ "${SELECTED[7]}" -eq 1 ] && [ "${EXPLICIT[7]}" -eq 1 ]; then
                                     EXPLICIT[7]=0
@@ -943,10 +1175,20 @@ run_install() {
         source "$NVM_DIR/nvm.sh" --no-use || exit "$?"
         nvm version "$NODE_VERSION"
     ) >/dev/null 2>&1; then NVM_TARGET_INSTALLED=1; fi
-    if ! choose_components; then
-        printf '已取消，未执行安装计划。\n'
-        return 0
-    fi
+    local picker_status
+    while :; do
+        if ! choose_components; then
+            printf '已取消，未执行安装计划。\n'; return 0
+        fi
+        [ "$SHELL_NAME" = zsh ] || break
+        picker_status=0
+        choose_plugins || picker_status=$?
+        case "$picker_status" in
+        0) break ;;
+        2) continue ;;
+        *) printf '已取消，未执行安装计划。\n'; return 0 ;;
+        esac
+    done
     printf '\n安装计划\n目标 shell：%s%s%s\n配置路径：%s%s%s\n' "$CYAN" "$SHELL_LABEL" "$RESET" "$BLUE" "$SHELL_RC" "$RESET"
     if [ "$SHELL_NAME" = zsh ]; then
         printf '必做：%sOh My Zsh%s，安装位置：%s%s%s（复用已有安装，不覆盖启动文件）。\n' "$CYAN" "$RESET" "$BLUE" "$OMZ_DIR" "$RESET"
@@ -954,7 +1196,25 @@ run_install() {
             printf '%sOh My Zsh 依赖 git：缺失时必须安装。%s\n' "$YELLOW" "$RESET"
         fi
     fi
-    local component_id
+    local component_id plugin_id
+    if [ "$SHELL_NAME" = zsh ]; then
+        for plugin_id in "${!PLUGIN_NAMES[@]}"; do
+            if [ "${PLUGIN_SELECTED[plugin_id]}" -eq 1 ]; then
+                printf '启用插件：%s%s%s\n' "$CYAN" "${PLUGIN_NAMES[plugin_id]}" "$RESET"
+            fi
+        done
+        if ! command_exists git; then
+            for plugin_id in "${!PLUGIN_NAMES[@]}"; do
+                if [ "${PLUGIN_SELECTED[plugin_id]}" -eq 1 ] && ! plugin_file "${PLUGIN_NAMES[plugin_id]}" >/dev/null; then
+                    printf '%s缺失插件依赖 git：安装时按需执行 sudo apt install -y git。%s\n' "$YELLOW" "$RESET"
+                    break
+                fi
+            done
+        fi
+        if [ "${PLUGIN_SELECTED[PLUGIN_FZF]}" -eq 1 ] && ! command_exists fzf; then
+            printf '%sfzf 程序（自动补齐）：sudo apt install -y fzf%s\n' "$YELLOW" "$RESET"
+        fi
+    fi
     for component_id in "${!COMPONENT_LABELS[@]}"; do
         if [ "${SELECTED[component_id]}" -eq 1 ]; then
             printf '安装组件：%s%s%s（' "$CYAN" "${COMPONENT_LABELS[component_id]}" "$RESET"
@@ -1027,6 +1287,7 @@ run_install() {
         export PATH="${HOMEBREW_BIN%/*}:$PATH"
     fi
     local step_id installer dependency_failed runtime_command
+    printf -v runtime_command 'PYTHON_VERSION=%q NODE_VERSION=%q %s' "$PYTHON_VERSION" "$NODE_VERSION" "$rerun_command"
     for component_id in 1 2 3 4 5 6; do
         step_id=${COMPONENT_STEPS[component_id]}
         case "$component_id" in
@@ -1041,7 +1302,6 @@ run_install() {
             skip_step "$step_id" "${COMPONENT_LABELS[component_id]}" '用户未选择'
             continue
         fi
-        printf -v runtime_command 'PYTHON_VERSION=%q NODE_VERSION=%q %s' "$PYTHON_VERSION" "$NODE_VERSION" "$rerun_command"
         dependency_failed=0
         if needs_system_packages "$component_id" && [ "${STEP_STATES[1]}" != '成功' ]; then dependency_failed=1; fi
         if [ "$component_id" -eq 3 ] && ! command_exists uv && [ "${STEP_STATES[STEP_USER_BIN]}" != '成功' ]; then dependency_failed=1; fi
@@ -1073,6 +1333,7 @@ run_install() {
     else
         run_step "$STEP_AGENT" 'Agent/Skill 配置' "$agent_command" configure_agents
     fi
+    if [ "$SHELL_NAME" = zsh ]; then install_plugins "$rerun_command" "$runtime_command"; fi
     # Each step runs in a subshell; rediscover installed command paths in the parent.
     if ! command_exists brew && [ -x "$HOMEBREW_BIN" ]; then export PATH="${HOMEBREW_BIN%/*}:$PATH"; fi
     if [ "$SHELL_NAME" = bash ]; then

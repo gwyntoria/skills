@@ -54,6 +54,7 @@ elif name == 'apt':
             if os.environ.get('FAIL_SHELL'): sys.exit(42)
             target = Path(os.environ['FIXTURE_BIN']) / 'bash'
             if not target.exists(): target.symlink_to('/bin/bash')
+        elif 'fzf' in args and os.environ.get('FAIL_FZF'): sys.exit(74)
         elif 'lazygit' in args:
             if os.environ.get('FAIL_LAZY_APT'): sys.exit(56)
             target = Path(os.environ['FIXTURE_BIN']) / 'lazygit'
@@ -63,7 +64,7 @@ elif name == 'apt':
         state = Path(os.environ['PACKAGE_STATE'])
         old = state.read_text() if state.exists() else ''
         state.write_text(old + '\n'.join(a for a in args[1:] if not a.startswith('-')) + '\n')
-        for name in ['curl', 'git', 'make']:
+        for name in ['curl', 'git', 'make', 'fzf']:
             target = Path(os.environ['FIXTURE_BIN']) / name
             fixture = target.with_name(name + '-fixture')
             if name in args and not target.exists() and fixture.exists():
@@ -72,6 +73,8 @@ elif name == 'chsh':
     if os.environ.get('FAIL_CHSH'): sys.exit(44)
     if not os.environ.get('UNCHANGED_SHELL'):
         Path(os.environ['SHELL_STATE']).write_text(args[1])
+elif name == 'fzf':
+    print('0.60.0')
 elif name in ('7zz', '7z'):
     if os.environ.get('FAIL_7ZIP'): sys.exit(45)
     print('7-Zip fixture')
@@ -88,8 +91,26 @@ elif name == 'agent-setup':
 elif name in ('brew', 'eza', 'lazygit', 'uv', 'npm', 'git'):
     if name == 'git' and args[:1] == ['clone']:
         if os.environ.get('FAIL_OMZ'): sys.exit(71)
+        if os.environ.get('FAIL_PLUGIN') == Path(args[-1]).name: sys.exit(72)
         target = Path(args[-1]); target.mkdir(parents=True)
-        (target / 'oh-my-zsh.sh').write_text('# fixture framework\n')
+        if 'ohmyzsh/ohmyzsh' in args[-2]:
+            (target / 'oh-my-zsh.sh').write_text(
+                'for p in $plugins; do\n'
+                '  for base in "${ZSH_CUSTOM:-$ZSH/custom}" "$ZSH"; do\n'
+                '    if [[ -f "$base/plugins/$p/$p.plugin.zsh" ]]; then\n'
+                '      source "$base/plugins/$p/$p.plugin.zsh"; break\n'
+                '    fi\n'
+                '  done\n'
+                'done\n')
+            for plugin in ['git', 'copypath', 'z', 'fzf', 'nvm', 'extract']:
+                directory = target / 'plugins' / plugin
+                directory.mkdir(parents=True)
+                body = 'print ' + plugin + ' >> "$HOME/plugin-loads"\n'
+                if plugin == 'nvm': body += 'FIXTURE_NVM_LOADER=plugin\nexport NVM_DIR="${NVM_DIR:-$HOME/.nvm}"\n(( $+functions[nvm] )) || source "$NVM_DIR/nvm.sh"\n'
+                (directory / (plugin + '.plugin.zsh')).write_text(body)
+        else:
+            plugin = target.name
+            (target / (plugin + '.plugin.zsh')).write_text('print ' + plugin + ' >> "$HOME/plugin-loads"\n')
     if name == 'uv' and args[:2] == ['python', 'find'] and os.environ.get('MISSING_PYTHON'):
         state = Path(os.environ['PACKAGE_STATE'] + '.python')
         if not state.exists(): sys.exit(1)
@@ -214,7 +235,7 @@ class WslSetupTests(unittest.TestCase):
         self.log = self.root / 'calls.jsonl'
         self.packages = self.root / 'packages'
         self.env = dict(os.environ, EXPECTED_SHELL='/bin/bash', HOME=str(self.home), PATH=str(self.bin), TERM='xterm-256color',
-                        REAL_ZSH=ZSH_BINARY or '', CALL_LOG=str(self.log), PACKAGE_STATE=str(self.packages), FIXTURE_BIN=str(self.bin),
+                        NVM_DIR=str(self.home / '.nvm'), REAL_ZSH=ZSH_BINARY or '', CALL_LOG=str(self.log), PACKAGE_STATE=str(self.packages), FIXTURE_BIN=str(self.bin),
                         SHELL_STATE=str(self.root / 'login-shell'))
         # Mock the fixed external Homebrew location as well as PATH. The whole
         # entrypoint still runs; no installed host Homebrew can bypass the fakes.
@@ -276,6 +297,225 @@ class WslSetupTests(unittest.TestCase):
         entry.write_text('#!/bin/bash\nexec agent-setup "$@"\n')
         self.stub('agent-setup', STUB)
 
+    def test_zsh_selected_plugins_install_reuse_and_initialize_nvm_once(self):
+        self.dev_fixture()
+        self.stub('zsh', STUB)
+        self.stub('fzf-fixture', STUB)
+        self.zshrc.unlink()
+        names = ['git', 'copypath', 'z', 'fzf', 'nvm', 'zsh-autosuggestions',
+                 'zsh-syntax-highlighting', 'extract']
+        output, code = self.confirm(self.choose_only(set(), shell='zsh', plugins=names))
+        self.assertEqual(code, 0, output)
+        self.assertIn('安装组件：nvm/Node.js（自动补齐）', output)
+        self.assertIn('fzf 程序（自动补齐）', output)
+        self.assertIn(['apt', 'install', '-y', 'fzf'], self.calls())
+        for name in names: self.assertIn('[成功] Zsh 插件 ' + name, output)
+        clones = [c for c in self.calls('git') if 'clone' in c]
+        self.assertEqual(len(clones), 3)
+        self.assertTrue(any('zsh-users/zsh-autosuggestions' in str(c) for c in clones))
+        self.assertTrue(any('zsh-users/zsh-syntax-highlighting' in str(c) for c in clones))
+        nvm = self.home / '.nvm/nvm.sh'
+        nvm.write_text('echo "${FIXTURE_NVM_LOADER:-standalone}" >> "$HOME/nvm-loads"\n' + nvm.read_text())
+        result = subprocess.run([ZSH_BINARY, '-dfc', 'source "$HOME/.zshrc"; print -l -- $plugins'],
+                                env=self.env, text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((self.home / 'nvm-loads').read_text(), 'plugin\n')
+        self.assertEqual((self.home / 'plugin-loads').read_text().splitlines(),
+                         ['git', 'copypath', 'z', 'fzf', 'nvm', 'zsh-autosuggestions', 'extract', 'zsh-syntax-highlighting'])
+        before = self.zshrc.read_bytes()
+        output, code = self.confirm(self.choose_only(set(), shell='zsh', plugins=names))
+        self.assertEqual(code, 0, output)
+        self.assertEqual(self.zshrc.read_bytes(), before)
+        self.assertEqual(len([c for c in self.calls('git') if 'clone' in c]), 3)
+
+    def test_zsh_plugin_deselection_keeps_custom_files_and_unlisted_plugins(self):
+        self.dev_fixture()
+        self.stub('zsh', STUB)
+        # Obtain the fixture framework through the public installer first.
+        output, code = self.confirm(self.choose_only(set(), shell='zsh'))
+        self.assertEqual(code, 0, output)
+        custom = self.home / 'my plugins'
+        for name in ['custom', 'extract', 'zsh-autosuggestions']:
+            directory = custom / 'plugins' / name
+            directory.mkdir(parents=True)
+            (directory / (name + '.plugin.zsh')).write_text('print ' + name + ' >> "$HOME/plugin-loads"\n')
+        self.zshrc.write_text('export ZSH="$HOME/.oh-my-zsh"\nexport ZSH_CUSTOM="$HOME/my plugins"\n'
+                             'ZSH_THEME="agnoster"\nplugins=(extract custom zsh-autosuggestions)\n'
+                             'source "$ZSH/oh-my-zsh.sh"\n')
+        original_files = {str(p): p.read_bytes() for p in custom.rglob('*.zsh')}
+        clone_count = len([c for c in self.calls('git') if 'clone' in c])
+        output, code = self.confirm(self.choose_only(set(), shell='zsh', plugins=['zsh-autosuggestions']))
+        self.assertEqual(code, 0, output)
+        self.assertIn('[x] zsh-autosuggestions 已安装', output)
+        self.assertIn('[用户未选择] Zsh 插件 extract', output)
+        self.assertEqual(len([c for c in self.calls('git') if 'clone' in c]), clone_count)
+        self.assertEqual({str(p): p.read_bytes() for p in custom.rglob('*.zsh')}, original_files)
+        result = subprocess.run([ZSH_BINARY, '-dfc', 'source "$HOME/.zshrc"; print -l -- $plugins'],
+                                env=self.env, text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.splitlines(), ['custom', 'zsh-autosuggestions'])
+        self.assertEqual((self.home / 'plugin-loads').read_text(), 'custom\nzsh-autosuggestions\n')
+        self.assertIn('ZSH_THEME="agnoster"', self.zshrc.read_text())
+
+    def test_zsh_nvm_plugin_and_standalone_startup_each_initialize_once(self):
+        self.dev_fixture()
+        self.stub('zsh', STUB)
+        output, code = self.confirm(self.choose_only(set(), shell='zsh'))
+        self.assertEqual(code, 0, output)
+        nvm = self.home / '.nvm/nvm.sh'
+        nvm.write_text('echo "${FIXTURE_NVM_LOADER:-standalone}" >> "$HOME/nvm-loads"\n' + nvm.read_text())
+        self.zshrc.write_text('export NVM_DIR="$HOME/.nvm"\n'
+                             '[ -s "$NVM_DIR/nvm.sh" ] && \\. "$NVM_DIR/nvm.sh"\n'
+                             'export ZSH="$HOME/.oh-my-zsh"\nplugins=(nvm custom)\n'
+                             'source "$ZSH/oh-my-zsh.sh"\n'
+                             'source "$NVM_DIR/nvm.sh"; export MY_SETTING=preserved\n')
+        for enabled in [True, False]:
+            with self.subTest(plugin=enabled):
+                output, code = self.confirm(self.choose_only({4}, shell='zsh', plugins=['nvm'] if enabled else []))
+                self.assertEqual(code, 0, output)
+                (self.home / 'nvm-loads').unlink(missing_ok=True)
+                result = subprocess.run([ZSH_BINARY, '-dfc', 'source "$HOME/.zshrc"; nvm --version; print -r -- ${MY_SETTING:-MISSING}'],
+                                        env=self.env, text=True, capture_output=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual((self.home / 'nvm-loads').read_text(), ('plugin' if enabled else 'standalone') + '\n')
+                self.assertIn('preserved', result.stdout)
+
+    def test_zsh_plugin_failures_skip_dependents_and_continue_independent_plugins(self):
+        self.dev_fixture()
+        self.stub('zsh', STUB)
+        self.stub('fzf-fixture', STUB)
+        self.env.update(FAIL_PLUGIN='zsh-autosuggestions', FAIL_FZF='1', NVM_ERROR='1')
+        output, code = self.confirm(self.choose_only(set(), shell='zsh',
+                                      plugins=['fzf', 'nvm', 'zsh-autosuggestions', 'extract']))
+        self.assertEqual(code, 1, output)
+        self.assertIn('[失败] fzf 程序', output)
+        self.assertIn('[失败] nvm/Node.js', output)
+        self.assertIn('[因依赖失败跳过] Zsh 插件 fzf', output)
+        self.assertIn('[因依赖失败跳过] Zsh 插件 nvm', output)
+        self.assertIn('[失败] Zsh 插件 zsh-autosuggestions', output)
+        self.assertIn('[成功] Zsh 插件 extract', output)
+        self.assertIn('[成功] 默认 shell 切换', output)
+        self.assertIn('sudo apt update && sudo apt install -y fzf', output)
+        result = subprocess.run([ZSH_BINARY, '-dfc', 'source "$HOME/.zshrc"; print -l -- $plugins'],
+                                env=self.env, text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.splitlines(), ['extract'])
+        self.assertEqual((self.home / 'plugin-loads').read_text(), 'extract\n')
+        # Previously configured selected plugins survive a failed retry.
+        self.env.pop('FAIL_PLUGIN')
+        self.env.pop('NVM_ERROR')
+        output, code = self.confirm(self.choose_only(set(), shell='zsh', plugins=['zsh-autosuggestions']))
+        self.assertEqual(code, 0, output)
+        plugin = self.home / '.oh-my-zsh/custom/plugins/zsh-autosuggestions/zsh-autosuggestions.plugin.zsh'
+        plugin.unlink()
+        plugin.parent.rmdir()
+        self.env['FAIL_PLUGIN'] = 'zsh-autosuggestions'
+        output, code = self.confirm(self.choose_only(set(), shell='zsh', plugins=['zsh-autosuggestions']))
+        self.assertEqual(code, 1, output)
+        self.assertIn('plugins+=(zsh-autosuggestions)', self.zshrc.read_text())
+
+    def test_zsh_plugin_node_dependency_cascades_and_retains_explicit_components(self):
+        self.dev_fixture()
+        self.stub('zsh', STUB)
+        term = self.choose_only({3}, shell='zsh', plugins=['nvm'])
+        term.send(b'b')
+        term.expect('选择安装组件')
+        term.expect('[x] uv/Python')
+        term.expect('[x] nvm/Node.js')
+        term.expect('自动补齐')
+        term.send(b'\x1b[B' * 4 + b' ')
+        term.expect('连带取消 nvm 插件')
+        term.send(b'\r')
+        term.expect('选择 Zsh 插件')
+        term.expect('[ ] nvm')
+        term.send(b'\r')
+        term.expect('确认执行')
+        plan = re.sub(r'\x1b\[[0-9;?]*[a-zA-Z]', '', term.output.decode()).split('安装计划')[-1]
+        self.assertIn('安装组件：uv/Python（手动选择）', plan)
+        self.assertNotIn('安装组件：nvm/Node.js', plan)
+        self.assertNotIn('启用插件：nvm', plan)
+        term.send(b'n\r')
+        self.assertEqual(term.finish(), 0)
+        self.assertFalse(self.calls('chsh'))
+        # Explicit Node survives cancellation of the plugin that also requires it.
+        term = self.choose_only({4}, shell='zsh', plugins=[])
+        term.send(b'\r')
+        term.expect('确认执行')
+        plan = re.sub(r'\x1b\[[0-9;?]*[a-zA-Z]', '', term.output.decode()).split('安装计划')[-1]
+        self.assertIn('安装组件：nvm/Node.js（手动选择）', plan)
+        term.send(b'n\r')
+        self.assertEqual(term.finish(), 0)
+
+    def test_zsh_missing_bundled_plugin_is_recovered_without_replacing_framework(self):
+        self.stub('zsh', STUB)
+        framework = self.home / '.oh-my-zsh'
+        framework.mkdir()
+        original = '# existing custom framework\n'
+        (framework / 'oh-my-zsh.sh').write_text(original)
+        output, code = self.confirm(self.choose_only(set(), shell='zsh', plugins=['extract']))
+        self.assertEqual(code, 0, output)
+        self.assertEqual((framework / 'oh-my-zsh.sh').read_text(), original)
+        self.assertTrue((framework / 'custom/plugins/extract/extract.plugin.zsh').is_file())
+        self.assertIn('[成功] Zsh 插件 extract', output)
+        self.assertFalse(self.calls('apt'))
+        clone = [c for c in self.calls('git') if 'clone' in c]
+        self.assertEqual(len(clone), 1)
+        self.assertFalse(Path(clone[0][-1]).exists(), 'Temporary clone must be removed')
+
+    def test_zsh_plugin_staging_failure_preserves_config_and_cleans_temporary_files(self):
+        self.stub('zsh', STUB)
+        original = self.zshrc.read_text()
+        self.stub('mktemp', 'import os, sys\n'
+                  'if any(".stage." in arg for arg in sys.argv): sys.exit(78)\n'
+                  'os.execv(' + repr(shutil.which('mktemp')) + ', ["mktemp"] + sys.argv[1:])\n')
+        output, code = self.confirm(self.choose_only(set(), shell='zsh'))
+        self.assertEqual(code, 1, output)
+        self.assertEqual(self.zshrc.read_text(), original)
+        self.assertFalse(self.calls('chsh'))
+        self.assertFalse(list(self.home.glob('.*.tmp.*')))
+
+    def test_zsh_plugin_choices_apply_before_conditional_framework_sources(self):
+        self.stub('zsh', STUB)
+        output, code = self.confirm(self.choose_only(set(), shell='zsh'))
+        self.assertEqual(code, 0, output)
+        for loader in ['[ -s "$ZSH/oh-my-zsh.sh" ] && source "$ZSH/oh-my-zsh.sh"',
+                       '[ -s "$ZSH/oh-my-zsh.sh" ] && \\. "$ZSH/oh-my-zsh.sh"']:
+            with self.subTest(loader=loader):
+                self.zshrc.write_text('export ZSH="$HOME/.oh-my-zsh"\nplugins=(extract)\n' + loader + '\n')
+                output, code = self.confirm(self.choose_only(set(), shell='zsh', plugins=['git']))
+                self.assertEqual(code, 0, output)
+                (self.home / 'plugin-loads').unlink(missing_ok=True)
+                result = subprocess.run([ZSH_BINARY, '-dfc', 'source "$HOME/.zshrc"; print -l -- $plugins'],
+                                        env=self.env, text=True, capture_output=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout.splitlines(), ['git'])
+                self.assertEqual((self.home / 'plugin-loads').read_text(), 'git\n')
+
+    def test_zsh_plugin_page_has_exact_defaults_and_loadable_status(self):
+        self.stub('zsh', STUB)
+        framework = self.home / '.oh-my-zsh'
+        (framework / 'plugins/git').mkdir(parents=True)
+        (framework / 'oh-my-zsh.sh').write_text('# framework\n')
+        (framework / 'plugins/git/git.plugin.zsh').write_text('# git\n')
+        (framework / 'plugins/copypath').mkdir()
+        (framework / 'plugins/copypath/_copypath').write_text('# completion\n')
+        (framework / 'plugins/extract').mkdir()
+        self.zshrc.write_text('plugins=(extract imaginary)\n')
+        term = self.terminal('zsh')
+        term.send(b'\r')
+        term.expect('选择 Zsh 插件')
+        term.expect('方向键移动')
+        screen = re.sub(r'\x1b\[[0-9;?]*[a-zA-Z]', '', term.output.decode()).split('选择 Zsh 插件')[-1]
+        rows = re.findall(r'\[x\] ([^ ]+) (已安装|未安装)', screen)
+        self.assertEqual(rows, [('git', '已安装'), ('copypath', '已安装'), ('z', '未安装'),
+                               ('fzf', '未安装'), ('nvm', '未安装'),
+                               ('zsh-autosuggestions', '未安装'), ('zsh-syntax-highlighting', '未安装'),
+                               ('extract', '未安装')])
+        term.send(b'q')
+        self.assertEqual(term.finish(), 0)
+        self.assertFalse(self.calls('apt'))
+        self.assertFalse(self.calls('chsh'))
+
     def test_zsh_choice_installs_framework_and_only_configures_zsh(self):
         self.stub('zsh', STUB)
         self.bashrc.write_text('# keep bash\n')
@@ -312,7 +552,7 @@ class WslSetupTests(unittest.TestCase):
             output, code = self.confirm(self.choose_only({1, 3, 4}, shell='zsh'))
             self.assertEqual(code, 0, output)
         config = target.read_text()
-        self.assertIn(original, config)
+        for line in original.splitlines(): self.assertIn(line, config)
         self.assertEqual(config.count('oh-my-zsh.sh'), 1)
         self.assertIn('shellenv zsh', config)
         self.assertNotIn('bash_completion', config)
@@ -562,7 +802,7 @@ class WslSetupTests(unittest.TestCase):
         term.send(b'n\r')
         self.assertEqual(term.finish(), 0)
 
-    def choose_only(self, chosen, shell="bash"):
+    def choose_only(self, chosen, shell="bash", plugins=()):
         term = self.terminal(shell)
         # Reset in dependency order, then express only the requested selections.
         term.send(b'\x1b[B' * 7)
@@ -574,6 +814,15 @@ class WslSetupTests(unittest.TestCase):
             term.send(b'\x1b[B' * (row - focus) + b' ')
             focus = row
         term.send(b'\x1b[A' * focus)
+        if shell == 'zsh':
+            term.send(b'\r')
+            term.expect('选择 Zsh 插件')
+            term.expect('方向键移动')
+            screen = re.sub(r'\x1b\[[0-9;?]*[a-zA-Z]', '', term.output.decode()).split('选择 Zsh 插件')[-1]
+            states = re.findall(r'\[([ x])\] ([^ ]+) (?:已安装|未安装)', screen)
+            for row, (mark, name) in enumerate(states):
+                if (mark == 'x') != (name in plugins): term.send(b' ')
+                term.send(b'\x1b[B')
         return term
 
     def confirm(self, term):

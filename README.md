@@ -125,7 +125,7 @@ bash scripts/env-setup-wsl.sh
 选择 Bash 或 Zsh 后，向导提供系统基础包、Homebrew/eza、lazygit、uv/Python、nvm/Node.js、Codex CLI、Claude Code、Agent/Skill 配置，默认全选。
 方向键移动、空格勾选、回车进入计划确认，`q` 取消；`>` 标记当前焦点。列表与计划区分手动选择和自动补齐：缺失的安装依赖会自动选中系统基础包，共享依赖保留到所有请求都取消；取消依赖会连带取消需要它的组件并显示提示。已有程序按需复用，未选中的工具不会卸载。
 确认前会显示配置路径、原默认 shell、完整包清单与版本。确认后仅补装缺失包，准备所选 shell 的启动配置，并在流程末尾将它设置为账号默认 shell。
-插件与 Starship 的选择将在后续任务接入，已有安装函数保留。
+选择 Zsh 时先核对插件，再确认计划；Starship 的选择将在后续任务接入，已有安装函数保留。
 
 选择 Agent/Skill 会自动补齐两个 CLI 和 nvm/Node.js；取消其中一个依赖会连带取消 Agent/Skill，移除 Agent/Skill 后仍保留手动选择的依赖。
 Codex CLI 和 Claude Code 优先复用已有命令，缺失时使用各自的[原生 Codex 安装器](https://chatgpt.com/codex/install.sh)和[原生 Claude 安装器](https://claude.ai/install.sh)，安装或复用后执行版本检查。
@@ -142,7 +142,11 @@ PYTHON_VERSION=3.13 NODE_VERSION=22 bash scripts/env-setup-wsl.sh
 ```
 
 保留 `~/.local/bin`、`toria-update` 和大小写不敏感补全：Bash 使用 `.inputrc`，Zsh 使用原生 completion matcher。第三方安装器不负责写启动配置：[uv 设置 `UV_NO_MODIFY_PATH=1`](https://docs.astral.sh/uv/reference/installer/)，[nvm 设置 `PROFILE=/dev/null`](https://github.com/nvm-sh/nvm/blob/v0.40.6/install.sh)；[Homebrew 安装器](https://github.com/Homebrew/install/blob/HEAD/install.sh)只打印配置建议。
-选择 Zsh 必定安装或复用 Oh My Zsh：静态识别 `.zshrc` 中常见的绝对路径或 `$HOME` 路径赋值，未声明时使用环境变量 `$ZSH` 或 `~/.oh-my-zsh`，识别时不执行用户配置；缺少 Git 时补装 Git，通过克隆仓库安装，不运行会写入默认模板或切换 shell 的上游安装脚本。保留已有主题、插件和 Oh My Zsh 初始化，新配置使用 `robbyrussell`；避免重复加载 Oh My Zsh。插件选择和 Starship 适配由后续功能接入。Homebrew 使用目标 shell 的 `shellenv`，Zsh 不加载 nvm 的 Bash 补全。
+选择 Zsh 必定安装或复用 Oh My Zsh：静态识别 `.zshrc` 中常见的绝对路径或 `$HOME` 路径赋值，未声明时使用环境变量 `$ZSH` 或 `~/.oh-my-zsh`，识别时不执行用户配置；缺少 Git 时补装 Git，通过克隆仓库安装，不运行会写入默认模板或切换 shell 的上游安装脚本。保留已有主题和 Oh My Zsh 初始化，新配置使用 `robbyrussell`；避免重复加载 Oh My Zsh。Starship 适配由后续功能接入。Homebrew 使用目标 shell 的 `shellenv`，Zsh 的独立 nvm 初始化不加载 Bash 补全。
+
+Zsh 插件页固定显示 `git`、`copypath`、`z`、`fzf`、`nvm`、`zsh-autosuggestions`、`zsh-syntax-highlighting`、`extract`，初始全选，分别标记勾选状态和“已安装/未安装”。状态以框架或自定义目录中的 `.plugin.zsh`、补全文件为准，配置里的名称和空目录不算已安装；支持 `.zshrc` 中常见的 `ZSH_CUSTOM` 路径赋值以及环境变量，默认使用 `$ZSH/custom`。`b` 返回组件页，保留已有选择。
+已有插件直接复用，缺失的内置插件从 Oh My Zsh 仓库恢复到自定义目录，两个 `zsh-users` 插件按需克隆；失败插件不新增初始化，其他插件继续。取消勾选只停用固定列表内的插件，文件和列表外插件保持原样；配置在 Oh My Zsh 加载前应用选择，语法高亮放在所选插件末尾。
+`fzf` 插件自动补齐缺失的 `fzf` 程序；`nvm` 插件自动选中 nvm/Node.js，返回组件页取消该依赖会连带取消插件，取消插件仍保留手动选择的 Node.js。启用 nvm 插件时由插件初始化；关闭插件且选择 Node.js 时保留独立初始化，已有常见 nvm source 行保留并加防重条件，避免一次启动重复加载。`extract` 使用保留的 `unzip` 和 7-Zip 支持，不额外安装其他解压程序。
 
 工具安装并检查可用后才在所选 shell 的托管块中添加初始化。失败时保留已有配置，不新增失败组件初始化；重复运行保留用户内容、符号链接和权限。失败后的重试命令包含请求版本。
 
@@ -158,7 +162,7 @@ Bash 写入 `~/.bashrc`，Zsh 写入 `~/.zshrc`，另一个 shell 的启动文�
 使用 `NO_COLOR=1 bash scripts/env-setup-wsl.sh` 禁用颜色；没有颜色能力的终端也会使用文字状态。
 `bash scripts/env-setup-wsl.sh --help` 无需交互终端，安装不提供无人值守参数。
 
-隔离回归测试使用临时 HOME、PATH 命令替身和 PTY，并将脚本副本中的固定 Homebrew 外部路径替换为临时目录，避免调用本机 Homebrew。Agent/Skill 组合入口也使用替身，核对传参、原始日志和退出结果，不安装远程技能。Zsh 配置加载测试需要预装 Zsh（`command -v zsh` 可检查），测试使用查找到的真实 Zsh 做语法与加载检查，安装行为仍使用替身。测试不安装软件或更改当前账号：
+隔离回归测试使用临时 HOME、PATH 命令替身和 PTY，并将脚本副本中的固定 Homebrew 外部路径替换为临时目录，避免调用本机 Homebrew。Agent/Skill 组合入口也使用替身，核对传参、原始日志和退出结果，不安装远程技能。Zsh 配置加载测试需要预装 Zsh（`command -v zsh` 可检查），测试使用查找到的真实 Zsh 做语法与加载检查，安装行为仍使用替身；插件加载记录核对顺序与 nvm 单次初始化，测试环境中的 `NVM_DIR` 也指向临时 HOME。测试不安装软件或更改当前账号：
 
 ```bash
 python3 -m unittest discover -s scripts/tests -p 'test_env_setup_wsl.py'
