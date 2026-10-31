@@ -16,6 +16,7 @@ import time
 import unittest
 
 SCRIPT = Path(__file__).resolve().parents[1] / 'env-setup-wsl.sh'
+ZSH_BINARY = shutil.which('zsh')
 
 STUB = r'''
 import json, os, sys
@@ -45,7 +46,11 @@ elif name == 'apt':
     print('fixture: apt ' + ' '.join(args), flush=True)
     if args[0] == 'update' and os.environ.get('FAIL_UPDATE'): sys.exit(41)
     if args[0] == 'install':
-        if 'bash' in args:
+        if 'zsh' in args:
+            if os.environ.get('FAIL_SHELL'): sys.exit(42)
+            target = Path(os.environ['FIXTURE_BIN']) / 'zsh'
+            target.write_bytes(target.with_name('zsh-fixture').read_bytes()); target.chmod(0o755)
+        elif 'bash' in args:
             if os.environ.get('FAIL_SHELL'): sys.exit(42)
             target = Path(os.environ['FIXTURE_BIN']) / 'bash'
             if not target.exists(): target.symlink_to('/bin/bash')
@@ -76,11 +81,15 @@ elif name in ('codex', 'claude'):
     if os.environ.get('FAIL_' + name.upper()): sys.exit(61)
     print(name + ' fixture version')
 elif name == 'agent-setup':
-    if os.environ.get('SHELL') != '/bin/bash': sys.exit(68)
+    if os.environ.get('SHELL') != os.environ.get('EXPECTED_SHELL', '/bin/bash'): sys.exit(68)
     print('fixture: raw agent/skill log', flush=True)
     print('fixture: active node ' + os.environ.get('FIXTURE_NODE_VERSION', 'none'), flush=True)
     sys.exit(int(os.environ.get('AGENT_EXIT', '0')))
 elif name in ('brew', 'eza', 'lazygit', 'uv', 'npm', 'git'):
+    if name == 'git' and args[:1] == ['clone']:
+        if os.environ.get('FAIL_OMZ'): sys.exit(71)
+        target = Path(args[-1]); target.mkdir(parents=True)
+        (target / 'oh-my-zsh.sh').write_text('# fixture framework\n')
     if name == 'uv' and args[:2] == ['python', 'find'] and os.environ.get('MISSING_PYTHON'):
         state = Path(os.environ['PACKAGE_STATE'] + '.python')
         if not state.exists(): sys.exit(1)
@@ -103,6 +112,9 @@ elif name == 'nvm':
         print('N/A'); sys.exit(3)
     if args[0] == 'install' and os.environ.get('FAIL_NODE'): sys.exit(55)
     print('v24.0.0')
+elif name == 'zsh':
+    if args == ['--version']: print('zsh fixture version')
+    else: os.execv(os.environ['REAL_ZSH'], [os.environ['REAL_ZSH']] + args)
 elif name == 'curl':
     url = args[-1]
     if os.environ.get('FAIL_DOWNLOAD'): sys.exit(51)
@@ -124,7 +136,7 @@ elif name == 'curl':
         if tool == 'codex':
             print('test "$CODEX_INSTALL_DIR" = "$HOME/.local/bin" || exit 66')
             print('test "$CODEX_NON_INTERACTIVE" = true || exit 67')
-        print('test "$SHELL" = /bin/bash || echo polluted >> "$HOME/.zshrc"')
+        print('test "$SHELL" = "$EXPECTED_SHELL" || echo polluted >> "$HOME/.profile"')
         print('case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) echo polluted >> "$HOME/.profile" ;; esac')
         print('mkdir -p "$HOME/.local/bin"')
         print('cp "$FIXTURE_BIN/' + tool + '-fixture" "$HOME/.local/bin/' + tool + '"')
@@ -201,8 +213,8 @@ class WslSetupTests(unittest.TestCase):
             self.stub(name, STUB)
         self.log = self.root / 'calls.jsonl'
         self.packages = self.root / 'packages'
-        self.env = dict(os.environ, HOME=str(self.home), PATH=str(self.bin), TERM='xterm-256color',
-                        CALL_LOG=str(self.log), PACKAGE_STATE=str(self.packages), FIXTURE_BIN=str(self.bin),
+        self.env = dict(os.environ, EXPECTED_SHELL='/bin/bash', HOME=str(self.home), PATH=str(self.bin), TERM='xterm-256color',
+                        REAL_ZSH=ZSH_BINARY or '', CALL_LOG=str(self.log), PACKAGE_STATE=str(self.packages), FIXTURE_BIN=str(self.bin),
                         SHELL_STATE=str(self.root / 'login-shell'))
         # Mock the fixed external Homebrew location as well as PATH. The whole
         # entrypoint still runs; no installed host Homebrew can bypass the fakes.
@@ -215,19 +227,26 @@ class WslSetupTests(unittest.TestCase):
         shutil.copyfile(SCRIPT.with_name('env-update.sh'), self.root / 'env-update.sh')
         self.env['WIZARD_SCRIPT'] = str(isolated_script)
         self.env.pop('NO_COLOR', None)
+        for key in ['ZSH', 'ZSH_CUSTOM', 'ZDOTDIR']:
+            self.env.pop(key, None)
         self.bashrc = self.home / '.bashrc'
         self.zshrc = self.home / '.zshrc'
         self.zshrc.write_text('# untouched zsh\n')
 
     def stub(self, name, body):
+        if name in ('zsh', 'zsh-fixture'):
+            self.assertIsNotNone(ZSH_BINARY, 'Zsh tests require zsh on PATH; see README.md')
         target = self.bin / name
         if target.is_symlink(): target.unlink()
         target.write_text('#!' + sys.executable + '\n' + body)
         target.chmod(0o755)
 
-    def terminal(self):
+    def terminal(self, shell="bash"):
+        self.env['EXPECTED_SHELL'] = '/bin/' + shell
         term = Terminal(self.env)
         self.addCleanup(term.close)
+        term.expect('选择终端类型')
+        term.send((b'\x1b[B' if shell == 'zsh' else b'') + b'\r')
         term.expect('选择安装组件')
         return term
 
@@ -256,6 +275,177 @@ class WslSetupTests(unittest.TestCase):
         entry = self.root / 'agent-setup.sh'
         entry.write_text('#!/bin/bash\nexec agent-setup "$@"\n')
         self.stub('agent-setup', STUB)
+
+    def test_zsh_choice_installs_framework_and_only_configures_zsh(self):
+        self.stub('zsh', STUB)
+        self.bashrc.write_text('# keep bash\n')
+        self.zshrc.unlink()
+        output, code = self.confirm(self.choose_only(set(), shell='zsh'))
+        self.assertEqual(code, 0, output)
+        self.assertIn('目标 shell：Zsh', output)
+        self.assertIn('[成功] Oh My Zsh', output)
+        self.assertEqual(self.bashrc.read_text(), '# keep bash\n')
+        config = self.zshrc.read_text()
+        self.assertIn('robbyrussell', config)
+        self.assertIn('oh-my-zsh.sh', config)
+        self.assertIn('matcher-list', config)
+        self.assertFalse((self.home / '.inputrc').exists())
+        self.assertEqual(self.calls('chsh')[-1][2], str(self.bin / 'zsh'))
+        self.assertLess(self.calls().index([c for c in self.calls('git') if 'clone' in c][0]),
+                        self.calls().index(self.calls('chsh')[-1]))
+
+    def test_zsh_reuses_custom_framework_theme_and_runtime_config_once(self):
+        self.dev_fixture()
+        self.stub('zsh', STUB)
+        framework = self.home / 'custom framework'
+        framework.mkdir()
+        (framework / 'oh-my-zsh.sh').write_text('print -r -- "$ZSH_THEME" >> "$HOME/framework-loads"\n')
+        self.env['ZSH'] = str(framework)
+        original = 'export ZSH=' + shlex.quote(str(framework)) + '\nZSH_THEME="agnoster"\nplugins=(git custom)\nsource "$ZSH/oh-my-zsh.sh"\n'
+        target = self.home / 'linked zsh startup'
+        target.write_text(original)
+        target.chmod(0o640)
+        self.zshrc.unlink()
+        self.zshrc.symlink_to(target)
+        self.bashrc.write_text('# keep bash\n')
+        for _ in range(2):
+            output, code = self.confirm(self.choose_only({1, 3, 4}, shell='zsh'))
+            self.assertEqual(code, 0, output)
+        config = target.read_text()
+        self.assertIn(original, config)
+        self.assertEqual(config.count('oh-my-zsh.sh'), 1)
+        self.assertIn('shellenv zsh', config)
+        self.assertNotIn('bash_completion', config)
+        self.assertTrue(self.zshrc.is_symlink())
+        self.assertEqual(target.stat().st_mode & 0o777, 0o640)
+        self.assertEqual(len(list(self.home.glob('linked zsh startup.env-setup-wsl.backup.*'))), 1)
+        self.assertFalse([c for c in self.calls('git') if 'clone' in c])
+        self.assertEqual(self.bashrc.read_text(), '# keep bash\n')
+        result = subprocess.run([ZSH_BINARY, '-dfc', 'source "$HOME/.zshrc"; alias ls; print -r -- "$NVM_DIR"'],
+                                env=self.env, text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('eza -al', result.stdout)
+        self.assertIn(str(self.home / '.nvm'), result.stdout)
+        self.assertEqual((self.home / 'framework-loads').read_text(), 'agnoster\n')
+
+    def test_missing_zsh_and_framework_git_are_installed_as_mandatory_dependencies(self):
+        self.stub('zsh-fixture', STUB)
+        self.stub('git-fixture', STUB)
+        (self.bin / 'git').unlink()
+        output, code = self.confirm(self.choose_only(set(), shell='zsh'))
+        self.assertEqual(code, 0, output)
+        self.assertIn(['apt', 'install', '-y', 'zsh'], self.calls())
+        self.assertIn(['apt', 'install', '-y', 'git'], self.calls())
+        self.assertIn('Oh My Zsh 依赖 git', output)
+        self.assertTrue(self.calls('chsh'))
+
+    def test_zsh_all_native_installers_respect_target_and_delegate_after_node(self):
+        self.ai_fixture()
+        self.stub('zsh', STUB)
+        self.bashrc.write_text('# untouched bash\n')
+        profile = self.home / '.profile'
+        profile.write_text('# untouched profile\n')
+        for name in ['codex', 'claude', 'uv']:
+            (self.bin / name).unlink()
+        shutil.rmtree(self.home / '.nvm')
+        output, code = self.confirm(self.choose_only({3, 7}, shell='zsh'))
+        self.assertEqual(code, 0, output)
+        self.assertEqual(self.bashrc.read_text(), '# untouched bash\n')
+        self.assertEqual(profile.read_text(), '# untouched profile\n')
+        self.assertNotIn('polluted', self.zshrc.read_text())
+        self.assertIn('[成功] Agent/Skill 配置', output)
+        self.assertIn('fixture: active node lts/*', output)
+        self.assertLess(self.calls().index(self.calls('agent-setup')[0]),
+                        self.calls().index(self.calls('chsh')[0]))
+
+    def test_zsh_failures_preserve_other_shell_and_switch_only_after_valid_config(self):
+        for failure in ['shell', 'config', 'framework', 'runtime', 'switch']:
+            with self.subTest(failure=failure):
+                self.stub('zsh-fixture', STUB)
+                self.stub('zsh', STUB)
+                self.dev_fixture()
+                self.env.pop('FAIL_SHELL', None)
+                self.env.pop('FAIL_OMZ', None)
+                self.env.pop('FAIL_PYTHON', None)
+                self.env.pop('FAIL_CHSH', None)
+                self.env.pop('MISSING_PYTHON', None)
+                if self.log.exists(): self.log.unlink()
+                (self.root / 'login-shell').unlink(missing_ok=True)
+                shutil.rmtree(self.home / '.oh-my-zsh', ignore_errors=True)
+                self.bashrc.write_text('# untouched bash\n')
+                original = '# original zsh\n'
+                if failure == 'shell':
+                    (self.bin / 'zsh').unlink()
+                    self.env['FAIL_SHELL'] = '1'
+                elif failure == 'config':
+                    original += '# >>> env-setup-wsl.sh shell >>>\n'
+                elif failure == 'framework': self.env['FAIL_OMZ'] = '1'
+                elif failure == 'runtime':
+                    self.env.update(MISSING_PYTHON='1', FAIL_PYTHON='1')
+                elif failure == 'switch': self.env['FAIL_CHSH'] = '1'
+                self.zshrc.write_text(original)
+                output, code = self.confirm(self.choose_only({3}, shell='zsh'))
+                self.assertEqual(code, 1, output)
+                self.assertEqual(self.bashrc.read_text(), '# untouched bash\n')
+                if failure in ('shell', 'config'):
+                    self.assertFalse(self.calls('chsh'))
+                    self.assertEqual(self.zshrc.read_text(), original)
+                    self.assertIn('[因依赖失败跳过] 默认 shell 切换', output)
+                else: self.assertTrue(self.calls('chsh'))
+                if failure == 'framework':
+                    self.assertNotIn('source "$ZSH/oh-my-zsh.sh"', self.zshrc.read_text())
+                    self.assertIn('[失败] Oh My Zsh', output)
+                    self.assertIn('compinit', self.zshrc.read_text())
+                if failure == 'runtime': self.assertIn('[失败] uv/Python', output)
+                if failure == 'switch': self.assertIn('[失败] 默认 shell 切换', output)
+                self.assertIn('手动处理：', output)
+
+    def test_shell_page_cancel_never_runs_installation(self):
+        term = Terminal(self.env)
+        self.addCleanup(term.close)
+        term.expect('选择终端类型')
+        term.send(b'q')
+        self.assertEqual(term.finish(), 0)
+        self.assertFalse(self.calls('apt'))
+        self.assertFalse(self.calls('chsh'))
+        self.assertFalse(self.bashrc.exists())
+        self.assertEqual(self.zshrc.read_text(), '# untouched zsh\n')
+        self.assertEqual(term.before, termios.tcgetattr(term.master))
+
+    def test_zsh_discovers_existing_framework_from_config_without_executing_it(self):
+        self.stub('zsh', STUB)
+        framework = self.home / 'custom framework'
+        framework.mkdir()
+        (framework / 'oh-my-zsh.sh').write_text('# framework\n')
+        self.zshrc.write_text('export ZSH="$HOME/custom framework"\nZSH_THEME="agnoster"\n'
+                             'source "$ZSH/oh-my-zsh.sh"\necho unsafe > "$HOME/should-not-exist"\n')
+        output, code = self.confirm(self.choose_only(set(), shell='zsh'))
+        self.assertEqual(code, 0, output)
+        self.assertFalse([c for c in self.calls('git') if 'clone' in c])
+        self.assertIn(str(framework), output)
+        self.assertFalse((self.home / 'should-not-exist').exists())
+
+    def test_zsh_rejects_unsafe_configuration_targets(self):
+        self.stub('zsh', STUB)
+        for kind in ['directory', 'dangling', 'shared', 'syntax']:
+            with self.subTest(kind=kind):
+                if self.zshrc.is_dir(): self.zshrc.rmdir()
+                else: self.zshrc.unlink(missing_ok=True)
+                self.bashrc.write_text('# untouched bash\n')
+                if self.log.exists(): self.log.unlink()
+                if kind == 'directory': self.zshrc.mkdir()
+                elif kind == 'dangling': self.zshrc.symlink_to(self.home / 'missing')
+                elif kind == 'shared': self.zshrc.symlink_to(self.bashrc)
+                else: self.zshrc.write_text('if broken\n')
+                output, code = self.confirm(self.choose_only(set(), shell='zsh'))
+                self.assertEqual(code, 1, output)
+                self.assertFalse(self.calls('chsh'))
+                self.assertEqual(self.bashrc.read_text(), '# untouched bash\n')
+                self.assertIn('[失败] Zsh 配置', output)
+                if kind == 'directory': self.assertTrue(self.zshrc.is_dir())
+                elif kind == 'dangling': self.assertTrue(self.zshrc.is_symlink())
+                elif kind == 'shared': self.assertTrue(self.zshrc.samefile(self.bashrc))
+                else: self.assertEqual(self.zshrc.read_text(), 'if broken\n')
 
     def test_native_clis_install_and_verify_without_touching_other_profiles(self):
         self.ai_fixture()
@@ -372,8 +562,8 @@ class WslSetupTests(unittest.TestCase):
         term.send(b'n\r')
         self.assertEqual(term.finish(), 0)
 
-    def choose_only(self, chosen):
-        term = self.terminal()
+    def choose_only(self, chosen, shell="bash"):
+        term = self.terminal(shell)
         # Reset in dependency order, then express only the requested selections.
         term.send(b'\x1b[B' * 7)
         for row in range(7, 0, -1):

@@ -8,12 +8,12 @@ set -euo pipefail
 # Usage:
 #   ./env-setup-wsl.sh  Install
 #
-# Current wizard: Bash, system packages, development runtimes and AI tools.
+# Current wizard: Bash/Zsh, development runtimes and AI tools.
 # Other component installer functions are retained for follow-up tickets.
 #
 # Target:
 #   - Ubuntu on WSL
-#   - Bash
+#   - Bash or Zsh
 # ============================================================
 
 PROGRAM_NAME="${0##*/}"
@@ -52,18 +52,21 @@ SYSTEM_PACKAGES=(
 # $HOME 派生路径统一由 set_paths 赋值。顺序要求：require_safe_home 必须先通过，
 # 避免 HOME 为空或为 / 时向错误位置写入配置。
 LOCAL_BIN=""
-BASHRC=""
+SHELL_RC=""
 INPUTRC=""
 NVM_DIR=""
 SHELL_BLOCK_START='# >>> env-setup-wsl.sh shell >>>'
 SHELL_BLOCK_END='# <<< env-setup-wsl.sh shell <<<'
+SHELL_NAME=bash
+SHELL_LABEL=Bash
+OMZ_DIR=""
 SHELL_PATH=""
 ACCOUNT_NAME=""
 ORIGINAL_SHELL=""
 STEP_LABELS=() STEP_STATES=() STEP_REMEDIES=() STEP_CODES=()
 readonly STEP_BREW=4 STEP_LAZYGIT=5 STEP_UV=6 STEP_NODE=7
 readonly STEP_USER_BIN=8 STEP_COMPLETION=9 STEP_LAZY_BREW=10
-readonly STEP_CODEX=11 STEP_CLAUDE=12 STEP_AGENT=13
+readonly STEP_CODEX=11 STEP_CLAUDE=12 STEP_AGENT=13 STEP_OMZ=14
 
 # ------------------------------------------------------------
 # Output helpers
@@ -106,7 +109,7 @@ require_safe_home() {
 
 set_paths() {
     LOCAL_BIN="$HOME/.local/bin"
-    BASHRC="$HOME/.bashrc"
+    SHELL_RC="$HOME/.bashrc"
     INPUTRC="$HOME/.inputrc"
     NVM_DIR="$HOME/.nvm"
 }
@@ -252,7 +255,7 @@ remove_managed_block() {
 
 usage() {
     printf '用法：%s [选项]\n' "$PROGRAM_NAME"
-    printf '\n交互式 Bash 环境配置：选择系统基础包，确认后安装并设置默认 shell。\n'
+    printf '\n交互式 Bash/Zsh 环境配置：选择 shell 和组件，确认后安装并设置默认 shell。\n'
     printf '可选：系统基础包、Homebrew/eza、lazygit、uv/Python、nvm/Node.js。\n'
     printf '\n选项：\n  -h, --help       显示帮助（无需交互终端）\n'
     printf '\n安装需要交互终端；NO_COLOR 可禁用颜色，不提供无人值守安装参数。\n'
@@ -406,11 +409,11 @@ install_starship() {
         success "Starship installed"
     fi
 
-    remove_managed_block "$WT_HOOK_START" "$WT_HOOK_END" "$BASHRC" || return 1
-    remove_exact_line 'eval "$(starship init bash)"' "$BASHRC" || return 1
-    remove_exact_line 'starship_precmd_user_func="__wt_update_cwd"' "$BASHRC" || return 1
+    remove_managed_block "$WT_HOOK_START" "$WT_HOOK_END" "$SHELL_RC" || return 1
+    remove_exact_line 'eval "$(starship init bash)"' "$SHELL_RC" || return 1
+    remove_exact_line 'starship_precmd_user_func="__wt_update_cwd"' "$SHELL_RC" || return 1
 
-    if ! active_line_contains 'function __wt_update_cwd()' "$BASHRC"; then
+    if ! active_line_contains 'function __wt_update_cwd()' "$SHELL_RC"; then
         printf '\n%s\n' \
             "$WT_HOOK_START" \
             'function __wt_update_cwd() {' \
@@ -421,10 +424,10 @@ install_starship() {
             '' \
             'eval "$(starship init bash)"' \
             "$WT_HOOK_END" \
-            >>"$BASHRC"
+            >>"$SHELL_RC"
     else
-        append_once 'starship_precmd_user_func="__wt_update_cwd"' "$BASHRC"
-        append_once 'eval "$(starship init bash)"' "$BASHRC"
+        append_once 'starship_precmd_user_func="__wt_update_cwd"' "$SHELL_RC"
+        append_once 'eval "$(starship init bash)"' "$SHELL_RC"
     fi
 }
 
@@ -496,14 +499,14 @@ install_node() {
 install_codex() {
     if ! command_exists codex; then
         curl -fsSL https://chatgpt.com/codex/install.sh |
-            SHELL=/bin/bash CODEX_INSTALL_DIR="$LOCAL_BIN" CODEX_NON_INTERACTIVE=true sh
+            SHELL="/bin/$SHELL_NAME" CODEX_INSTALL_DIR="$LOCAL_BIN" CODEX_NON_INTERACTIVE=true sh
     fi
     codex --version
 }
 
 install_claude() {
     if ! command_exists claude; then
-        curl -fsSL https://claude.ai/install.sh | SHELL=/bin/bash bash
+        curl -fsSL https://claude.ai/install.sh | SHELL="/bin/$SHELL_NAME" bash
     fi
     claude --version
 }
@@ -516,7 +519,7 @@ configure_agents() {
     command_exists node
     command_exists npm
     command_exists npx
-    SHELL=/bin/bash bash "$SCRIPT_DIR/agent-setup.sh" --agent --skill
+    SHELL="/bin/$SHELL_NAME" bash "$SCRIPT_DIR/agent-setup.sh" --agent --skill
 }
 
 report_installed_versions() (
@@ -584,14 +587,83 @@ load_account() {
     ORIGINAL_SHELL="${fields[6]}"
 }
 
-install_bash() {
+install_selected_shell() {
     local shell_path
-    if ! command_exists bash; then
+    if ! command_exists "$SHELL_NAME"; then
         sudo apt update
-        sudo apt install -y bash
+        sudo apt install -y "$SHELL_NAME"
     fi
-    shell_path=$(type -P bash)
+    shell_path=$(type -P "$SHELL_NAME")
     "$shell_path" --version
+}
+
+install_oh_my_zsh() {
+    if [ ! -s "$OMZ_DIR/oh-my-zsh.sh" ]; then
+        # Clone only: the upstream installer creates a template even with KEEP_ZSHRC=yes
+        # when .zshrc is absent. Never let it write profiles or change the account shell.
+        if ! command_exists git; then
+            sudo apt update
+            sudo apt install -y git
+        fi
+        git clone --depth=1 https://github.com/ohmyzsh/ohmyzsh.git "$OMZ_DIR"
+    fi
+    test -s "$OMZ_DIR/oh-my-zsh.sh"
+}
+
+discover_oh_my_zsh() {
+    OMZ_DIR="${ZSH:-$HOME/.oh-my-zsh}"
+    [ -f "$SHELL_RC" ] || return 0
+    local line value
+    local assignment='^[[:space:]]*(export[[:space:]]+)?ZSH=(.*)$'
+    local double_quoted='^"([^"]*)"[[:space:]]*(#.*)?$'
+    local single_quoted="^'([^']*)'[[:space:]]*(#.*)?$"
+    local unquoted='^([^[:space:];]+)[[:space:]]*(#.*)?$'
+    while IFS= read -r line || [ -n "$line" ]; do
+        [[ "$line" =~ $assignment ]] || continue
+        value=${BASH_REMATCH[2]}
+        # Decode only literal paths and HOME prefixes. Never source/eval user config.
+        if [[ "$value" =~ $single_quoted ]]; then
+            value=${BASH_REMATCH[1]}
+        elif [[ "$value" =~ $double_quoted ]] || [[ "$value" =~ $unquoted ]]; then
+            value=${BASH_REMATCH[1]}
+            case "$value" in
+            '$HOME/'*) value="$HOME/${value#\$HOME/}" ;;
+            '${HOME}/'*) value="$HOME/${value#\$\{HOME\}/}" ;;
+            \~/*) value="$HOME/${value:2}" ;;
+            esac
+        else
+            continue
+        fi
+        if [[ "$value" == /* && "$value" != *'$'* && "$value" != *'`'* ]]; then
+            OMZ_DIR="$value"
+        fi
+    done <"$SHELL_RC"
+}
+
+choose_shell() {
+    local key focus=0 id label
+    while :; do
+        [ -z "$RESET" ] || printf '\033[H\033[2J'
+        printf '\n选择终端类型\n'
+        for id in 0 1; do
+            if [ "$id" -eq 0 ]; then label=Bash; else label=Zsh; fi
+            if [ "$focus" -eq "$id" ]; then printf '%s> ' "$FOCUS"; else printf '  '; fi
+            printf '%s%s%s\n' "$CYAN" "$label" "$RESET"
+        done
+        printf '方向键移动 · 回车选择 · q 取消\n'
+        IFS= read -rsn1 key || return 1
+        case "$key" in
+        $'\e')
+            IFS= read -rsn2 -t 0.2 key || :
+            case "$key" in '[A'|'[B') focus=$((1 - focus)) ;; esac ;;
+        '')
+            if [ "$focus" -eq 0 ]; then SHELL_NAME=bash SHELL_LABEL=Bash; else SHELL_NAME=zsh SHELL_LABEL=Zsh; fi
+            SHELL_RC="$HOME/.$SHELL_NAME"rc
+            if [ "$SHELL_NAME" = zsh ]; then discover_oh_my_zsh; fi
+            return 0 ;;
+        q|Q) return 1 ;;
+        esac
+    done
 }
 
 # Sub-blocks let a successful component update its paths without removing a
@@ -608,15 +680,17 @@ end_component_config() {
 
 prepare_shell_config() (
     local target directory filename temporary_file backup_file cleanup_command
-    if [ -L "$BASHRC" ] && [ ! -e "$BASHRC" ]; then
+    if [ -L "$SHELL_RC" ] && [ ! -e "$SHELL_RC" ]; then
         printf '错误：配置符号链接的目标不存在，保留原链接。\n' >&2
         return 1
     fi
-    if [ "$BASHRC" -ef "$HOME/.zshrc" ]; then
+    local other_rc="$HOME/.zshrc"
+    if [ "$SHELL_NAME" = zsh ]; then other_rc="$HOME/.bashrc"; fi
+    if [ "$SHELL_RC" -ef "$other_rc" ]; then
         printf '错误：Bash 与 Zsh 共用同一个配置文件，保留原文件并跳过切换。\n' >&2
         return 1
     fi
-    target=$(readlink -f -- "$BASHRC")
+    target=$(readlink -f -- "$SHELL_RC")
     if [ -e "$target" ] && [ ! -f "$target" ]; then
         printf '错误：配置路径不是普通文件：%s%s%s\n' "$BLUE" "$target" "$RESET" >&2
         return 1
@@ -632,7 +706,7 @@ prepare_shell_config() (
         cp -p -- "$target" "$temporary_file"
     fi
     remove_managed_block "$SHELL_BLOCK_START" "$SHELL_BLOCK_END" "$temporary_file"
-    printf '%s\n# 目标 shell：Bash；此块由环境安装向导管理。\n' "$SHELL_BLOCK_START" >>"$temporary_file"
+    printf '%s\n# 目标 shell：%s；此块由环境安装向导管理。\n' "$SHELL_BLOCK_START" "$SHELL_LABEL" >>"$temporary_file"
     # Keep failed/unselected component blocks; replace only successful components.
     if [ -f "$target" ]; then
         awk -v start="$SHELL_BLOCK_START" -v end="$SHELL_BLOCK_END" '
@@ -650,7 +724,7 @@ prepare_shell_config() (
     if [ "${STEP_STATES[STEP_BREW]:-}" = '成功' ] || [ "${STEP_STATES[STEP_LAZY_BREW]:-}" = '成功' ]; then
         local brew_path brew_line
         brew_path=$(type -P brew)
-        printf -v brew_line 'eval "$(%q shellenv bash)"' "$brew_path"
+        printf -v brew_line 'eval "$(%q shellenv %s)"' "$brew_path" "$SHELL_NAME"
         begin_component_config homebrew "$temporary_file"
         append_once "$brew_line" "$temporary_file"
         end_component_config homebrew "$temporary_file"
@@ -665,8 +739,30 @@ prepare_shell_config() (
         begin_component_config nvm "$temporary_file"
         append_unless_active_line_contains 'export NVM_DIR=' 'export NVM_DIR="$HOME/.nvm"' "$temporary_file"
         append_unless_active_line_contains '"$NVM_DIR/nvm.sh"' '[ ! -s "$NVM_DIR/nvm.sh" ] || . "$NVM_DIR/nvm.sh"' "$temporary_file"
-        append_unless_active_line_contains '"$NVM_DIR/bash_completion"' '[ ! -s "$NVM_DIR/bash_completion" ] || . "$NVM_DIR/bash_completion"' "$temporary_file"
+        if [ "$SHELL_NAME" = bash ]; then
+            append_unless_active_line_contains '"$NVM_DIR/bash_completion"' '[ ! -s "$NVM_DIR/bash_completion" ] || . "$NVM_DIR/bash_completion"' "$temporary_file"
+        fi
         end_component_config nvm "$temporary_file"
+    fi
+    if [ "$SHELL_NAME" = zsh ]; then
+        begin_component_config completion "$temporary_file"
+        append_once "zstyle ':completion:*' matcher-list 'm:{a-zA-Z}={A-Za-z}'" "$temporary_file"
+        if [ "${STEP_STATES[STEP_OMZ]:-}" != '成功' ]; then
+            append_once 'autoload -Uz compinit; compinit' "$temporary_file"
+        fi
+        end_component_config completion "$temporary_file"
+        if [ "${STEP_STATES[STEP_OMZ]:-}" = '成功' ]; then
+            begin_component_config oh-my-zsh "$temporary_file"
+            if ! active_line_contains 'oh-my-zsh.sh' "$temporary_file"; then
+                local omz_line
+                printf -v omz_line 'export ZSH=%q' "$OMZ_DIR"
+                append_unless_active_line_contains 'export ZSH=' "$omz_line" "$temporary_file"
+                # Preserve user themes, including an explicitly empty theme.
+                append_unless_active_line_contains 'ZSH_THEME=' 'ZSH_THEME="robbyrussell"' "$temporary_file"
+                append_once 'source "$ZSH/oh-my-zsh.sh"' "$temporary_file"
+            fi
+            end_component_config oh-my-zsh "$temporary_file"
+        fi
     fi
     printf '%s\n' "$SHELL_BLOCK_END" >>"$temporary_file"
     "$SHELL_PATH" -n "$temporary_file"
@@ -695,7 +791,7 @@ change_default_shell() {
         printf '错误：账号记录中的默认 shell 尚未变更，请手动检查。\n' >&2
         return 1
     fi
-    printf '默认 shell 已设置为 %sBash%s，请重新打开终端。\n' "$CYAN" "$RESET"
+    printf '默认 shell 已设置为 %s%s%s，请重新打开终端。\n' "$CYAN" "$SHELL_LABEL" "$RESET"
 }
 
 print_results() {
@@ -773,7 +869,7 @@ choose_components() {
     while :; do
         resolve_components
         [ -z "$RESET" ] || printf '\033[H\033[2J'
-        printf '\n选择安装组件（Bash）\n'
+        printf '\n选择安装组件（%s）\n' "$SHELL_LABEL"
         for id in "${!COMPONENT_LABELS[@]}"; do
             mark=' '; reason=''
             if [ "${SELECTED[id]}" -eq 1 ]; then
@@ -831,6 +927,10 @@ run_install() {
         printf '错误：无法读取当前账号信息，未执行安装。\n' >&2
         return 1
     fi
+    if ! choose_shell; then
+        printf '已取消，未执行安装计划。\n'
+        return 0
+    fi
     # Discover existing installations before calculating dependencies; no files are changed.
     export PATH="$LOCAL_BIN:$PATH"
     if ! command_exists brew && [ -x "$HOMEBREW_BIN" ]; then
@@ -847,7 +947,13 @@ run_install() {
         printf '已取消，未执行安装计划。\n'
         return 0
     fi
-    printf '\n安装计划\n目标 shell：%sBash%s\n配置路径：%s%s%s\n' "$CYAN" "$RESET" "$BLUE" "$BASHRC" "$RESET"
+    printf '\n安装计划\n目标 shell：%s%s%s\n配置路径：%s%s%s\n' "$CYAN" "$SHELL_LABEL" "$RESET" "$BLUE" "$SHELL_RC" "$RESET"
+    if [ "$SHELL_NAME" = zsh ]; then
+        printf '必做：%sOh My Zsh%s，安装位置：%s%s%s（复用已有安装，不覆盖启动文件）。\n' "$CYAN" "$RESET" "$BLUE" "$OMZ_DIR" "$RESET"
+        if [ ! -s "$OMZ_DIR/oh-my-zsh.sh" ] && ! command_exists git; then
+            printf '%sOh My Zsh 依赖 git：缺失时必须安装。%s\n' "$YELLOW" "$RESET"
+        fi
+    fi
     local component_id
     for component_id in "${!COMPONENT_LABELS[@]}"; do
         if [ "${SELECTED[component_id]}" -eq 1 ]; then
@@ -871,7 +977,7 @@ run_install() {
         printf '%s ' "${SYSTEM_PACKAGES[@]}"
         printf '%s\n' "$RESET"
     fi
-    printf '必做：准备 Bash 和启动配置，在流程末尾设置为默认 shell。\n'
+    printf '必做：准备 %s 和启动配置，在流程末尾设置为默认 shell。\n' "$SHELL_LABEL"
     printf '确认执行？[y/N] '
     local reply
     IFS= read -r reply || reply=''
@@ -888,17 +994,17 @@ run_install() {
         printf '%s警告：此脚本面向 WSL，当前未检测到 WSL 标记。%s\n' "$YELLOW" "$RESET"
     fi
     STEP_LABELS=() STEP_STATES=() STEP_REMEDIES=() STEP_CODES=()
-    local rerun_command config_command bash_command
+    local rerun_command config_command shell_install_command
     printf -v rerun_command 'bash %q' "$SCRIPT_DIR/$PROGRAM_NAME"
-    printf -v config_command 'bash -n %q && %s' "$BASHRC" "$rerun_command"
-    bash_command="sudo apt install -y bash && $rerun_command"
-    run_step 0 'Bash 安装' "$bash_command" install_bash
+    printf -v config_command '%s -n %q && %s' "$SHELL_NAME" "$SHELL_RC" "$rerun_command"
+    shell_install_command="sudo apt install -y $SHELL_NAME && $rerun_command"
+    run_step 0 "$SHELL_LABEL 安装" "$shell_install_command" install_selected_shell
     if [ "${STEP_STATES[0]}" = '成功' ]; then
-        if SHELL_PATH=$(type -P bash) && SHELL_PATH=$(readlink -f -- "$SHELL_PATH"); then
+        if SHELL_PATH=$(type -P "$SHELL_NAME") && SHELL_PATH=$(readlink -f -- "$SHELL_PATH"); then
             :
         else
             STEP_STATES[0]='失败'
-            printf '%s错误：无法解析 Bash 路径，继续其他独立步骤。%s\n' "$RED" "$RESET" >&2
+            printf '%s错误：无法解析 %s 路径，继续其他独立步骤。%s\n' "$RED" "$SHELL_LABEL" "$RESET" >&2
         fi
     fi
     if [ "$SYSTEM_SELECTED" -eq 1 ]; then
@@ -907,6 +1013,13 @@ run_install() {
         run_step 1 '系统基础包' "$packages_command" install_system_packages
     else
         skip_step 1 '系统基础包' '用户未选择'
+    fi
+    if [ "$SHELL_NAME" = zsh ]; then
+        if [ "${STEP_STATES[0]}" = '成功' ]; then
+            run_step "$STEP_OMZ" 'Oh My Zsh' "$rerun_command" install_oh_my_zsh
+        else
+            skip_step "$STEP_OMZ" 'Oh My Zsh' '因依赖失败跳过' "$shell_install_command"
+        fi
     fi
     run_step "$STEP_USER_BIN" '用户工具目录 / toria-update' "$rerun_command" configure_user_bin
     export PATH="$LOCAL_BIN:$PATH"
@@ -962,18 +1075,20 @@ run_install() {
     fi
     # Each step runs in a subshell; rediscover installed command paths in the parent.
     if ! command_exists brew && [ -x "$HOMEBREW_BIN" ]; then export PATH="${HOMEBREW_BIN%/*}:$PATH"; fi
-    run_step "$STEP_COMPLETION" 'Bash 补全' "$rerun_command" configure_inputrc
+    if [ "$SHELL_NAME" = bash ]; then
+        run_step "$STEP_COMPLETION" 'Bash 补全' "$rerun_command" configure_inputrc
+    fi
     if [ "${STEP_STATES[0]}" = '成功' ]; then
-        run_step 2 'Bash 配置' "检查路径、权限及托管块，修复后运行：$config_command" prepare_shell_config
+        run_step 2 "$SHELL_LABEL 配置" "检查路径、权限及托管块，修复后运行：$config_command" prepare_shell_config
     else
-        skip_step 2 'Bash 配置' '因依赖失败跳过' "$bash_command"
+        skip_step 2 "$SHELL_LABEL 配置" '因依赖失败跳过' "$shell_install_command"
     fi
     if [ "${STEP_STATES[0]}" = '成功' ] && [ "${STEP_STATES[2]}" = '成功' ]; then
         local shell_command
         printf -v shell_command 'chsh -s %q %q' "$SHELL_PATH" "$ACCOUNT_NAME"
         run_step 3 '默认 shell 切换' "$shell_command" change_default_shell
     else
-        skip_step 3 '默认 shell 切换' '因依赖失败跳过' "先修复 Bash 安装或配置，再运行：$rerun_command"
+        skip_step 3 '默认 shell 切换' '因依赖失败跳过' "先修复 $SHELL_LABEL 安装或配置，再运行：$rerun_command"
     fi
     report_installed_versions || printf '%s部分版本查询失败，继续显示安装结果。%s\n' "$YELLOW" "$RESET"
     print_results
