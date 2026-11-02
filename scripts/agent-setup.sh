@@ -117,6 +117,20 @@ require_command() {
     fi
 }
 
+# A Bash child cannot trigger the parent Zsh's lazy nvm functions.
+require_node() {
+    command -v node >/dev/null 2>&1 && return 0
+    local nvm_script="${NVM_DIR:-$HOME/.nvm}/nvm.sh"
+    if [ -s "$nvm_script" ]; then
+        # shellcheck disable=SC1090
+        if source "$nvm_script" --no-use && nvm use --silent default; then
+            command -v node >/dev/null 2>&1 && return 0
+        fi
+    fi
+    printf 'Error: Node.js is unavailable. Load nvm and activate an installed default version (nvm use default), or install Node.js, then retry.\n' >&2
+    return 1
+}
+
 # Do not put the subshell in an if/! condition: that disables errexit inside
 # called functions, allowing an earlier failed write to look successful.
 run_item() {
@@ -1959,7 +1973,7 @@ JS
 
 scan_removal_inventory() {
     local rows id kind group label
-    require_command node || return 1
+    require_node || return 1
     if [ -n "$REMOVAL_TEMP" ]; then rm -rf -- "$REMOVAL_TEMP"; fi
     REMOVAL_TEMP="$(mktemp -d)" || return 1
     trap cleanup_setup_resources EXIT
@@ -2024,7 +2038,7 @@ JS
 confirm_backup_removal() {
     local names name answer
     local backups=()
-    require_command node
+    require_node || return 1
     names=$(list_setup_backups)
     if [ -z "$names" ]; then printf 'No setup backups found.\n'; return 0; fi
     printf '\nRemove all setup backup directories listed below:\n'
@@ -2046,8 +2060,8 @@ preflight() {
         case "$item" in
             0 | 1) require_command curl || return 1 ;;
             2) : ;;
-            3) require_command node || return 1 ;;
-            4) require_command curl || return 1; require_command node || return 1; require_command npx || return 1 ;;
+            3) require_node || return 1 ;;
+            4) require_command curl || return 1; require_node || return 1; require_command npx || return 1 ;;
         esac
     done
 }

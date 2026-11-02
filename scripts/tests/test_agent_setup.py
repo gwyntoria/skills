@@ -167,6 +167,68 @@ class AgentSetupTests(unittest.TestCase):
     def calls(self):
         return [json.loads(line) for line in self.log.read_text().splitlines()] if self.log.exists() else []
 
+    def node_bootstrap_fixture(self, custom=False):
+        # Exclude any host Node installation from the initial PATH.
+        isolated = self.root / 'isolated-bin'
+        isolated.mkdir()
+        for command in ['bash', 'dirname', 'mktemp', 'rm']:
+            (isolated / command).symlink_to(shutil.which(command))
+        self.env['PATH'] = str(isolated)
+        self.env.pop('NVM_DIR', None)
+        runtime = self.root / 'node-bin'
+        runtime.mkdir()
+        (runtime / 'node').symlink_to(shutil.which('node'))
+        nvm = self.root / 'custom-nvm' if custom else self.home / '.nvm'
+        nvm.mkdir()
+        if custom:
+            self.env['NVM_DIR'] = str(nvm)
+        (nvm / 'nvm.sh').write_text(
+            '[ "$1" = --no-use ] || return 1\n'
+            'nvm() {\n'
+            '  [ "$*" = "use --silent default" ] || return 1\n'
+            f'  export PATH={shlex.quote(str(runtime))}:"$PATH"\n'
+            '}\n')
+        return nvm
+
+    def test_node_bootstrap_preserves_available_node(self):
+        nvm = self.home / '.nvm'
+        nvm.mkdir()
+        (nvm / 'nvm.sh').write_text('echo unexpected-nvm-load >&2; return 1\n')
+        result = self.source('require_node\nnode --version')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertRegex(result.stdout, r'v\d+\.')
+        self.assertEqual(result.stderr, '')
+
+    def test_node_bootstrap_scans_rules_with_default_or_custom_nvm(self):
+        for custom in [False, True]:
+            with self.subTest(custom=custom):
+                # Each case needs its own isolated command directories.
+                if custom:
+                    shutil.rmtree(self.root / 'isolated-bin')
+                    shutil.rmtree(self.root / 'node-bin')
+                self.node_bootstrap_fixture(custom)
+                target = self.home / '.codex/AGENTS.md'
+                target.parent.mkdir(exist_ok=True)
+                target.write_text('<!-- gwyn-space-skills: agent-behavior:start -->\n'
+                                  'rule\n<!-- gwyn-space-skills: agent-behavior:end -->\n')
+                result = self.source('REMOVE_RULES=1\nscan_removal_inventory\n'
+                                     'printf "%s\\n" "${REMOVAL_RULE_LABELS[@]}"')
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn('Codex / agent-behavior [block]', result.stdout)
+
+    def test_node_bootstrap_reports_missing_nvm_or_default(self):
+        nvm = self.node_bootstrap_fixture()
+        for broken_default in [False, True]:
+            with self.subTest(broken_default=broken_default):
+                if broken_default:
+                    (nvm / 'nvm.sh').write_text('nvm() { return 3; }\n')
+                else:
+                    (nvm / 'nvm.sh').unlink()
+                result = self.source('require_node')
+                self.assertEqual(result.returncode, 1)
+                self.assertIn('Node.js is unavailable', result.stderr)
+                self.assertIn('nvm use default', result.stderr)
+
     def terminal(self, cwd=None):
         terminal = Terminal(self.env, cwd=cwd)
         self.addCleanup(terminal.close)
