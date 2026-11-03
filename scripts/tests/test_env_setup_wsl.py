@@ -17,6 +17,7 @@ import unittest
 
 SCRIPT = Path(__file__).resolve().parents[1] / 'env-setup-wsl.sh'
 ZSH_BINARY = shutil.which('zsh')
+FISH_BINARY = shutil.which('fish')
 
 STUB = r'''
 import json, os, sys
@@ -50,6 +51,10 @@ elif name == 'apt':
             if os.environ.get('FAIL_SHELL'): sys.exit(42)
             target = Path(os.environ['FIXTURE_BIN']) / 'zsh'
             target.write_bytes(target.with_name('zsh-fixture').read_bytes()); target.chmod(0o755)
+        elif 'fish' in args:
+            if os.environ.get('FAIL_SHELL'): sys.exit(42)
+            target = Path(os.environ['FIXTURE_BIN']) / 'fish'
+            target.write_bytes(target.with_name('fish-fixture').read_bytes()); target.chmod(0o755)
         elif 'bash' in args:
             if os.environ.get('FAIL_SHELL'): sys.exit(42)
             target = Path(os.environ['FIXTURE_BIN']) / 'bash'
@@ -81,7 +86,10 @@ elif name == 'starship':
 elif name == 'wslpath':
     print(r'C:\fixture dir')
 elif name == 'fzf':
-    print('0.60.0')
+    if args == ['--help']: print('--fish --bash')
+    elif args == ['--fish']: print('set -g FIXTURE_FZF_LOADED 1')
+    elif args == ['--bash']: print('export FIXTURE_FZF_LOADED=1')
+    else: print('0.60.0')
 elif name in ('7zz', '7z'):
     if os.environ.get('FAIL_7ZIP'): sys.exit(45)
     print('7-Zip fixture')
@@ -130,7 +138,8 @@ elif name in ('brew', 'eza', 'lazygit', 'uv', 'npm', 'git'):
         target.write_bytes((Path(os.environ['FIXTURE_BIN']) / (args[1] + '-fixture')).read_bytes())
         target.chmod(0o755)
     if name == 'brew' and args[:1] == ['shellenv']:
-        print('export PATH="' + os.environ['FIXTURE_BIN'] + ':$PATH"')
+        if args[-1] == 'fish': print('set -gx PATH "' + os.environ['FIXTURE_BIN'] + '" $PATH')
+        else: print('export PATH="' + os.environ['FIXTURE_BIN'] + ':$PATH"')
     else: print(name + ' fixture version')
 elif name == 'nvm':
     if args[:2] == ['alias', 'default']:
@@ -140,6 +149,9 @@ elif name == 'nvm':
         print('N/A'); sys.exit(3)
     if args[0] == 'install' and os.environ.get('FAIL_NODE'): sys.exit(55)
     print('v24.0.0')
+elif name == 'fish':
+    if args == ['--version']: print('fish fixture version')
+    else: os.execv(os.environ['REAL_FISH'], [os.environ['REAL_FISH']] + args)
 elif name == 'zsh':
     if args == ['--version']: print('zsh fixture version')
     else: os.execv(os.environ['REAL_ZSH'], [os.environ['REAL_ZSH']] + args)
@@ -245,7 +257,7 @@ class WslSetupTests(unittest.TestCase):
         self.log = self.root / 'calls.jsonl'
         self.packages = self.root / 'packages'
         self.env = dict(os.environ, EXPECTED_SHELL='/bin/bash', HOME=str(self.home), PATH=str(self.bin), TERM='xterm-256color',
-                        NVM_DIR=str(self.home / '.nvm'), REAL_ZSH=ZSH_BINARY or '', CALL_LOG=str(self.log), PACKAGE_STATE=str(self.packages), FIXTURE_BIN=str(self.bin),
+                        NVM_DIR=str(self.home / '.nvm'), XDG_CONFIG_HOME=str(self.home / '.config'), REAL_ZSH=ZSH_BINARY or '', REAL_FISH=FISH_BINARY or '', CALL_LOG=str(self.log), PACKAGE_STATE=str(self.packages), FIXTURE_BIN=str(self.bin),
                         SHELL_STATE=str(self.root / 'login-shell'))
         # Mock the fixed external Homebrew location as well as PATH. The whole
         # entrypoint still runs; no installed host Homebrew can bypass the fakes.
@@ -267,6 +279,8 @@ class WslSetupTests(unittest.TestCase):
     def stub(self, name, body):
         if name in ('zsh', 'zsh-fixture'):
             self.assertIsNotNone(ZSH_BINARY, 'Zsh tests require zsh on PATH; see README.md')
+        if name in ('fish', 'fish-fixture'):
+            self.assertIsNotNone(FISH_BINARY, 'Fish tests require fish on PATH')
         target = self.bin / name
         if target.is_symlink(): target.unlink()
         target.write_text('#!' + sys.executable + '\n' + body)
@@ -277,7 +291,7 @@ class WslSetupTests(unittest.TestCase):
         term = Terminal(self.env)
         self.addCleanup(term.close)
         term.expect('选择终端类型')
-        term.send((b'\x1b[B' if shell == 'zsh' else b'') + b'\r')
+        term.send(b'\x1b[B' * {'fish': 0, 'zsh': 1, 'bash': 2}[shell] + b'\r')
         term.expect('选择安装组件')
         return term
 
@@ -587,14 +601,14 @@ class WslSetupTests(unittest.TestCase):
         output, code = self.confirm(self.choose_only(set(), shell='zsh',
                                       plugins=['fzf', 'nvm', 'zsh-autosuggestions', 'extract']))
         self.assertEqual(code, 1, output)
-        self.assertIn('[失败] fzf 程序', output)
+        self.assertIn('[失败] fzf', output)
         self.assertIn('[失败] nvm/Node.js', output)
         self.assertIn('[因依赖失败跳过] Zsh 插件 fzf', output)
         self.assertIn('[因依赖失败跳过] Zsh 插件 nvm', output)
         self.assertIn('[失败] Zsh 插件 zsh-autosuggestions', output)
         self.assertIn('[成功] Zsh 插件 extract', output)
         self.assertIn('[成功] 默认 shell 切换', output)
-        self.assertIn('sudo apt update && sudo apt install -y fzf', output)
+        self.assertIn('手动处理：', output)
         result = subprocess.run([ZSH_BINARY, '-dfc', 'source "$HOME/.zshrc"; print -l -- $plugins'],
                                 env=self.env, text=True, capture_output=True)
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -839,6 +853,89 @@ class WslSetupTests(unittest.TestCase):
                 if failure == 'switch': self.assertIn('[失败] 默认 shell 切换', output)
                 self.assertIn('手动处理：', output)
 
+    def test_fish_first_default_selection_and_existing_configuration_are_preserved(self):
+        self.stub('fish', STUB)
+        fishrc = self.home / '.config/fish/config.fish'
+        fishrc.parent.mkdir(parents=True)
+        fishrc.write_text('# user fish settings\nset -g KEEP_ME yes\n')
+        output, code = self.confirm(self.choose_only(set(), shell='fish'))
+        self.assertEqual(code, 0, output)
+        self.assertIn('set -g KEEP_ME yes', fishrc.read_text())
+        subprocess.run([FISH_BINARY, '-n', str(fishrc)], check=True)
+        self.assertEqual(self.zshrc.read_text(), '# untouched zsh\n')
+        self.assertFalse(self.bashrc.exists())
+        self.assertEqual(self.calls('chsh')[-1][2], str(self.bin / 'fish'))
+        self.assertNotIn('选择 Zsh 插件', output)
+        self.assertFalse([c for c in self.calls('git') if 'clone' in c])
+
+    def test_fish_fzf_configuration_loads_and_repeated_runs_are_idempotent(self):
+        self.stub('fish', STUB)
+        self.stub('fzf', STUB)
+        self.stub('wslpath', STUB)
+        output, code = self.confirm(self.choose_only({9}, shell='fish'))
+        self.assertEqual(code, 0, output)
+        fishrc = self.home / '.config/fish/config.fish'
+        generated = fishrc.read_bytes()
+        loaded = subprocess.run([FISH_BINARY, '-i', '-c',
+                                 'test "$FIXTURE_FZF_LOADED" = 1; and test "$EDITOR" = "code --wait"; and functions -q __env_setup_wsl_update_cwd'],
+                                env=dict(self.env, WSL_DISTRO_NAME='Fixture'), capture_output=True, text=True)
+        self.assertEqual(loaded.returncode, 0, loaded.stderr)
+        output, code = self.confirm(self.choose_only({9}, shell='fish'))
+        self.assertEqual(code, 0, output)
+        self.assertEqual(fishrc.read_bytes(), generated)
+
+    def test_zsh_public_fzf_deselection_cancels_plugin_dependency(self):
+        self.stub('zsh', STUB)
+        term = self.choose_only(set(), shell='zsh', plugins=['fzf'])
+        term.send(b'b')
+        term.expect('选择安装组件（Zsh）')
+        term.send(b'\x1b[B' * 9 + b' ' + b'\r')
+        term.expect('选择 Zsh 插件')
+        term.expect('方向键移动')
+        screen = re.sub(r'\x1b\[[0-9;?]*[a-zA-Z]', '', term.output.decode()).split('选择 Zsh 插件')[-1]
+        self.assertIn('[ ] fzf', screen)
+        term.send(b'q')
+        self.assertEqual(term.finish(), 0)
+        self.assertFalse(self.calls('apt'))
+
+    def test_fish_adapter_failure_preserves_existing_functions_without_partial_install(self):
+        directory = self.home / '.config/fish/functions'
+        directory.mkdir(parents=True)
+        (directory / 'bass.fish').write_text('function bass; return 1; end\n')
+        (directory / '__bass.py').write_text('# existing helper\n')
+        original = {p.name: p.read_bytes() for p in directory.iterdir()}
+        env = dict(self.env, PATH=os.environ['PATH'])
+        result = subprocess.run(['/bin/bash', '-c',
+                                 'source "$1"; SHELL_PATH="$2"; install_fish_nvm_adapter',
+                                 'fixture', str(SCRIPT), FISH_BINARY], env=env, capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertEqual({p.name: p.read_bytes() for p in directory.iterdir()}, original)
+        (directory / 'nvm.fish').write_text('# user implementation\n')
+        original['nvm.fish'] = b'# user implementation\n'
+        result = subprocess.run(['/bin/bash', '-c',
+                                 'source "$1"; SHELL_PATH="$2"; install_fish_nvm_adapter',
+                                 'fixture', str(SCRIPT), FISH_BINARY], env=env, capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('已有 nvm.fish', result.stderr)
+        self.assertEqual({p.name: p.read_bytes() for p in directory.iterdir()}, original)
+
+    def test_missing_fish_is_installed_and_its_config_directory_is_created(self):
+        self.stub('fish-fixture', STUB)
+        output, code = self.confirm(self.choose_only(set(), shell='fish'))
+        self.assertEqual(code, 0, output)
+        self.assertIn(['apt', 'install', '-y', 'fish'], self.calls('apt'))
+        fishrc = self.home / '.config/fish/config.fish'
+        self.assertTrue(fishrc.is_file())
+        subprocess.run([FISH_BINARY, '-n', str(fishrc)], check=True)
+
+    def test_failed_fish_install_does_not_write_configuration_or_switch(self):
+        self.stub('fish-fixture', STUB)
+        self.env['FAIL_SHELL'] = '1'
+        output, code = self.confirm(self.choose_only(set(), shell='fish'))
+        self.assertEqual(code, 1, output)
+        self.assertFalse((self.home / '.config/fish/config.fish').exists())
+        self.assertFalse(self.calls('chsh'))
+
     def test_shell_page_cancel_never_runs_installation(self):
         term = Terminal(self.env)
         self.addCleanup(term.close)
@@ -978,6 +1075,7 @@ class WslSetupTests(unittest.TestCase):
         self.assertTrue(self.calls('chsh'))
 
     def test_agent_uses_requested_node_and_defaults_reuse_all_components(self):
+        self.stub('fzf', STUB)
         self.ai_fixture()
         self.env['NODE_VERSION'] = '22'
         term = self.terminal()
@@ -1004,8 +1102,8 @@ class WslSetupTests(unittest.TestCase):
     def choose_only(self, chosen, shell="bash", plugins=()):
         term = self.terminal(shell)
         # Reset in dependency order, then express only the requested selections.
-        term.send(b'\x1b[B' * 8)
-        for row in range(8, 0, -1):
+        term.send(b'\x1b[B' * 9)
+        for row in range(9, 0, -1):
             term.send(b' \x1b[A')
         term.send(b' ')
         focus = 0
@@ -1289,6 +1387,7 @@ class WslSetupTests(unittest.TestCase):
         self.assertFalse(self.calls('curl'))
 
     def test_development_components_default_selected_and_reuse_installed_tools(self):
+        self.stub('fzf', STUB)
         self.dev_fixture()
         term = self.terminal()
         term.expect('[x] Homebrew/eza')
@@ -1565,7 +1664,7 @@ class WslSetupTests(unittest.TestCase):
         self.env['NO_COLOR'] = '1'
         term = self.terminal()
         term.expect('> [x] 系统基础包')
-        term.send(b'\x1b[B' * 9)
+        term.send(b'\x1b[B' * 10)
         term.expect('> 继续')
         term.send(b'q')
         self.assertEqual(term.finish(), 0)

@@ -8,11 +8,11 @@ set -euo pipefail
 # Usage:
 #   ./env-setup-wsl.sh  Install
 #
-# Interactive Bash/Zsh setup, plugins, prompts, development runtimes and AI tools.
+# Interactive Fish/Zsh/Bash setup, plugins, prompts, development runtimes and AI tools.
 #
 # Target:
 #   - Ubuntu on WSL
-#   - Bash or Zsh
+#   - Fish, Zsh or Bash
 # ============================================================
 
 PROGRAM_NAME="${0##*/}"
@@ -56,8 +56,8 @@ INPUTRC=""
 NVM_DIR=""
 SHELL_BLOCK_START='# >>> env-setup-wsl.sh shell >>>'
 SHELL_BLOCK_END='# <<< env-setup-wsl.sh shell <<<'
-SHELL_NAME=bash
-SHELL_LABEL=Bash
+SHELL_NAME=fish
+SHELL_LABEL=Fish
 OMZ_DIR=""
 OMZ_CUSTOM=""
 SHELL_PATH=""
@@ -66,7 +66,7 @@ ORIGINAL_SHELL=""
 STEP_LABELS=() STEP_STATES=() STEP_REMEDIES=() STEP_CODES=()
 readonly STEP_BREW=4 STEP_LAZYGIT=5 STEP_UV=6 STEP_NODE=7
 readonly STEP_USER_BIN=8 STEP_COMPLETION=9 STEP_LAZY_BREW=10
-readonly STEP_CODEX=11 STEP_CLAUDE=12 STEP_AGENT=13 STEP_OMZ=14 STEP_FZF=15 STEP_PLUGIN_BASE=16 STEP_STARSHIP=24
+readonly STEP_OMZ=14 STEP_FZF=15 STEP_PLUGIN_BASE=16 STEP_STARSHIP=24 STEP_FISH_NVM=25
 
 # ------------------------------------------------------------
 # Output helpers
@@ -255,8 +255,8 @@ remove_managed_block() {
 
 usage() {
     printf '用法：%s [选项]\n' "$PROGRAM_NAME"
-    printf '\n交互式 Bash/Zsh 环境配置：选择 shell 和组件，确认后安装并设置默认 shell。\n'
-    printf '可选：系统基础包、Homebrew/eza、lazygit、uv/Python、nvm/Node.js、Codex CLI、Claude Code、Agent/Skill 配置、Starship。\n'
+    printf '\n交互式 Fish/Zsh/Bash 环境配置：选择 shell 和组件，确认后安装并设置默认 shell。\n'
+    printf '可选：系统基础包、Homebrew/eza、lazygit、uv/Python、nvm/Node.js、Starship。\n'
     printf '\n选项：\n  -h, --help       显示帮助（无需交互终端）\n'
     printf '\n安装需要交互终端；NO_COLOR 可禁用颜色，不提供无人值守安装参数。\n'
     printf '保留版本环境变量：PYTHON_VERSION=3.14、NODE_VERSION=lts/*。\n'
@@ -469,32 +469,6 @@ install_node() {
     nvm alias default "$NODE_VERSION"
 }
 
-install_codex() {
-    if ! command_exists codex; then
-        curl -fsSL https://chatgpt.com/codex/install.sh |
-            SHELL="/bin/$SHELL_NAME" CODEX_INSTALL_DIR="$LOCAL_BIN" CODEX_NON_INTERACTIVE=true sh
-    fi
-    codex --version
-}
-
-install_claude() {
-    if ! command_exists claude; then
-        curl -fsSL https://claude.ai/install.sh | SHELL="/bin/$SHELL_NAME" bash
-    fi
-    claude --version
-}
-
-configure_agents() {
-    # run_step owns this subshell; activate the verified Node for the delegated entrypoint.
-    # shellcheck disable=SC1090
-    source "$NVM_DIR/nvm.sh" --no-use
-    nvm use "$NODE_VERSION"
-    command_exists node
-    command_exists npm
-    command_exists npx
-    SHELL="/bin/$SHELL_NAME" bash "$SCRIPT_DIR/agent-setup.sh" --agent --skill
-}
-
 report_installed_versions() (
     printf '\n可用工具版本\n'
     local command shell_environment
@@ -507,7 +481,7 @@ report_installed_versions() (
         source "$NVM_DIR/nvm.sh" --no-use || return 1
         nvm use "$NODE_VERSION" || return 1
     fi
-    for command in git brew eza lazygit starship uv node npm codex claude; do
+    for command in git brew eza lazygit starship uv node npm; do
         if command_exists "$command"; then
             printf '%s%s%s: ' "$CYAN" "$command" "$RESET"
             "$command" --version || printf '%s版本查询失败%s\n' "$YELLOW" "$RESET"
@@ -615,13 +589,6 @@ install_plugin() (
 install_plugins() {
     local rerun_command="$1" runtime_command="$2"
     local id step label
-    if [ "${PLUGIN_SELECTED[PLUGIN_FZF]}" -eq 0 ]; then
-        skip_step "$STEP_FZF" 'fzf 程序' '用户未选择'
-    elif [ "${STEP_STATES[STEP_OMZ]}" != '成功' ]; then
-        skip_step "$STEP_FZF" 'fzf 程序' '因依赖失败跳过' "$rerun_command"
-    else
-        run_step "$STEP_FZF" 'fzf 程序（自动依赖）' 'sudo apt update && sudo apt install -y fzf && fzf --version' install_fzf
-    fi
     for id in "${!PLUGIN_NAMES[@]}"; do
         step=$((STEP_PLUGIN_BASE + id))
         label="Zsh 插件 ${PLUGIN_NAMES[id]}"
@@ -719,8 +686,8 @@ choose_shell() {
     while :; do
         [ -z "$RESET" ] || printf '\033[H\033[2J'
         printf '\n选择终端类型\n'
-        for id in 0 1; do
-            if [ "$id" -eq 0 ]; then label=Bash; else label=Zsh; fi
+        for id in 0 1 2; do
+            case "$id" in 0) label=Fish ;; 1) label=Zsh ;; 2) label=Bash ;; esac
             if [ "$focus" -eq "$id" ]; then printf '%s> ' "$FOCUS"; else printf '  '; fi
             printf '%s%s%s\n' "$CYAN" "$label" "$RESET"
         done
@@ -729,10 +696,11 @@ choose_shell() {
         case "$key" in
         $'\e')
             IFS= read -rsn2 -t 0.2 key || :
-            case "$key" in '[A'|'[B') focus=$((1 - focus)) ;; esac ;;
+            case "$key" in '[A') focus=$(((focus + 2) % 3)) ;; '[B') focus=$(((focus + 1) % 3)) ;; esac ;;
         '')
-            if [ "$focus" -eq 0 ]; then SHELL_NAME=bash SHELL_LABEL=Bash; else SHELL_NAME=zsh SHELL_LABEL=Zsh; fi
+            case "$focus" in 0) SHELL_NAME=fish SHELL_LABEL=Fish ;; 1) SHELL_NAME=zsh SHELL_LABEL=Zsh ;; 2) SHELL_NAME=bash SHELL_LABEL=Bash ;; esac
             SHELL_RC="$HOME/.$SHELL_NAME"rc
+            if [ "$SHELL_NAME" = fish ]; then SHELL_RC="${XDG_CONFIG_HOME:-$HOME/.config}/fish/config.fish"; fi
             if [ "$SHELL_NAME" = zsh ]; then
                 discover_zsh_path ZSH "${ZSH:-$HOME/.oh-my-zsh}"
                 OMZ_DIR="$ZSH"
@@ -859,7 +827,7 @@ prepare_plugin_config() {
 
 prepare_prompt_config() (
     local file="$1" original="$2" staging keep_theme=0
-    if [ "${SELECTED[8]}" -eq 1 ] && [ -f "$original" ] &&
+    if [ "${SELECTED[5]}" -eq 1 ] && [ -f "$original" ] &&
         grep -Fqx '# >>> env-setup-wsl.sh prompt-theme >>>' "$original"; then keep_theme=1; fi
     # Preserve an existing prompt on installation failure, including legacy blocks.
     if [ "${STEP_STATES[STEP_STARSHIP]:-}" = '成功' ]; then
@@ -869,11 +837,11 @@ prepare_prompt_config() (
             printf 'if [ -z "${_ENV_SETUP_WSL_STARSHIP_LOADED:-}" ]; then\n    eval "$(starship init %s)"\n    _ENV_SETUP_WSL_STARSHIP_LOADED=1\nfi\n' "$SHELL_NAME" >>"$file"
         fi
         end_component_config starship "$file"
-    elif [ "${SELECTED[8]}" -eq 0 ]; then
+    elif [ "${SELECTED[5]}" -eq 0 ]; then
         remove_managed_block "$WT_HOOK_START" "$WT_HOOK_END" "$file"
         remove_managed_block '# >>> env-setup-wsl.sh starship >>>' '# <<< env-setup-wsl.sh starship <<<' "$file"
     fi
-    if [ "$SHELL_NAME" = zsh ] && { [ "${STEP_STATES[STEP_STARSHIP]:-}" = '成功' ] || [ "${SELECTED[8]}" -eq 0 ] || [ "$keep_theme" -eq 1 ]; }; then
+    if [ "$SHELL_NAME" = zsh ] && { [ "${STEP_STATES[STEP_STARSHIP]:-}" = '成功' ] || [ "${SELECTED[5]}" -eq 0 ] || [ "$keep_theme" -eq 1 ]; }; then
         remove_managed_block '# >>> env-setup-wsl.sh prompt-theme >>>' '# <<< env-setup-wsl.sh prompt-theme <<<' "$file"
         if [ "${STEP_STATES[STEP_STARSHIP]:-}" = '成功' ] || [ "$keep_theme" -eq 1 ]; then
             # Insert immediately before framework loading, after user theme assignments.
@@ -929,10 +897,170 @@ HOOK
     end_component_config cwd "$file"
 )
 
+install_fish_nvm_adapter() (
+    local directory="${XDG_CONFIG_HOME:-$HOME/.config}/fish/functions" staging name
+    local revision=79b62958ecf4e87334f24d6743e5766475bcf4d0
+    command_exists python3 || { sudo apt update; sudo apt install -y python3; }
+    command_exists curl || { sudo apt update; sudo apt install -y curl; }
+    mkdir -p -- "$directory"
+    staging=$(mktemp -d)
+    trap 'rm -rf -- "$staging"' EXIT
+    for name in bass.fish __bass.py; do
+        if [ -e "$directory/$name" ] || [ -L "$directory/$name" ]; then
+            [ -f "$directory/$name" ] && [ -r "$directory/$name" ] || return 1
+        else
+            curl -fsSL "https://raw.githubusercontent.com/edc/bass/$revision/functions/$name" -o "$staging/$name"
+        fi
+    done
+    cat >"$staging/nvm.fish" <<'FISH'
+# Requires bass (edc/bass), Bash and Python 3.
+function nvm --description 'Use the existing Bash nvm from fish'
+    bass source (string escape -- "$NVM_DIR/nvm.sh") --no-use ';' nvm (string escape -- $argv)
+end
+FISH
+    if [ -e "$directory/nvm.fish" ] || [ -L "$directory/nvm.fish" ]; then
+        if ! cmp -s "$directory/nvm.fish" "$staging/nvm.fish"; then
+            printf '错误：已有 nvm.fish 与所需适配函数不同，保留原文件，请手动检查。\n' >&2
+            return 1
+        fi
+    fi
+    for name in bass.fish __bass.py; do
+        if [ -f "$directory/$name" ]; then cp -- "$directory/$name" "$staging/$name"; fi
+    done
+    # `fish -n FILE ARG...` treats later paths as $argv, so check one file per call.
+    for name in bass.fish nvm.fish; do
+        "$SHELL_PATH" -n "$staging/$name"
+    done
+    python3 -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' "$staging/__bass.py"
+    # Verify existing bass and its companion together before reusing either.
+    "$SHELL_PATH" --no-config -c 'source "$argv[1]/bass.fish"; bass export ENV_SETUP_BASS_CHECK=ok; and test "$ENV_SETUP_BASS_CHECK" = ok' -- "$staging"
+    NVM_DIR="$NVM_DIR" "$SHELL_PATH" --no-config -c '
+        source "$argv[1]/bass.fish"
+        source "$argv[1]/nvm.fish"
+        nvm use --silent default; or exit $status
+        command -q node; or exit 1
+        node --version
+    ' -- "$staging"
+    for name in bass.fish __bass.py nvm.fish; do
+        if [ ! -e "$directory/$name" ]; then cp -- "$staging/$name" "$directory/$name"; fi
+    done
+)
+
+prepare_fish_config() (
+    local target directory temporary_file backup_file other_rc
+    if [ -L "$SHELL_RC" ] && [ ! -e "$SHELL_RC" ]; then
+        printf '错误：配置符号链接的目标不存在，保留原链接。\n' >&2
+        return 1
+    fi
+    mkdir -p -- "$(dirname -- "$SHELL_RC")"
+    target=$(readlink -f -- "$SHELL_RC")
+    for other_rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
+        if [ "$SHELL_RC" -ef "$other_rc" ]; then
+            printf '错误：多个 shell 共用同一个配置文件，保留原文件。\n' >&2
+            return 1
+        fi
+    done
+    [ ! -e "$target" ] || [ -f "$target" ] || return 1
+    directory=$(dirname -- "$target")
+    temporary_file=$(mktemp "$directory/.config.fish.tmp.XXXXXX")
+    trap 'rm -f -- "$temporary_file"' EXIT
+    [ ! -f "$target" ] || cp -p -- "$target" "$temporary_file"
+    remove_managed_block "$SHELL_BLOCK_START" "$SHELL_BLOCK_END" "$temporary_file"
+    printf '%s\n# 目标 shell：Fish；此块由环境安装向导管理。\n' "$SHELL_BLOCK_START" >>"$temporary_file"
+    if [ -f "$target" ]; then
+        awk -v start="$SHELL_BLOCK_START" -v end="$SHELL_BLOCK_END" '$0==start {inside=1;next} $0==end {inside=0;next} inside && $0 !~ /^# 目标 shell/ {print}' "$target" >>"$temporary_file"
+    fi
+    begin_component_config fish-base "$temporary_file"
+    cat >>"$temporary_file" <<'FISH'
+fish_add_path --global "$HOME/.local/bin"
+set -gx EDITOR 'code --wait'
+set -gx VISUAL 'code --wait'
+if status is-interactive
+    alias ll 'ls'
+    alias grep 'grep --color=auto'
+    alias .. 'cd ..'
+    alias ... 'cd ../..'
+    alias mk 'make -j'
+    alias ml 'make load'
+    alias mc 'make clean'
+    if type -q direnv
+        direnv hook fish | source
+    end
+    if set -q WSL_DISTRO_NAME; and type -q wslpath
+        function __env_setup_wsl_update_cwd --on-event fish_prompt
+            set -l windows_path (wslpath -w "$PWD" 2>/dev/null)
+            or return
+            printf '\e]9;9;%s\e\\' "$windows_path"
+        end
+    end
+end
+FISH
+    end_component_config fish-base "$temporary_file"
+    if [ "${STEP_STATES[STEP_BREW]:-}" = '成功' ] || [ "${STEP_STATES[STEP_LAZY_BREW]:-}" = '成功' ]; then
+        local brew_path
+        brew_path=$(type -P brew)
+        # Fish escaping is performed by fish rather than Bash printf %q.
+        begin_component_config homebrew "$temporary_file"
+        "$SHELL_PATH" --no-config -c 'printf "%s shellenv fish | source\n" (string escape -- $argv[1])' -- "$brew_path" >>"$temporary_file"
+        end_component_config homebrew "$temporary_file"
+    fi
+    if [ "${STEP_STATES[STEP_BREW]:-}" = '成功' ]; then
+        begin_component_config eza "$temporary_file"
+        printf '%s\n' 'if status is-interactive' '    alias ls "eza -al --git --group-directories-first --icons=auto"' '    alias la "eza -alG --git --group-directories-first --icons=auto"' end >>"$temporary_file"
+        end_component_config eza "$temporary_file"
+    fi
+    if [ "${STEP_STATES[STEP_NODE]:-}" = '成功' ] && [ "${STEP_STATES[STEP_FISH_NVM]:-}" = '成功' ]; then
+        begin_component_config nvm "$temporary_file"
+        printf '%s\n' 'if status is-interactive' '    set -gx NVM_DIR "$HOME/.nvm"' '    if test -s "$NVM_DIR/nvm.sh"' '        nvm use --silent default' '    end' end >>"$temporary_file"
+        end_component_config nvm "$temporary_file"
+    fi
+    if [ "${STEP_STATES[STEP_FZF]:-}" = '成功' ]; then
+        begin_component_config fzf "$temporary_file"
+        cat >>"$temporary_file" <<'FISH'
+if status is-interactive
+    if fzf --help | string match -q '*--fish*'
+        fzf --fish | source
+    else if test -r /usr/share/doc/fzf/examples/key-bindings.fish
+        source /usr/share/doc/fzf/examples/key-bindings.fish
+        fzf_key_bindings
+    else if test -r /usr/share/fish/vendor_functions.d/fzf_key_bindings.fish
+        source /usr/share/fish/vendor_functions.d/fzf_key_bindings.fish
+        fzf_key_bindings
+    end
+end
+FISH
+        end_component_config fzf "$temporary_file"
+    fi
+    if [ "${STEP_STATES[STEP_STARSHIP]:-}" = '成功' ]; then
+        begin_component_config starship "$temporary_file"
+        printf '%s\n' 'if status is-interactive' '    starship init fish | source' end >>"$temporary_file"
+        end_component_config starship "$temporary_file"
+    elif [ "${SELECTED[5]}" -eq 0 ]; then
+        remove_managed_block '# >>> env-setup-wsl.sh starship >>>' '# <<< env-setup-wsl.sh starship <<<' "$temporary_file"
+    fi
+    printf '%s\n' "$SHELL_BLOCK_END" >>"$temporary_file"
+    "$SHELL_PATH" -n "$temporary_file"
+    if [ -f "$target" ] && cmp -s "$target" "$temporary_file"; then return 0; fi
+    if [ -f "$target" ]; then
+        chmod --reference="$target" "$temporary_file"
+        backup_file=$(mktemp "$directory/config.fish.env-setup-wsl.backup.XXXXXX")
+        cp -p -- "$target" "$backup_file"
+        printf '配置备份：%s\n恢复命令：' "$backup_file"
+        printf 'cp -p -- %q %q\n' "$backup_file" "$target"
+    fi
+    mv -- "$temporary_file" "$target"
+)
+
 prepare_shell_config() (
+    if [ "$SHELL_NAME" = fish ]; then prepare_fish_config; return; fi
     local target directory filename temporary_file backup_file cleanup_command
     if [ -L "$SHELL_RC" ] && [ ! -e "$SHELL_RC" ]; then
         printf '错误：配置符号链接的目标不存在，保留原链接。\n' >&2
+        return 1
+    fi
+    local fish_rc="${XDG_CONFIG_HOME:-$HOME/.config}/fish/config.fish"
+    if [ "$SHELL_RC" -ef "$fish_rc" ]; then
+        printf '错误：多个 shell 共用同一个配置文件，保留原文件。\n' >&2
         return 1
     fi
     local other_rc="$HOME/.zshrc"
@@ -979,7 +1107,6 @@ prepare_shell_config() (
         if [ -n "$previous_plugins" ]; then printf '%s\n' "$previous_plugins" >>"$temporary_file"; fi
     fi
     if [ "${STEP_STATES[STEP_USER_BIN]:-}" = '成功' ] || [ "${STEP_STATES[STEP_UV]:-}" = '成功' ] ||
-        [ "${STEP_STATES[STEP_CODEX]:-}" = '成功' ] || [ "${STEP_STATES[STEP_CLAUDE]:-}" = '成功' ] ||
         [ "${STEP_STATES[STEP_STARSHIP]:-}" = '成功' ]; then
         begin_component_config paths "$temporary_file"
         append_once 'export PATH="$HOME/.local/bin:$PATH"' "$temporary_file"
@@ -1009,6 +1136,17 @@ prepare_shell_config() (
             append_unless_active_line_contains '"$NVM_DIR/bash_completion"' '[ ! -s "$NVM_DIR/bash_completion" ] || . "$NVM_DIR/bash_completion"' "$temporary_file"
         fi
         end_component_config nvm "$temporary_file"
+    fi
+    if [ "$SHELL_NAME" = bash ] && [ "${STEP_STATES[STEP_FZF]:-}" = '成功' ]; then
+        begin_component_config fzf "$temporary_file"
+        cat >>"$temporary_file" <<'FZF'
+if fzf --help | grep -q -- '--bash'; then
+    eval "$(fzf --bash)"
+elif [ -r /usr/share/doc/fzf/examples/key-bindings.bash ]; then
+    source /usr/share/doc/fzf/examples/key-bindings.bash
+fi
+FZF
+        end_component_config fzf "$temporary_file"
     fi
     if [ "$SHELL_NAME" = zsh ]; then
         begin_component_config completion "$temporary_file"
@@ -1098,10 +1236,10 @@ init_colors() {
     fi
 }
 
-COMPONENT_LABELS=('系统基础包' 'Homebrew/eza' 'lazygit' 'uv/Python' 'nvm/Node.js' 'Codex CLI' 'Claude Code' 'Agent/Skill 配置' 'Starship')
-EXPLICIT=(1 1 1 1 1 1 1 1 1)
-SELECTED=(1 1 1 1 1 1 1 1 1)
-COMPONENT_STEPS=(1 "$STEP_BREW" "$STEP_LAZYGIT" "$STEP_UV" "$STEP_NODE" "$STEP_CODEX" "$STEP_CLAUDE" "$STEP_AGENT" "$STEP_STARSHIP")
+COMPONENT_LABELS=('系统基础包' 'Homebrew/eza' 'lazygit' 'uv/Python' 'nvm/Node.js' 'Starship' 'fzf')
+EXPLICIT=(1 1 1 1 1 1 1)
+SELECTED=(1 1 1 1 1 1 1)
+COMPONENT_STEPS=(1 "$STEP_BREW" "$STEP_LAZYGIT" "$STEP_UV" "$STEP_NODE" "$STEP_STARSHIP" "$STEP_FZF")
 
 needs_system_packages() {
     case "$1" in
@@ -1114,22 +1252,18 @@ needs_system_packages() {
         else
             [ "$NVM_TARGET_INSTALLED" -eq 0 ] && ! command_exists curl && ! command_exists wget
         fi ;;
-    5) ! command_exists codex && ! command_exists curl ;;
-    6) ! command_exists claude && ! command_exists curl ;;
-    7) ! command_exists curl ;;
-    8) ! command_exists starship && ! command_exists curl ;;
+    5) ! command_exists starship && ! command_exists curl ;;
+    6) ! command_exists fzf ;;
     *) return 1 ;;
     esac
 }
 
 resolve_components() {
     SELECTED=("${EXPLICIT[@]}")
+    if [ "$SHELL_NAME" = zsh ] && [ "${PLUGIN_SELECTED[PLUGIN_FZF]}" -eq 1 ]; then SELECTED[6]=1; fi
     local id
     if [ "$SHELL_NAME" = zsh ] && [ "${PLUGIN_SELECTED[PLUGIN_NVM]}" -eq 1 ]; then SELECTED[4]=1; fi
-    if [ "${SELECTED[7]}" -eq 1 ]; then
-        SELECTED[4]=1 SELECTED[5]=1 SELECTED[6]=1
-    fi
-    for id in 1 2 3 4 5 6 7 8; do
+    for id in 1 2 3 4 5 6; do
         if [ "${SELECTED[id]}" -eq 1 ] && needs_system_packages "$id"; then SELECTED[0]=1; fi
     done
     SYSTEM_SELECTED=${SELECTED[0]}
@@ -1167,23 +1301,17 @@ choose_components() {
                         PLUGIN_SELECTED[PLUGIN_NVM]=0
                         notice+='连带取消 nvm 插件；'
                     fi
-                    if [ "$focus" -ge 4 ] && [ "$focus" -le 6 ] && [ "${SELECTED[7]}" -eq 1 ]; then
-                        EXPLICIT[7]=0
-                        notice+='连带取消 Agent/Skill 配置；'
-                    fi
+                    if [ "$SHELL_NAME" = zsh ] && [ "$focus" -eq 6 ]; then PLUGIN_SELECTED[PLUGIN_FZF]=0; fi
                     if [ "$focus" -eq 0 ]; then
-                        for id in 1 2 3 4 5 6 7 8; do
+                        for id in 1 2 3 4 5 6; do
                             if [ "${SELECTED[id]}" -eq 1 ] && needs_system_packages "$id"; then
                                 EXPLICIT[id]=0
                                 if [ "$SHELL_NAME" = zsh ] && [ "$id" -eq 4 ] && [ "${PLUGIN_SELECTED[PLUGIN_NVM]}" -eq 1 ]; then
                                     PLUGIN_SELECTED[PLUGIN_NVM]=0
                                     notice+='连带取消 nvm 插件；'
                                 fi
+                                if [ "$SHELL_NAME" = zsh ] && [ "$id" -eq 6 ]; then PLUGIN_SELECTED[PLUGIN_FZF]=0; fi
                                 notice+="连带取消 ${COMPONENT_LABELS[id]}；"
-                                if [ "$id" -ge 4 ] && [ "$id" -le 6 ] && [ "${SELECTED[7]}" -eq 1 ] && [ "${EXPLICIT[7]}" -eq 1 ]; then
-                                    EXPLICIT[7]=0
-                                    notice+='连带取消 Agent/Skill 配置；'
-                                fi
                             fi
                         done
                     fi
@@ -1243,6 +1371,9 @@ run_install() {
             printf '%sOh My Zsh 依赖 git：缺失时必须安装。%s\n' "$YELLOW" "$RESET"
         fi
     fi
+    if [ "$SHELL_NAME" = fish ] && [ "${SELECTED[4]}" -eq 1 ]; then
+        printf 'Fish Node 适配：安装 bass（需要 Bash/Python 3/curl），启动时加载 nvm 默认 Node；已有不兼容函数保留并报错。\n'
+    fi
     local component_id plugin_id
     if [ "$SHELL_NAME" = zsh ]; then
         for plugin_id in "${!PLUGIN_NAMES[@]}"; do
@@ -1271,11 +1402,6 @@ run_install() {
     done
     if [ "${SELECTED[2]}" -eq 1 ] && ! command_exists lazygit; then
         printf 'lazygit：优先 apt；失败时使用 Homebrew（按需安装，依赖 curl/git/make）。\n'
-    fi
-    if [ "${SELECTED[7]}" -eq 1 ]; then
-        printf 'Agent/Skill：复用组合入口 %s' "$MAGENTA"
-        printf 'bash %q --agent --skill' "$SCRIPT_DIR/agent-setup.sh"
-        printf '%s（全局规则、Claude 状态栏和动态发现的技能）。\n' "$RESET"
     fi
     printf '请求版本：Python %s%s%s；Node.js %s%s%s\n' "$CYAN" "$PYTHON_VERSION" "$RESET" "$CYAN" "$NODE_VERSION" "$RESET"
     printf '原默认 shell：%s%s%s\n' "$BLUE" "$ORIGINAL_SHELL" "$RESET"
@@ -1335,16 +1461,15 @@ run_install() {
     fi
     local step_id installer dependency_failed runtime_command
     printf -v runtime_command 'PYTHON_VERSION=%q NODE_VERSION=%q %s' "$PYTHON_VERSION" "$NODE_VERSION" "$rerun_command"
-    for component_id in 1 2 3 4 5 6 8; do
+    for component_id in 1 2 3 4 5 6; do
         step_id=${COMPONENT_STEPS[component_id]}
         case "$component_id" in
         1) installer=install_homebrew ;;
         2) installer=install_lazygit ;;
         3) installer=install_uv ;;
         4) installer=install_nvm ;;
-        5) installer=install_codex ;;
-        6) installer=install_claude ;;
-        8) installer=install_starship ;;
+        5) installer=install_starship ;;
+        6) installer=install_fzf ;;
         esac
         if [ "${SELECTED[component_id]}" -eq 0 ]; then
             skip_step "$step_id" "${COMPONENT_LABELS[component_id]}" '用户未选择'
@@ -1369,17 +1494,8 @@ run_install() {
             fi
         fi
     done
-    local agent_command
-    printf -v agent_command 'source %q && nvm use %q && bash %q --agent --skill' \
-        "$NVM_DIR/nvm.sh" "$NODE_VERSION" "$SCRIPT_DIR/agent-setup.sh"
-    if [ "${SELECTED[7]}" -eq 0 ]; then
-        skip_step "$STEP_AGENT" 'Agent/Skill 配置' '用户未选择'
-    elif [ "${STEP_STATES[STEP_NODE]}" != '成功' ] || [ "${STEP_STATES[STEP_CODEX]}" != '成功' ] ||
-        [ "${STEP_STATES[STEP_CLAUDE]}" != '成功' ] ||
-        { needs_system_packages 7 && [ "${STEP_STATES[1]}" != '成功' ]; }; then
-        skip_step "$STEP_AGENT" 'Agent/Skill 配置' '因依赖失败跳过' "$runtime_command"
-    else
-        run_step "$STEP_AGENT" 'Agent/Skill 配置' "$agent_command" configure_agents
+    if [ "$SHELL_NAME" = fish ] && [ "${STEP_STATES[0]:-}" = '成功' ] && [ "${STEP_STATES[STEP_NODE]:-}" = '成功' ]; then
+        run_step "$STEP_FISH_NVM" 'Fish nvm/bass 适配' "$rerun_command" install_fish_nvm_adapter
     fi
     if [ "$SHELL_NAME" = zsh ]; then install_plugins "$rerun_command" "$runtime_command"; fi
     # Each step runs in a subshell; rediscover installed command paths in the parent.
@@ -1392,7 +1508,8 @@ run_install() {
     else
         skip_step 2 "$SHELL_LABEL 配置" '因依赖失败跳过' "$shell_install_command"
     fi
-    if [ "${STEP_STATES[0]}" = '成功' ] && [ "${STEP_STATES[2]}" = '成功' ]; then
+    if [ "${STEP_STATES[0]}" = '成功' ] && [ "${STEP_STATES[2]}" = '成功' ] &&
+        { [ "$SHELL_NAME" != fish ] || [ "${SELECTED[4]}" -eq 0 ] || [ "${STEP_STATES[STEP_FISH_NVM]:-}" = '成功' ]; }; then
         local shell_command
         printf -v shell_command 'chsh -s %q %q' "$SHELL_PATH" "$ACCOUNT_NAME"
         run_step 3 '默认 shell 切换' "$shell_command" change_default_shell
