@@ -50,15 +50,31 @@ for name in names:
     (folder / 'SKILL.md').write_text(name)
 '''
 CURL = r'''#!/usr/bin/env python3
-import os, sys, shutil
+import os, sys, shutil, json
 args = sys.argv[1:]
 if '-o' in args:
     with open(os.environ['FETCH_LOG'], 'a') as log:
         log.write(' '.join(args) + '\n')
     if os.environ.get('FAIL_DOWNLOAD'):
         sys.exit(22)
-    source = os.environ['REMOTE_ARCHIVE' if 'codeload.github.com' in ' '.join(args) else 'REMOTE_SCRIPT']
-    shutil.copyfile(source, args[args.index('-o') + 1])
+    url = next(a for a in args if a.startswith('https://'))
+    output = args[args.index('-o') + 1]
+    if 'codeload.github.com/tw93/Waza/' in url:
+        print('fixture: codeload TLS failure', file=sys.stderr)
+        sys.exit(35)
+    if 'api.github.com/repos/tw93/Waza/' in url:
+        if '/commits/main' in url:
+            with open(output, 'w') as target:
+                json.dump({'sha': os.environ.get('WAZA_COMMIT', 'a' * 40)}, target)
+        else:
+            shutil.copyfile(os.environ['WAZA_CATALOG'], output)
+    elif 'raw.githubusercontent.com/tw93/Waza/' in url:
+        if os.environ.get('FAIL_WAZA_RULE') and os.environ['FAIL_WAZA_RULE'] in url:
+            sys.exit(22)
+        shutil.copyfile(os.path.join(os.environ['WAZA_FILES'], url.rsplit('/', 1)[-1]), output)
+    else:
+        source = os.environ['REMOTE_ARCHIVE' if 'codeload.github.com' in url else 'REMOTE_SCRIPT']
+        shutil.copyfile(source, output)
 else:
     if os.environ.get('FAIL_MATT'):
         sys.exit(8)
@@ -147,6 +163,7 @@ class AgentSetupTests(unittest.TestCase):
                               ('codex', '#!/bin/sh\nexit 0\n'),
                               ('claude', '#!/bin/sh\nexit 0\n')]:
             self.stub(name, content)
+        self.waza_bundle()
         self.old = self.home / '.agents/skills/existing/SKILL.md'
         self.old.parent.mkdir(parents=True)
         self.old.write_text('keep me')
@@ -490,6 +507,18 @@ class AgentSetupTests(unittest.TestCase):
         shutil.copyfile(SCRIPT, target)
         return target
 
+    def waza_bundle(self, names=('anti-patterns',)):
+        tree = self.root / 'waza-source/Waza-main/rules'
+        if tree.exists():
+            shutil.rmtree(tree)
+        tree.mkdir(parents=True)
+        for name in names:
+            (tree / f'{name}.md').write_text(f'# {name}\nUpstream {name} body.\n')
+        catalog = self.root / 'waza-catalog.json'
+        catalog.write_text(json.dumps([{'name': f'{name}.md', 'type': 'file'} for name in names]))
+        self.env['WAZA_CATALOG'] = str(catalog)
+        self.env['WAZA_FILES'] = str(tree)
+
     def remote_bundle(self):
         tree = self.root / 'remote/skills-main'
         shutil.copytree(SCRIPT.parents[1] / 'rules', tree / 'rules')
@@ -527,6 +556,112 @@ class AgentSetupTests(unittest.TestCase):
         term.expect('Confirm installation')
         term.expect('Item 1/2')
 
+    def test_waza_selected_download_failure_preserves_configs_and_continues(self):
+        self.waza_bundle(('chinese', 'english'))
+        self.env['FAIL_WAZA_RULE'] = '/rules/english.md'
+        old = self.home / '.codex/AGENTS.md'
+        old.parent.mkdir()
+        old.write_text('Personal notes.\n')
+        result = self.source(
+            'load_waza_rules\nAGENT_ITEMS=(2)\n'
+            'SELECTED_RULES=(waza-english waza-chinese c-project)\n'
+            'SELECTED_RULE_SOURCES=(waza waza project)\nexecute_plan')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('2 succeeded, 1 failed', result.stdout)
+        self.assertIn('Personal notes.', old.read_text())
+        self.assertIn('waza-chinese:start', old.read_text())
+        self.assertIn('c-project:start', old.read_text())
+        self.assertNotIn('waza-english:start', old.read_text())
+        self.assertFalse((self.home / '.claude/rules/waza-english.md').exists())
+
+    def test_waza_engine_accepts_h2_and_keeps_body(self):
+        fixture = self.root / 'waza-h2'
+        fixture.mkdir()
+        content = '## English Coaching\n\nOriginal body.\n'
+        (fixture / 'waza-english.md').write_text(content)
+        result = self.source(
+            f'rule_engine waza-english project both install {shlex.quote(str(fixture))} waza',
+            cwd=self.root)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((self.root / '.claude/rules/waza-english.md').read_text(), content)
+        self.assertIn(content, (self.root / 'AGENTS.md').read_text())
+
+    def test_waza_api_pins_commit_and_installs_selected_h2_verbatim(self):
+        self.waza_bundle(('chinese', 'english'))
+        chinese = Path(self.env['WAZA_FILES']) / 'chinese.md'
+        content = '## Chinese Anti-AI Patterns\n\nUpstream body.\n'
+        chinese.write_text(content)
+        result = self.source(
+            'load_waza_rules\n'
+            'export WAZA_COMMIT=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n'
+            'apply_rule waza-chinese project both install waza', cwd=self.root)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        installed = self.root / '.claude/rules/waza-chinese.md'
+        self.assertEqual(installed.read_bytes(), chinese.read_bytes())
+        self.assertIn(content, (self.root / 'AGENTS.md').read_text())
+        fetches = (self.root / 'fetch.log').read_text()
+        self.assertIn('/contents/rules?ref=' + 'a' * 40, fetches)
+        self.assertIn('/' + 'a' * 40 + '/rules/chinese.md', fetches)
+        self.assertNotIn('/' + 'b' * 40, fetches)
+        self.assertNotIn('/rules/english.md', fetches)
+
+    def test_waza_snapshot_dynamic_names_collision_and_additive_update(self):
+        self.waza_bundle(('c-project', 'new-rule'))
+        old = self.home / '.codex/AGENTS.md'
+        old.parent.mkdir()
+        old.write_text('Personal\n<!-- gwyn-space-skills: agent-behavior:start -->\n'
+                       'Legacy\n<!-- gwyn-space-skills: agent-behavior:end -->\n')
+        result = self.source(
+            'load_waza_rules\n'
+            # Advance main after discovery: downloads must still use the discovered commit.
+            'export WAZA_COMMIT=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n'
+            'AGENT_ITEMS=(2)\n'
+            'SELECTED_RULES=(c-project waza-c-project waza-new-rule)\n'
+            'SELECTED_RULE_SOURCES=(project waza waza)\n'
+            'execute_plan\n'
+            'SELECTED_RULES=(waza-c-project)\nSELECTED_RULE_SOURCES=(waza)\n'
+            'execute_plan')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        text = old.read_text()
+        for name in ('c-project', 'waza-c-project', 'waza-new-rule', 'agent-behavior'):
+            self.assertEqual(text.count(f'gwyn-space-skills: {name}:start'), 1)
+        self.assertIn('Personal', text)
+        self.assertIn('Legacy', text)
+        self.assertEqual((self.home / '.claude/rules/waza-c-project.md').read_text(),
+                         '# c-project\nUpstream c-project body.\n')
+        self.assertTrue((self.home / '.claude/rules/c-project.md').exists())
+        self.assertEqual(len((self.root / 'fetch.log').read_text().splitlines()), 4)
+
+    def test_agent_flag_terminal_opens_empty_rule_selection(self):
+        term = Terminal(self.env, cwd=self.root, command=['bash', str(SCRIPT), '--agent'])
+        self.addCleanup(term.close)
+        term.expect('Choose rules')
+        term.expect('Item 1/4')
+        self.assertIn('[ ] Waza / anti-patterns', term.transcript.decode())
+        self.assertNotIn('agent-behavior', term.transcript.decode())
+        term.send(b'q')
+        self.assertEqual(term.finish(), 0)
+        self.assertFalse((self.home / '.codex').exists())
+
+    def test_waza_failure_can_skip_without_touching_configs(self):
+        self.env['FAIL_DOWNLOAD'] = '1'
+        term = Terminal(self.env, cwd=self.root)
+        self.addCleanup(term.close)
+        term.expect('Item 1/5')
+        term.send(b'\r')
+        term.expect('Choose installation tasks')
+        term.expect('Item 1/5')
+        term.send(b'\x1b[B \r')
+        term.expect('Waza rules unavailable')
+        term.expect('Item 1/3')
+        term.send(b'\x1b[B\r')
+        term.expect('Choose rules')
+        term.expect('Item 1/3')
+        self.assertIn('[ ] project / c-project', term.transcript.decode())
+        term.send(b'q')
+        self.assertEqual(term.finish(), 0)
+        self.assertFalse((self.home / '.codex').exists())
+
     def test_project_rules_install_current_subdirectory_and_review_back(self):
         project = self.root / 'project'
         project.mkdir()
@@ -537,7 +672,7 @@ class AgentSetupTests(unittest.TestCase):
         personal = 'Personal project notes.\n'
         (nested / 'AGENTS.md').write_text(personal)
         term = self.rule_terminal(cwd=nested)
-        self.assertIn('[ ] global / agent-behavior', term.transcript.decode())
+        self.assertIn('[ ] Waza / anti-patterns', term.transcript.decode())
         self.assertIn('[ ] project / c-project', term.transcript.decode())
         term.send(b'\x1b[B \r')
         self.rule_agents_and_scope(term)
@@ -622,12 +757,12 @@ class AgentSetupTests(unittest.TestCase):
 
     def test_global_rule_ui_installs_only_selected_agent(self):
         term = self.rule_terminal(cwd=self.root)
-        term.send(b' \r')  # global / agent-behavior
+        term.send(b' \r')  # Waza / anti-patterns
         self.rule_agents_and_scope(term, agents='claude', scope='global')
         term.send(b'\r')
         term.expect('1 succeeded, 0 failed')
         self.assertEqual(term.finish_action(), 0)
-        self.assertTrue((self.home / '.claude/CLAUDE.md').exists())
+        self.assertTrue((self.home / '.claude/rules/waza-anti-patterns.md').exists())
         self.assertFalse((self.home / '.codex/AGENTS.md').exists())
 
     def test_mixed_rule_sources_install_to_selected_scope(self):
@@ -639,20 +774,20 @@ class AgentSetupTests(unittest.TestCase):
                 term.send(b' \x1b[B \r')  # select both source groups
                 self.rule_agents_and_scope(term, scope=scope)
                 frame = term.transcript.decode().rsplit('\x1b[H\x1b[2J', 1)[-1]
-                self.assertIn('rules/global/agent-behavior.md', frame)
+                self.assertIn('tw93/Waza @ main', frame)
                 self.assertIn('rules/project/c-project.md', frame)
                 term.send(b'\r')
                 term.expect('2 succeeded, 0 failed')
                 self.assertEqual(term.finish_action(), 0)
                 codex = project / 'AGENTS.md' if scope == 'project' else self.home / '.codex/AGENTS.md'
                 text = codex.read_text()
-                self.assertIn('Installed from rules/global/agent-behavior.md', text)
+                self.assertIn('https://github.com/tw93/Waza/blob/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/rules/anti-patterns.md', text)
                 self.assertIn('Installed from rules/project/c-project.md', text)
-                self.assertEqual(text.count('agent-behavior:start'), 1)
+                self.assertEqual(text.count('waza-anti-patterns:start'), 1)
                 self.assertEqual(text.count('c-project:start'), 1)
                 claude = project / '.claude/rules' if scope == 'project' else self.home / '.claude/rules'
                 self.assertTrue((claude / 'c-project.md').exists())
-                behavior = claude / 'agent-behavior.md' if scope == 'project' else self.home / '.claude/CLAUDE.md'
+                behavior = claude / 'waza-anti-patterns.md'
                 self.assertTrue(behavior.exists())
 
     def test_rule_engine_preserves_old_markers_and_rejects_conflicts(self):
@@ -678,9 +813,12 @@ class AgentSetupTests(unittest.TestCase):
     def test_legacy_global_copy_migrates_with_restore_backup(self):
         destination = self.home / '.codex/AGENTS.md'
         destination.parent.mkdir()
-        original = (SCRIPT.parents[1] / 'rules/global/agent-behavior.md').read_bytes()
+        original = b'# Legacy behavior\nLegacy rule\n'
+        fixture = self.root / 'legacy'
+        fixture.mkdir()
+        (fixture / 'agent-behavior.md').write_bytes(original)
         destination.write_bytes(original)
-        result = self.source('apply_rule agent-behavior global codex')
+        result = self.source(f'rule_engine agent-behavior global codex install {shlex.quote(str(fixture))} global')
         self.assertEqual(result.returncode, 0, result.stderr)
         backups = list(destination.parent.glob('AGENTS.md.pre-rules.bak-*'))
         self.assertEqual(len(backups), 1)
@@ -696,9 +834,10 @@ class AgentSetupTests(unittest.TestCase):
         result = subprocess.run(['bash', str(script), '--agent'], env=self.env, cwd=self.root,
                                 capture_output=True, text=True, timeout=20)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn('4 succeeded, 0 failed', result.stdout)
-        self.assertTrue((self.home / '.codex/AGENTS.md').exists())
-        self.assertTrue((self.home / '.claude/CLAUDE.md').exists())
+        self.assertIn('3 succeeded, 0 failed', result.stdout)
+        self.assertFalse((self.home / '.codex/AGENTS.md').exists())
+        self.assertFalse((self.home / '.claude/CLAUDE.md').exists())
+        self.assertIn('skipping rule selection', result.stdout)
         self.assertTrue((self.home / '.claude/statusline.sh').exists())
         self.assertEqual(len((self.root / 'fetch.log').read_text().splitlines()), 1)
         self.assertEqual(list(scratch.iterdir()), [])
@@ -714,10 +853,12 @@ class AgentSetupTests(unittest.TestCase):
         self.assertIn('local-only', result.stdout)
         self.assertNotIn('c-project', result.stdout)
         self.assertFalse((self.root / 'fetch.log').exists())
-        result = self.source('RULE_SCOPE=global\nload_rule_catalog\nprintf "%s\\n" "${RULE_NAMES_GLOBAL[@]}"', script)
+        shutil.rmtree(local)
+        result = self.source('RULE_SCOPE=project\nload_rule_catalog\nprintf "%s\\n" "${RULE_NAMES_PROJECT[@]}"', script)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn('agent-behavior', result.stdout)
-        self.assertEqual((local / 'local-only.md').read_text(), '# Local only\nlocal content\n')
+        self.assertIn('c-project', result.stdout)
+        local.mkdir()
+        (local / 'local-only.md').write_text('# Local only\nlocal content\n')
         (local / 'bad.md').write_text('missing heading\n')
         before = (self.root / 'fetch.log').read_text()
         result = self.source('RULE_SCOPE=project\nload_rule_catalog', script)
@@ -742,7 +883,7 @@ class AgentSetupTests(unittest.TestCase):
         self.assertTrue((project / 'AGENTS.md').exists())
         self.assertFalse((project / '.claude').exists())
         self.assertFalse((script.parent / 'AGENTS.md').exists())
-        self.assertEqual(len((self.root / 'fetch.log').read_text().splitlines()), 1)
+        self.assertEqual(len((self.root / 'fetch.log').read_text().splitlines()), 3)
 
     def test_remote_failure_preserves_configs_and_continues_tasks(self):
         script = self.standalone()
@@ -753,7 +894,7 @@ class AgentSetupTests(unittest.TestCase):
         result = subprocess.run(['bash', str(script), '--agent'], env=self.env,
                                 capture_output=True, text=True, timeout=20)
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn('2 succeeded, 2 failed', result.stdout)
+        self.assertIn('2 succeeded, 1 failed', result.stdout)
         self.assertEqual(target.read_text(), 'keep existing\n')
         self.assertFalse((self.home / '.claude/statusline.sh').exists())
 
@@ -911,7 +1052,7 @@ main"""]
         term.send(b'\r')
         term.expect('Item 1/5')
         term.send(b'\x1b[B \r')
-        term.expect('global rule catalog unavailable')
+        term.expect('project rule catalog unavailable')
         term.return_home()
         term.send(b'q')
         self.assertEqual(term.finish(), 1)
@@ -1727,11 +1868,11 @@ main"""]
         self.assertEqual(installed, [['waza-first', 'fail-middle', 'waza-last'],
                                     ['kami'], ['matt-a', 'matt-b'], ['show-me'],
                                     ['gwyntoria-first', 'gwyntoria-last'], ['distilly']])
-        self.assertIn('9 succeeded, 1 failed', result.stdout)
+        self.assertIn('8 succeeded, 1 failed', result.stdout)
         self.assertIn('Waza: waza-first fail-middle waza-last (exit 9)', result.stdout)
         self.assertEqual(self.old.read_text(), 'keep me')
         self.assertTrue((self.home / '.claude/settings.json').is_file())
-        self.assertTrue((self.home / '.codex/AGENTS.md').is_file())
+        self.assertFalse((self.home / '.codex/AGENTS.md').exists())
 
     def test_nonadjacent_selections_group_by_repository(self):
         result = self.source('''

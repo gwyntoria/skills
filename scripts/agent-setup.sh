@@ -35,8 +35,10 @@ SELECTED_RULES=()
 SELECTED_RULE_SOURCES=()
 RULE_NAMES_GLOBAL=()
 RULE_NAMES_PROJECT=()
-RULE_CATALOG_GLOBAL=0
 RULE_CATALOG_PROJECT=0
+RULE_NAMES_WAZA=()
+WAZA_RULES_PATH=""
+WAZA_RULES_COMMIT=""
 
 WAZA_SKILLS_URL="https://github.com/tw93/waza"
 KAMI_SKILLS_URL="https://github.com/tw93/kami"
@@ -84,7 +86,7 @@ usage() {
 Usage: $PROGRAM_NAME [--agent] [--skill] | --list
 
 No arguments: open the interactive menu (requires a terminal).
-  --agent     Install both CLIs, global rules, and Claude statusline
+  --agent     Install both CLIs and Claude statusline; choose rules when a terminal is available
   --skill     Install/update all configured skills; preserve existing skills
   --list      List available skills by source without installing
   -h, --help  Show help
@@ -411,6 +413,75 @@ resolve_resource() {
     esac || { printf 'Invalid resource: %s\n' "$RESOURCE_PATH" >&2; return 1; }
 }
 
+# Pin the catalog before selection; every selected body uses the same commit.
+load_waza_rules() {
+    local staged commit name names=()
+    [ -n "$WAZA_RULES_PATH" ] && return 0
+    require_command curl || return 1
+    require_node || return 1
+    if [ -z "$RESOURCE_TEMP" ]; then
+        RESOURCE_TEMP="$(mktemp -d)" || return 1
+        trap cleanup_setup_resources EXIT
+        trap 'exit 130' INT
+        trap 'exit 143' TERM
+    fi
+    staged="$RESOURCE_TEMP/waza"
+    mkdir -p "$staged/rules" || return 1
+    printf 'Fetching Waza rule catalog from GitHub main...\n' >&2
+    curl -fLsS https://api.github.com/repos/tw93/Waza/commits/main -o "$staged/commit.json" || return 1
+    commit="$(node -e '
+        const fs = require("fs");
+        const data = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+        if (!/^[a-f0-9]{40}$/.test(data.sha)) { console.error("Invalid Waza commit"); process.exit(1); }
+        console.log(data.sha);
+    ' "$staged/commit.json")" || return 1
+    curl -fLsS "https://api.github.com/repos/tw93/Waza/contents/rules?ref=$commit" -o "$staged/catalog.json" || return 1
+    node -e '
+        const fs = require("fs");
+        const data = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+        if (!Array.isArray(data)) { console.error("Invalid Waza rule catalog"); process.exit(1); }
+        const names = [];
+        for (const entry of data) {
+            if (entry.type !== "file" || typeof entry.name !== "string" || !entry.name.endsWith(".md")) continue;
+            if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]*\.md$/.test(entry.name)) {
+                console.error("Invalid Waza rule filename"); process.exit(1);
+            }
+            names.push("waza-" + entry.name.slice(0, -3));
+        }
+        if (!names.length) { console.error("No Waza rules available"); process.exit(1); }
+        console.log([...new Set(names)].sort().join("\n"));
+    ' "$staged/catalog.json" > "$staged/names" || return 1
+    while IFS= read -r name; do names+=("$name"); done < "$staged/names"
+    RULE_NAMES_WAZA=("${names[@]}")
+    WAZA_RULES_COMMIT="$commit"
+    WAZA_RULES_PATH="$staged/rules"
+}
+
+fetch_waza_rule() {
+    local name="$1" candidate title listed found=0
+    load_waza_rules || return 1
+    for listed in "${RULE_NAMES_WAZA[@]}"; do
+        if [ "$listed" = "$name" ]; then found=1; break; fi
+    done
+    [ "$found" -eq 1 ] || { printf 'Unknown Waza rule: %s\n' "$name" >&2; return 1; }
+    candidate="$WAZA_RULES_PATH/$name.md"
+    [ -f "$candidate" ] && return 0
+    curl -fLsS "https://raw.githubusercontent.com/tw93/Waza/$WAZA_RULES_COMMIT/rules/${name#waza-}.md" \
+        -o "$candidate.download" || return 1
+    title=""; IFS= read -r title < "$candidate.download" || true
+    case "$title" in '# '* | '## '*) ;; *) printf 'Waza rule must start with H1 or H2: %s\n' "$name" >&2; return 1 ;; esac
+    mv "$candidate.download" "$candidate"
+}
+
+resolve_rule_source() {
+    if [ "$1" = waza ]; then
+        load_waza_rules || return 1
+        RESOURCE_PATH="$WAZA_RULES_PATH"
+    else
+        resolve_resource "rules/$1"
+    fi
+}
+
 load_rule_catalog() {
     local file name title names=()
     resolve_resource "rules/$RULE_SCOPE" || return 1
@@ -426,7 +497,7 @@ load_rule_catalog() {
         names+=("$name")
     done
     if [ "$RULE_SCOPE" = global ]; then
-        RULE_NAMES_GLOBAL=("${names[@]+"${names[@]}"}"); RULE_CATALOG_GLOBAL=1
+        RULE_NAMES_GLOBAL=("${names[@]+"${names[@]}"}")
     else
         RULE_NAMES_PROJECT=("${names[@]+"${names[@]}"}"); RULE_CATALOG_PROJECT=1
     fi
@@ -460,7 +531,10 @@ install_setup_command() (
 )
 
 apply_rule() {
-    if [ "${4:-install}" = install ]; then resolve_resource "rules/${5:-$2}" || return 1; fi
+    if [ "${4:-install}" = install ]; then
+        resolve_rule_source "${5:-$2}" || return 1
+        if [ "${5:-$2}" = waza ]; then fetch_waza_rule "$1" || return 1; fi
+    fi
     rule_engine "$1" "$2" "$3" "${4:-install}" "$RESOURCE_PATH" "${5:-$2}"
 }
 
@@ -479,7 +553,11 @@ rule_engine() (
         RULE_SOURCE="$5/$RULE_FILE"
         [ -f "$RULE_SOURCE" ] || { printf 'Missing rule: %s\n' "$RULE_SOURCE" >&2; return 1; }
         IFS= read -r RULE_TITLE <"$RULE_SOURCE" || true
-        case "$RULE_TITLE" in '# '*) ;; *) printf 'Rule must start with H1: %s\n' "$RULE_SOURCE" >&2; return 1 ;; esac
+        if [ "$RULE_CLASSIFICATION" = waza ]; then
+            case "$RULE_TITLE" in '# '* | '## '*) ;; *) printf 'Waza rule must start with H1 or H2: %s\n' "$RULE_SOURCE" >&2; return 1 ;; esac
+        else
+            case "$RULE_TITLE" in '# '*) ;; *) printf 'Rule must start with H1: %s\n' "$RULE_SOURCE" >&2; return 1 ;; esac
+        fi
     fi
 
 log() {
@@ -777,8 +855,13 @@ write_block() {
 
     {
         printf '%s%s\n' "$start" "$eol"
-        printf '<!-- Installed from rules/%s by %s. Edits inside this block are overwritten on reinstall. -->%s\n' \
-            "$RULE_CLASSIFICATION/$RULE_FILE" "$PROGRAM_NAME" "$eol"
+        if [ "$RULE_CLASSIFICATION" = waza ]; then
+            printf '<!-- Installed from https://github.com/tw93/Waza/blob/%s/rules/%s.md by %s. Edits inside this block are overwritten on reinstall. -->%s\n' \
+                "${WAZA_RULES_COMMIT:-main}" "${RULE#waza-}" "$PROGRAM_NAME" "$eol"
+        else
+            printf '<!-- Installed from rules/%s by %s. Edits inside this block are overwritten on reinstall. -->%s\n' \
+                "$RULE_CLASSIFICATION/$RULE_FILE" "$PROGRAM_NAME" "$eol"
+        fi
         while IFS= read -r line || [ -n "$line" ]; do
             line_number=$((line_number + 1))
             if [ "$omit_h1" -eq 1 ] && [ "$line_number" -eq 1 ]; then
@@ -1414,10 +1497,6 @@ install_claude() {
     if ! command -v claude >/dev/null 2>&1; then curl -fsSL https://claude.ai/install.sh | bash; fi
     require_command claude
     printf '\033[32mClaude Code CLI: %s\033[0m\n' "$(command -v claude)"
-}
-
-install_global_rules() {
-    apply_rule agent-behavior global both
 }
 
 # No stty mode changes: read -s restores echo even on cancellation/signals.
@@ -2077,7 +2156,7 @@ execute_plan() {
                 for ((index=0; index<${#SELECTED_RULES[@]}; index++)); do
                     other="${SELECTED_RULES[index]}"
                     source_scope="${SELECTED_RULE_SOURCES[index]:-$RULE_SCOPE}"
-                    if ! resolve_resource "rules/$source_scope"; then FAILED+=("$source_scope rule: $other (resource unavailable)"); continue; fi
+                    if ! resolve_rule_source "$source_scope"; then FAILED+=("$source_scope rule: $other (resource unavailable)"); continue; fi
                     run_item "$RULE_SCOPE rule: $other ($RULE_TARGETS)" apply_rule "$other" "$RULE_SCOPE" "$RULE_TARGETS" install "$source_scope"
                 done ;;
             3)
@@ -2116,8 +2195,10 @@ print_install_plan() {
         for ((index=0; index<${#SELECTED_RULES[@]}; index++)); do
             i="${SELECTED_RULES[index]}"
             source_scope="${SELECTED_RULE_SOURCES[index]:-$RULE_SCOPE}"
-            resolve_resource "rules/$source_scope" || return 1
-            if [ -n "$RESOURCE_TEMP" ] && [[ "$RESOURCE_PATH" = "$RESOURCE_TEMP/"* ]]; then
+            resolve_rule_source "$source_scope" || return 1
+            if [ "$source_scope" = waza ]; then
+                printf '  Rule source: GitHub tw93/Waza @ main -> %s (rules/%s.md)\n' "$WAZA_RULES_COMMIT" "${i#waza-}"
+            elif [ -n "$RESOURCE_TEMP" ] && [[ "$RESOURCE_PATH" = "$RESOURCE_TEMP/"* ]]; then
                 printf '  Rule source: GitHub gwyntoria/skills @ main (rules/%s/%s.md)\n' "$source_scope" "$i"
             else
                 printf '  Rule source: %s/%s.md\n' "$RESOURCE_PATH" "$i"
@@ -2160,7 +2241,7 @@ interactive_setup() {
     trap cleanup_setup_resources EXIT
     trap 'exit 130' INT
     trap 'exit 143' TERM
-    local page=main i task answer menu_status removal_scanned=0 removal_signature="" signature command_action removal_backup=0
+    local page="${1:-main}" i task answer menu_status removal_scanned=0 removal_signature="" signature command_action removal_backup=0
     local session_status=0 INTERACTIVE_RESULT=0 show_summary=0
     local repo_labels=() repo_group repo_url
     local rule_labels=() rule_names=() rule_sources=() source_scope
@@ -2308,17 +2389,26 @@ interactive_setup() {
                 if [[ " ${AGENT_ITEMS[*]+${AGENT_ITEMS[*]}} " = *" 2 "* ]]; then page=rule_choices;
                 else SELECTED_RULES=(); SELECTED_RULE_SOURCES=(); page=after_rules; fi ;;
             rule_choices)
-                # The catalog contains both source groups; destination scope is chosen later.
-                for source_scope in global project; do
-                    if { [ "$source_scope" = global ] && [ "$RULE_CATALOG_GLOBAL" -eq 0 ]; } ||
-                       { [ "$source_scope" = project ] && [ "$RULE_CATALOG_PROJECT" -eq 0 ]; }; then
-                        if ! RULE_SCOPE="$source_scope" load_rule_catalog; then
-                            FAILED+=("$source_scope rule catalog unavailable"); show_summary=1; page=complete; break
-                        fi
+                if [ "$RULE_CATALOG_PROJECT" -eq 0 ]; then
+                    if ! RULE_SCOPE=project load_rule_catalog; then
+                        FAILED+=('project rule catalog unavailable'); show_summary=1; page=complete; continue
                     fi
-                done
-                [ "$page" != complete ] || continue
+                fi
+                if ! load_waza_rules; then
+                    choose_items 13 'Waza rules unavailable' 0 0 Retry 'Continue without Waza rules' Back || {
+                        [ "$?" -eq 2 ] || return "$session_status"
+                        page=tasks; continue
+                    }
+                    case "${MENU_SELECTED[0]}" in
+                        0) continue ;;
+                        2) page=tasks; continue ;;
+                    esac
+                    RULE_NAMES_WAZA=()
+                fi
                 rule_labels=(); rule_names=(); rule_sources=()
+                for i in "${RULE_NAMES_WAZA[@]+"${RULE_NAMES_WAZA[@]}"}"; do
+                    rule_labels+=("Waza / ${i#waza-}"); rule_names+=("$i"); rule_sources+=(waza)
+                done
                 for i in "${RULE_NAMES_GLOBAL[@]+"${RULE_NAMES_GLOBAL[@]}"}"; do
                     rule_labels+=("global / $i"); rule_names+=("$i"); rule_sources+=(global)
                 done
@@ -2481,7 +2571,13 @@ main() {
         return "$parse_status"
     }
     if [ "$INSTALL_AGENT" -eq 1 ]; then
-        AGENT_ITEMS=(0 1 2 3); SELECTED_RULES=(agent-behavior); SELECTED_RULE_SOURCES=(global); RULE_SCOPE=global; RULE_TARGETS=both
+        AGENT_ITEMS=(0 1 2 3); SELECTED_RULES=(); SELECTED_RULE_SOURCES=()
+        if [ -t 0 ] && [ -t 1 ]; then
+            preflight "${AGENT_ITEMS[@]}" || return 1
+            interactive_setup rule_choices
+            return $?
+        fi
+        printf 'No terminal available; skipping rule selection and installation.\n'
     fi
     preflight "${AGENT_ITEMS[@]+"${AGENT_ITEMS[@]}"}"
     if [ "$INSTALL_SKILLS" -eq 1 ] || [ "$LIST_SKILLS" -eq 1 ]; then

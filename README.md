@@ -66,16 +66,15 @@
 
 ## Rules
 
-规则按默认使用范围分为 `rules/global/` 和 `rules/project/` 两个目录，安装时仍使用文件名作为规则名。
+本仓库规则位于 `rules/project/`；安装器还会动态获取 [Waza 的规则](https://github.com/tw93/Waza/tree/main/rules)。来源与安装范围独立。
 
 | 文件 | 使用范围 | 说明 |
 | --- | --- | --- |
-| [`agent-behavior.md`](rules/global/agent-behavior.md) | 全局 | 可放在 Agent 的配置目录中，如 `~/.codex/`、`~/.claude/` |
 | [`c-project.md`](rules/project/c-project.md) | 项目 | C/C++ 项目的格式、命名、注释和提交信息约定 |
 | [`writing-repo.md`](rules/project/writing-repo.md) | 项目 | Markdown 写作仓库的资源路径、引用方式和格式检查规则 |
 | [`chinese-punctuation.md`](rules/project/chinese-punctuation.md) | 项目 | 终端回复的中文半角标点、空格规则和适用范围 |
 
-规则通过 [`scripts/agent-setup.sh`](scripts/agent-setup.sh) 的交互菜单安装：选择 `Install / Update` → `Rules`，依次多选规则、多选目标 Agent、选择 Global 或 Project 范围，再确认安装。Agent 默认全选，规则默认不选；选择页支持 `b` 返回、`q` 退出，并保留勾选与光标。确认页展示资源来源和完整安装路径。规则页按 `rules/global/` 和 `rules/project/` 来源分组列出全部规则，允许跨范围安装；所选规则统一安装到最后选择的范围，确认页保留原始来源。
+规则通过 [`scripts/agent-setup.sh`](scripts/agent-setup.sh) 的交互菜单安装：选择 `Install / Update` → `Rules`，依次多选规则、多选目标 Agent、选择 Global 或 Project 范围，再确认安装。Agent 默认全选，规则默认不选；选择页支持 `b` 返回、`q` 退出，并保留勾选与光标。确认页展示资源来源和完整安装路径。规则页按 Waza 和本仓库来源分组列出规则，允许跨范围安装；所选规则统一安装到最后选择的范围，确认页保留原始来源。
 
 ```bash
 # 在仓库中打开菜单，可安装规则或安装本地命令
@@ -90,17 +89,13 @@ Matt skills 的安装菜单默认全选。勾选技能会递归补齐依赖，�
 
 Project 规则安装到启动命令时的当前目录，包括 Git 子目录和非 Git 目录，不自动寻找仓库根目录。先确认当前路径，再在确认页执行安装。
 
-资源相对脚本实际位置查找，符号链接会解析到真实脚本。`rules/global/`、`rules/project/` 和 `scripts/statusline.sh` 分别优先使用本地内容；缺少某个目录或文件时，从 GitHub `gwyntoria/skills` 的 `main` 分支下载临时资源，同一次运行复用，退出清理。本地规则目录不会混入远端规则，格式错误直接报告；远端获取失败不覆盖配置。改了本地 `rules/` 后重新安装即可更新。
+资源相对脚本实际位置查找，符号链接会解析到真实脚本。`rules/project/` 和 `scripts/statusline.sh` 分别优先使用本地内容；缺少某个目录或文件时，从 GitHub `gwyntoria/skills` 的 `main` 分支下载临时资源，同一次运行复用，退出清理。本地规则目录不会混入远端规则，格式错误直接报告；远端获取失败不覆盖配置。改了本地 `rules/` 后重新安装即可更新。
 
-`Install / Update this command` 将命令安装到 `~/.local/bin/agent-setup`。实际脚本位于 `scripts/agent-setup.sh` 且仓库根目录存在 `rules/` 时，安装当前版本；从独立位置运行时，下载 GitHub `main` 最新脚本。安装文件通过 `bash -n` 后原子替换，下载或检查失败保留旧命令，下次启动生效。PATH 缺少 `~/.local/bin` 时仅打印配置方法，不修改 shell 配置。需要 Bash；远端获取需要 cURL、tar；保留原有 CLI 和 skills 安装任务所需的 Node.js、npx 等依赖。
+`Install / Update this command` 将命令安装到 `~/.local/bin/agent-setup`。实际脚本位于 `scripts/agent-setup.sh` 且仓库根目录存在 `rules/` 时，安装当前版本；从独立位置运行时，下载 GitHub `main` 最新脚本。安装文件通过 `bash -n` 后原子替换，下载或检查失败保留旧命令，下次启动生效。PATH 缺少 `~/.local/bin` 时仅打印配置方法，不修改 shell 配置。需要 Bash；远端获取需要 cURL，本仓库归档资源还需要 tar，Waza 目录解析需要 Node.js（可复用现有 nvm 引导）；保留原有 CLI 和 skills 安装任务所需的 Node.js、npx 等依赖。
 
-### 补充说明
+Waza 规则每次启动后首次进入规则页时，通过 GitHub API 固定 `main` 的提交并读取目录；确认安装后仅从 raw 下载所选规则，始终使用该提交，退出清理临时文件。默认不勾选；安装标识使用 `waza-<规则名>`，正文保留上游内容，支持上游的 H1 和 H2 标题。获取失败可重试、返回或跳过 Waza。再次安装只更新所选项，不卸载未选规则；旧 `agent-behavior` 不再提供，也不会自动清理已安装内容。
 
-[`agent-behavior.md`](rules/global/agent-behavior.md) 中的以下规则来源于 [Waza 项目的 `rules` 目录](https://github.com/tw93/Waza/tree/main/rules)，并按个人使用习惯做了调整：
-
-- [`Chinese Anti-AI Patterns`](rules/global/agent-behavior.md#chinese-anti-ai-patterns)：源自 Waza 的 [`rules/chinese.md`](https://github.com/tw93/Waza/blob/main/rules/chinese.md)。
-- [`English Coaching`](rules/global/agent-behavior.md#english-coaching)：源自 Waza 的 [`rules/english.md`](https://github.com/tw93/Waza/blob/main/rules/english.md)。
-- [`Anti-Patterns: Cross-Skill AI Behavior`](rules/global/agent-behavior.md#anti-patterns-cross-skill-ai-behavior)：源自 Waza 的 [`rules/anti-patterns.md`](https://github.com/tw93/Waza/blob/main/rules/anti-patterns.md)。
+`--agent` 在有终端时进入规则多选和安装确认；无终端时提示跳过规则，继续安装 CLI 和状态栏。与 `--skill` 同用时，有终端进入技能选择，无终端保持安装全部已配置技能的行为。
 
 ## Scripts
 
