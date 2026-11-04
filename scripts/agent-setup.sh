@@ -86,7 +86,7 @@ usage() {
 Usage: $PROGRAM_NAME [--agent] [--skill] | --list
 
 No arguments: open the interactive menu (requires a terminal).
-  --agent     Install both CLIs and Claude statusline; choose rules when a terminal is available
+  --agent     Choose Codex, Claude Code and Pi (all by default), with bundled components
   --skill     Install/update all configured skills; preserve existing skills
   --list      List available skills by source without installing
   -h, --help  Show help
@@ -1499,6 +1499,18 @@ install_claude() {
     printf '\033[32mClaude Code CLI: %s\033[0m\n' "$(command -v claude)"
 }
 
+install_pi() {
+    require_node
+    require_command npm
+    if ! command -v pi >/dev/null 2>&1; then
+        npm install -g --ignore-scripts @earendil-works/pi-coding-agent
+    fi
+    require_command pi
+    pi --version
+}
+
+PI_PACKAGES=(npm:pi-web-access npm:pi-subagents npm:pi-powerline-footer)
+
 # No stty mode changes: read -s restores echo even on cancellation/signals.
 read_key() {
     local suffix=""
@@ -2137,21 +2149,30 @@ preflight() {
     local item
     for item in "$@"; do
         case "$item" in
-            0 | 1) require_command curl || return 1 ;;
+            0) require_command curl || return 1 ;;
+            1) require_command curl || return 1; require_node || return 1 ;;
             2) : ;;
             3) require_node || return 1 ;;
+            5) require_node || return 1; require_command npm || return 1 ;;
             4) require_command curl || return 1; require_node || return 1; require_command npx || return 1 ;;
         esac
     done
 }
 
 execute_plan() {
-    local item other source previous handled index source_scope
+    local item other source previous handled index source_scope before package
     local completed_sources=() names=()
     for item in "${AGENT_ITEMS[@]+"${AGENT_ITEMS[@]}"}"; do
         case "$item" in
             0) run_item 'Codex CLI' install_codex ;;
-            1) run_item 'Claude Code CLI' install_claude ;;
+            1)
+                before=${#FAILED[@]}
+                run_item 'Claude Code CLI' install_claude
+                if [ "${#FAILED[@]}" -eq "$before" ]; then
+                    if resolve_resource scripts/statusline.sh; then
+                        run_item 'Claude statusline' install_statusline
+                    else FAILED+=('Claude statusline: resource unavailable'); fi
+                else FAILED+=('Claude statusline: skipped because Claude installation failed'); fi ;;
             2)
                 for ((index=0; index<${#SELECTED_RULES[@]}; index++)); do
                     other="${SELECTED_RULES[index]}"
@@ -2159,6 +2180,14 @@ execute_plan() {
                     if ! resolve_rule_source "$source_scope"; then FAILED+=("$source_scope rule: $other (resource unavailable)"); continue; fi
                     run_item "$RULE_SCOPE rule: $other ($RULE_TARGETS)" apply_rule "$other" "$RULE_SCOPE" "$RULE_TARGETS" install "$source_scope"
                 done ;;
+            5)
+                before=${#FAILED[@]}
+                run_item 'Pi CLI' install_pi
+                if [ "${#FAILED[@]}" -eq "$before" ]; then
+                    for package in "${PI_PACKAGES[@]}"; do run_item "$package" pi install "$package"; done
+                else
+                    for package in "${PI_PACKAGES[@]}"; do FAILED+=("$package: skipped because Pi installation failed"); done
+                fi ;;
             3)
                 if ! resolve_resource scripts/statusline.sh; then FAILED+=('Claude statusline: resource unavailable'); continue; fi
                 run_item 'Claude statusline' install_statusline ;;
@@ -2186,10 +2215,12 @@ execute_plan() {
 
 print_install_plan() {
     local i destination index source_scope
-    local labels=('Codex CLI' 'Claude Code CLI' 'Rules' 'Claude statusline')
+    local labels=('Codex CLI' 'Claude Code CLI' 'Rules' 'Claude statusline' 'Skills' 'Pi CLI')
     printf '\nExecution plan:\n'
     for i in "${AGENT_ITEMS[@]+"${AGENT_ITEMS[@]}"}"; do
         [ "$i" -eq 2 ] || printf '  \033[32m%s\033[0m\n' "${labels[i]}"
+        if [ "$i" -eq 1 ]; then printf '    Claude statusline (bundled)\n'; fi
+        if [ "$i" -eq 5 ]; then printf '    %s (bundled)\n' "${PI_PACKAGES[@]}"; fi
     done
     if [ "${#SELECTED_RULES[@]}" -gt 0 ]; then
         for ((index=0; index<${#SELECTED_RULES[@]}; index++)); do
@@ -2245,8 +2276,9 @@ interactive_setup() {
     local session_status=0 INTERACTIVE_RESULT=0 show_summary=0
     local repo_labels=() repo_group repo_url
     local rule_labels=() rule_names=() rule_sources=() source_scope
-    local task_labels=('Skills' 'Rules' 'Codex CLI' 'Claude Code CLI' 'Claude statusline')
-    local task_ids=(4 2 0 1 3) tasks=()
+    local task_labels=('Skills' 'Rules' 'Agent')
+    local tasks=() agent_requested=0
+    [ "$page" != agent_choices ] || agent_requested=1
     while :; do
         case "$page" in
             main)
@@ -2374,18 +2406,36 @@ interactive_setup() {
                 }
                 tasks=("${MENU_SELECTED[@]+"${MENU_SELECTED[@]}"}")
                 [ "${#tasks[@]}" -gt 0 ] || { printf 'No tasks selected.\n'; page=complete; continue; }
-                AGENT_ITEMS=(); INSTALL_SKILLS=0
-                # Keep installation order independent of the menu's display order.
-                for i in 0 1 2 3 4; do
-                    for task in "${tasks[@]}"; do
-                        [ "${task_ids[task]}" -eq "$i" ] || continue
-                        if ! preflight "$i" || { [ "$i" -eq 3 ] && ! resolve_resource scripts/statusline.sh; }; then
-                            FAILED+=("Installation preparation failed"); show_summary=1; page=complete; break 2
-                        fi
-                        if [ "$i" -eq 4 ]; then INSTALL_SKILLS=1; else AGENT_ITEMS+=("$i"); fi
-                    done
+                AGENT_ITEMS=(); INSTALL_SKILLS=0; agent_requested=0
+                for task in "${tasks[@]}"; do
+                    case "$task" in
+                    0) INSTALL_SKILLS=1 ;;
+                    1) AGENT_ITEMS+=(2) ;;
+                    2) agent_requested=1 ;;
+                    esac
                 done
-                [ "$page" != complete ] || continue
+                if [ "$INSTALL_SKILLS" -eq 1 ] && ! preflight 4; then
+                    FAILED+=('Installation preparation failed'); show_summary=1; page=complete; continue
+                fi
+                if [ "$agent_requested" -eq 1 ]; then page=agent_choices; else page=before_rules; fi ;;
+            agent_choices)
+                choose_items 12 'Choose Agents' 1 1 Codex 'Claude Code (with statusline)' 'Pi (with three packages)' || {
+                    [ "$?" -eq 2 ] || return "$session_status"
+                    page=tasks; continue
+                }
+                # Back/re-entry replaces the previous Agent choices, preserving Rules.
+                if [[ " ${AGENT_ITEMS[*]+${AGENT_ITEMS[*]}} " = *" 2 "* ]]; then AGENT_ITEMS=(2); else AGENT_ITEMS=(); fi
+                for i in "${MENU_SELECTED[@]+"${MENU_SELECTED[@]}"}"; do
+                    case "$i" in 0) AGENT_ITEMS+=(0) ;; 1) AGENT_ITEMS+=(1) ;; 2) AGENT_ITEMS+=(5) ;; esac
+                done
+                if ! preflight "${AGENT_ITEMS[@]+"${AGENT_ITEMS[@]}"}"; then
+                    FAILED+=('Installation preparation failed'); show_summary=1; page=complete; continue
+                fi
+                if [[ " ${AGENT_ITEMS[*]+${AGENT_ITEMS[*]}} " = *" 1 "* ]] && ! resolve_resource scripts/statusline.sh; then
+                    FAILED+=('Installation preparation failed'); show_summary=1; page=complete; continue
+                fi
+                page=before_rules ;;
+            before_rules)
                 if [[ " ${AGENT_ITEMS[*]+${AGENT_ITEMS[*]}} " = *" 2 "* ]]; then page=rule_choices;
                 else SELECTED_RULES=(); SELECTED_RULE_SOURCES=(); page=after_rules; fi ;;
             rule_choices)
@@ -2520,7 +2570,7 @@ interactive_setup() {
                         b | B)
                             if [ "$INSTALL_SKILLS" -eq 1 ]; then
                                 if [ "${#SELECTED_SKILLS[@]}" -gt 0 ]; then page=targets; else page=skill_repos; fi
-                            else page=tasks; fi
+                            elif [ "$agent_requested" -eq 1 ]; then page=agent_choices; else page=tasks; fi
                             continue ;;
                         *) printf 'Cancelled.\n'; page=complete; continue ;;
                     esac
@@ -2571,13 +2621,13 @@ main() {
         return "$parse_status"
     }
     if [ "$INSTALL_AGENT" -eq 1 ]; then
-        AGENT_ITEMS=(0 1 2 3); SELECTED_RULES=(); SELECTED_RULE_SOURCES=()
+        AGENT_ITEMS=(0 1 5); SELECTED_RULES=(); SELECTED_RULE_SOURCES=()
         if [ -t 0 ] && [ -t 1 ]; then
             preflight "${AGENT_ITEMS[@]}" || return 1
-            interactive_setup rule_choices
+            interactive_setup agent_choices
             return $?
         fi
-        printf 'No terminal available; skipping rule selection and installation.\n'
+        printf 'No terminal available; installing all Agents and bundled components.\n'
     fi
     preflight "${AGENT_ITEMS[@]+"${AGENT_ITEMS[@]}"}"
     if [ "$INSTALL_SKILLS" -eq 1 ] || [ "$LIST_SKILLS" -eq 1 ]; then

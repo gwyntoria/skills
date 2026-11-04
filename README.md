@@ -95,7 +95,7 @@ Project 规则安装到启动命令时的当前目录，包括 Git 子目录和�
 
 Waza 规则每次启动后首次进入规则页时，通过 GitHub API 固定 `main` 的提交并读取目录；确认安装后仅从 raw 下载所选规则，始终使用该提交，退出清理临时文件。默认不勾选；安装标识使用 `waza-<规则名>`，正文保留上游内容，支持上游的 H1 和 H2 标题。获取失败可重试、返回或跳过 Waza。再次安装只更新所选项，不卸载未选规则；旧 `agent-behavior` 不再提供，也不会自动清理已安装内容。
 
-`--agent` 在有终端时进入规则多选和安装确认；无终端时提示跳过规则，继续安装 CLI 和状态栏。与 `--skill` 同用时，有终端进入技能选择，无终端保持安装全部已配置技能的行为。
+`--agent` 在有终端时进入 Agent 多选和安装确认；无终端时安装全部三个 CLI 及其附带组件。Agent 默认全选 Codex、Claude Code、Pi；Claude Code 附带 statusline，Pi 附带 `npm:pi-web-access`、`npm:pi-subagents`、`npm:pi-powerline-footer`。交互安装的任务页按 Skills、Rules、Agent 分组，Rules 和 Skills 保持独立选择。与 `--skill` 同用时，有终端进入技能选择，无终端保持安装全部已配置技能的行为。
 
 ## Scripts
 

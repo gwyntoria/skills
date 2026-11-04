@@ -83,6 +83,15 @@ else:
 '''
 
 
+PI = r'''#!/usr/bin/env python3
+import json, os, sys
+with open(os.path.join(os.environ['HOME'], 'pi-calls.jsonl'), 'a') as log:
+    log.write(json.dumps(sys.argv[1:]) + '\n')
+if sys.argv[1:] == ['--version'] and os.environ.get('FAIL_PI_CLI'): sys.exit(72)
+if sys.argv[1:] == ['install', os.environ.get('FAIL_PI_PACKAGE')]: sys.exit(73)
+'''
+
+
 
 class Terminal:
     def __init__(self, env, script=SCRIPT, cwd=None, command=None):
@@ -161,7 +170,8 @@ class AgentSetupTests(unittest.TestCase):
                         FETCH_LOG=str(self.root / "fetch.log"))
         for name, content in [('npx', NPX), ('curl', CURL),
                               ('codex', '#!/bin/sh\nexit 0\n'),
-                              ('claude', '#!/bin/sh\nexit 0\n')]:
+                              ('claude', '#!/bin/sh\nexit 0\n'),
+                              ('pi', PI)]:
             self.stub(name, content)
         self.waza_bundle()
         self.old = self.home / '.agents/skills/existing/SKILL.md'
@@ -206,6 +216,81 @@ class AgentSetupTests(unittest.TestCase):
             f'  export PATH={shlex.quote(str(runtime))}:"$PATH"\n'
             '}\n')
         return nvm
+
+    def test_agents_nested_choices_preserve_selection_and_bundle_claude(self):
+        term = self.terminal()
+        term.send(b'\r')
+        term.expect('Choose installation tasks')
+        term.expect('Item 1/3')
+        frame = term.transcript.decode().rsplit('Choose installation tasks', 1)[-1]
+        self.assertIn('[ ] Agent', frame)
+        self.assertNotIn('Claude statusline', frame)
+        term.send(b'\x1b[B' * 2 + b' \r')
+        term.expect('Choose Agents')
+        term.expect('Item 1/3')
+        self.assertIn('[x] Pi (with three packages)', term.transcript.decode())
+        term.send(b' \x1b[B\x1b[B \r')
+        term.expect('Continue? [y/N]')
+        plan = term.transcript.decode().rsplit('Execution plan:', 1)[-1]
+        self.assertIn('Claude Code CLI', plan)
+        self.assertIn('Claude statusline (bundled)', plan)
+        self.assertNotIn('Pi CLI', plan)
+        self.assertNotIn('Codex CLI', plan)
+        term.send(b'b\n')
+        term.expect('Choose Agents')
+        term.expect('Item 3/3')
+        frame = term.transcript.decode().rsplit('Choose Agents', 1)[-1]
+        self.assertIn('[ ] Codex', frame)
+        self.assertIn('[x] Claude Code (with statusline)', frame)
+        self.assertIn('[ ] Pi (with three packages)', frame)
+        term.send(b'\r')
+        term.expect('Continue? [y/N]')
+        term.send(b'y\n')
+        term.expect('2 succeeded, 0 failed')
+        self.assertEqual(term.finish_action(), 0)
+        self.assertTrue((self.home / '.claude/statusline.sh').exists())
+        self.assertFalse((self.home / '.codex/AGENTS.md').exists())
+        self.assertFalse(self.calls())
+        self.assertFalse((self.home / 'pi-calls.jsonl').exists())
+
+    def test_pi_bundles_continue_after_independent_extension_failure(self):
+        self.env['FAIL_PI_PACKAGE'] = 'npm:pi-subagents'
+        result = self.source('AGENT_ITEMS=(5); SELECTED_SKILLS=(); execute_plan')
+        self.assertEqual(result.returncode, 1, result.stderr)
+        calls = [json.loads(line) for line in (self.home / 'pi-calls.jsonl').read_text().splitlines()]
+        self.assertEqual(calls, [['--version'], ['install', 'npm:pi-web-access'],
+                                ['install', 'npm:pi-subagents'], ['install', 'npm:pi-powerline-footer']])
+        self.assertIn('3 succeeded, 1 failed', result.stdout)
+        self.assertFalse((self.home / '.claude').exists())
+
+    def test_pi_cli_failure_skips_packages_and_continues_claude(self):
+        self.env['FAIL_PI_CLI'] = '1'
+        result = self.source('AGENT_ITEMS=(5 1); SELECTED_SKILLS=(); execute_plan')
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertEqual((self.home / 'pi-calls.jsonl').read_text().splitlines(), ['["--version"]'])
+        self.assertIn('2 succeeded, 4 failed', result.stdout)
+        self.assertTrue((self.home / '.claude/statusline.sh').exists())
+
+    def test_pi_bootstrap_installs_missing_cli_with_npm(self):
+        (self.bin / 'pi').unlink()
+        for command in ['node', 'python3', 'dirname', 'bash', 'readlink']:
+            (self.bin / command).symlink_to(shutil.which(command))
+        self.env['PATH'] = str(self.bin)
+        fixture = self.root / 'pi-fixture'
+        fixture.write_text(PI)
+        self.env['PI_FIXTURE'] = str(fixture)
+        self.stub('npm', r'''#!/usr/bin/env python3
+import os, sys, shutil, json
+from pathlib import Path
+Path(os.environ['HOME'], 'npm-call.json').write_text(json.dumps(sys.argv[1:]))
+target = Path(os.environ['HOME']).parent / 'bin/pi'
+shutil.copyfile(os.environ['PI_FIXTURE'], target)
+target.chmod(0o755)
+''')
+        result = self.source('install_pi')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads((self.home / 'npm-call.json').read_text()),
+                         ['install', '-g', '--ignore-scripts', '@earendil-works/pi-coding-agent'])
 
     def test_node_bootstrap_preserves_available_node(self):
         nvm = self.home / '.nvm'
@@ -482,7 +567,7 @@ class AgentSetupTests(unittest.TestCase):
         """
         term = self.terminal()
         term.send(b'\r')
-        term.expect('Item 1/5')
+        term.expect('Item 1/3')
         term.send(b' \r')
         term.expect('Choose skill repositories')
         term.expect('Item 1/6')
@@ -536,7 +621,7 @@ class AgentSetupTests(unittest.TestCase):
         term.expect('Item 1/5')
         term.send(b'\r')
         term.expect('Choose installation tasks')
-        term.expect('Item 1/5')
+        term.expect('Item 1/3')
         term.send(b'\x1b[B \r')
         term.expect('Choose rules')
         term.expect('Item 1/4')
@@ -632,13 +717,13 @@ class AgentSetupTests(unittest.TestCase):
         self.assertTrue((self.home / '.claude/rules/c-project.md').exists())
         self.assertEqual(len((self.root / 'fetch.log').read_text().splitlines()), 4)
 
-    def test_agent_flag_terminal_opens_empty_rule_selection(self):
+    def test_agent_flag_terminal_opens_agent_selection(self):
         term = Terminal(self.env, cwd=self.root, command=['bash', str(SCRIPT), '--agent'])
         self.addCleanup(term.close)
-        term.expect('Choose rules')
-        term.expect('Item 1/4')
-        self.assertIn('[ ] Waza / anti-patterns', term.transcript.decode())
-        self.assertNotIn('agent-behavior', term.transcript.decode())
+        term.expect('Choose Agents')
+        term.expect('Item 1/3')
+        for label in ['[x] Codex', '[x] Claude Code (with statusline)', '[x] Pi (with three packages)']:
+            self.assertIn(label, term.transcript.decode())
         term.send(b'q')
         self.assertEqual(term.finish(), 0)
         self.assertFalse((self.home / '.codex').exists())
@@ -650,7 +735,7 @@ class AgentSetupTests(unittest.TestCase):
         term.expect('Item 1/5')
         term.send(b'\r')
         term.expect('Choose installation tasks')
-        term.expect('Item 1/5')
+        term.expect('Item 1/3')
         term.send(b'\x1b[B \r')
         term.expect('Waza rules unavailable')
         term.expect('Item 1/3')
@@ -834,10 +919,10 @@ class AgentSetupTests(unittest.TestCase):
         result = subprocess.run(['bash', str(script), '--agent'], env=self.env, cwd=self.root,
                                 capture_output=True, text=True, timeout=20)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn('3 succeeded, 0 failed', result.stdout)
+        self.assertIn('7 succeeded, 0 failed', result.stdout)
         self.assertFalse((self.home / '.codex/AGENTS.md').exists())
         self.assertFalse((self.home / '.claude/CLAUDE.md').exists())
-        self.assertIn('skipping rule selection', result.stdout)
+        self.assertIn('installing all Agents', result.stdout)
         self.assertTrue((self.home / '.claude/statusline.sh').exists())
         self.assertEqual(len((self.root / 'fetch.log').read_text().splitlines()), 1)
         self.assertEqual(list(scratch.iterdir()), [])
@@ -894,7 +979,7 @@ class AgentSetupTests(unittest.TestCase):
         result = subprocess.run(['bash', str(script), '--agent'], env=self.env,
                                 capture_output=True, text=True, timeout=20)
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn('2 succeeded, 1 failed', result.stdout)
+        self.assertIn('6 succeeded, 1 failed', result.stdout)
         self.assertEqual(target.read_text(), 'keep existing\n')
         self.assertFalse((self.home / '.claude/statusline.sh').exists())
 
@@ -1004,19 +1089,25 @@ class AgentSetupTests(unittest.TestCase):
         settings.write_text('invalid json')
         term = self.terminal()
         term.send(b'\r')
-        term.expect('Item 1/5')
-        term.send(b'\x1b[B' * 4 + b' \r')
+        term.expect('Item 1/3')
+        term.send(b'\x1b[B' * 2 + b' \r')
+        term.expect('Choose Agents')
+        term.expect('Item 1/3')
+        term.send(b'n\x1b[B \r')
         term.expect('Continue? [y/N]')
         term.send(b'y\n')
-        term.expect('0 succeeded, 1 failed')
+        term.expect('1 succeeded, 1 failed')
         term.return_home()
         self.assertEqual(settings.read_text(), 'invalid json')
         term.send(b'\r')
         term.expect('Choose installation tasks')
-        term.expect('Item 1/5')
+        term.expect('Item 1/3')
         frame = term.transcript.decode().rsplit('\x1b[H\x1b[2J', 1)[-1]
         self.assertNotIn('[x]', frame)
         term.send(b'\x1b[B' * 2 + b' \r')
+        term.expect('Choose Agents')
+        term.expect('Item 1/3')
+        term.send(b'n \r')
         term.expect('Continue? [y/N]')
         term.send(b'y\n')
         term.expect('1 succeeded, 0 failed')
@@ -1033,7 +1124,7 @@ main"""]
         self.addCleanup(term.close)
         term.expect('Item 1/5')
         term.send(b'\r')
-        term.expect('Item 1/5')
+        term.expect('Item 1/3')
         term.send(b' \r')
         term.expect('fixture: missing npx')
         term.expect('Installation preparation failed')
@@ -1050,7 +1141,7 @@ main"""]
         self.addCleanup(term.close)
         term.expect('Item 1/5')
         term.send(b'\r')
-        term.expect('Item 1/5')
+        term.expect('Item 1/3')
         term.send(b'\x1b[B \r')
         term.expect('project rule catalog unavailable')
         term.return_home()
@@ -1068,11 +1159,14 @@ main"""]
         for _ in range(2):
             term.send(b'\r')
             term.expect('Choose installation tasks')
-            term.expect('Item 1/5')
-            term.send(b'\x1b[B' * 4 + b' \r')
+            term.expect('Item 1/3')
+            term.send(b'\x1b[B' * 2 + b' \r')
+            term.expect('Choose Agents')
+            term.expect('Item 1/3')
+            term.send(b'n\x1b[B \r')
             term.expect('Continue? [y/N]')
             term.send(b'y\n')
-            term.expect('1 succeeded, 0 failed')
+            term.expect('2 succeeded, 0 failed')
             term.return_home()
         self.assertEqual(term.exit_home(), 0)
         self.assertEqual(len((self.root / 'fetch.log').read_text().splitlines()), 1)
@@ -1100,7 +1194,7 @@ main"""]
         term.expect('[x] tw93/waza')
         term.send(b'b')
         term.expect('Choose installation tasks')
-        term.expect('Item 1/5')
+        term.expect('Item 1/3')
         term.send(b'\r')
         term.expect('Choose skill repositories')
         term.expect('[x] tw93/waza')
@@ -1305,7 +1399,7 @@ main"""]
             term.return_home()
             if run == 0:
                 term.send(b'\r')
-                term.expect('Item 1/5')
+                term.expect('Item 1/3')
                 term.send(b' \r')
                 term.expect('Choose skill repositories')
                 term.send(b'a\r')
@@ -1868,7 +1962,7 @@ main"""]
         self.assertEqual(installed, [['waza-first', 'fail-middle', 'waza-last'],
                                     ['kami'], ['matt-a', 'matt-b'], ['show-me'],
                                     ['gwyntoria-first', 'gwyntoria-last'], ['distilly']])
-        self.assertIn('8 succeeded, 1 failed', result.stdout)
+        self.assertIn('12 succeeded, 1 failed', result.stdout)
         self.assertIn('Waza: waza-first fail-middle waza-last (exit 9)', result.stdout)
         self.assertEqual(self.old.read_text(), 'keep me')
         self.assertTrue((self.home / '.claude/settings.json').is_file())
@@ -1922,7 +2016,7 @@ print_summary''')
         term = self.terminal()
         term.send(b'\r')
         term.expect('Choose installation tasks')
-        term.expect('Item 1/5')
+        term.expect('Item 1/3')
         term.send(b'\r')
         self.assertEqual(term.finish_action(), 0)
         self.assertFalse(self.calls())
@@ -1933,8 +2027,11 @@ print_summary''')
     def test_terminal_all_none_and_confirmation_cancel(self):
         term = self.terminal()
         term.send(b'\r')
-        term.expect('Item 1/5')
-        term.send(b'an\x1b[B\x1b[B \r')  # all, none, then just Codex
+        term.expect('Item 1/3')
+        term.send(b'an\x1b[B\x1b[B \r')  # all, none, then Agent
+        term.expect('Choose Agents')
+        term.expect('Item 1/3')
+        term.send(b'n \r')  # just Codex
         term.expect('Execution plan:')
         term.expect('Codex CLI')
         term.expect('Continue? [y/N]')
