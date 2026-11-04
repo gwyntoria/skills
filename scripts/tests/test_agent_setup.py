@@ -63,6 +63,9 @@ if '-o' in args:
         print('fixture: codeload TLS failure', file=sys.stderr)
         sys.exit(35)
     if 'api.github.com/repos/tw93/Waza/' in url:
+        if os.environ.get('FAIL_WAZA_API') in ('all', 'commit' if '/commits/main' in url else 'catalog'):
+            print('fixture: API HTTP 403 rate limit', file=sys.stderr)
+            sys.exit(22)
         if '/commits/main' in url:
             with open(output, 'w') as target:
                 json.dump({'sha': os.environ.get('WAZA_COMMIT', 'a' * 40)}, target)
@@ -80,6 +83,29 @@ else:
         sys.exit(8)
     names = os.environ.get('MATT_SKILLS', 'matt-a matt-b').split()
     print('<section aria-labelledby="skill-set-heading">' + ''.join('<a href="/skills-' + name + '">' + name + '</a>' for name in names) + '</section>')
+'''
+
+
+GIT = r'''#!/usr/bin/env python3
+import json, os, sys
+from pathlib import Path
+args = sys.argv[1:]
+if args and args[0] == 'clone':
+    with open(os.environ['GIT_LOG'], 'a') as log:
+        log.write(json.dumps(args) + '\n')
+    if os.environ.get('INTERRUPT_CLONE'):
+        import signal
+        os.kill(os.getppid(), signal.SIGTERM)
+        sys.exit(143)
+    source = os.environ.get('WAZA_GIT_REPO')
+    if not source:
+        print('fixture: Git clone unavailable', file=sys.stderr)
+        sys.exit(128)
+    args[args.index('https://github.com/tw93/Waza.git')] = Path(source).as_uri()
+if 'fetch' in args and os.environ.get('FAIL_GIT_FETCH'):
+    print('fixture: pinned commit unavailable', file=sys.stderr)
+    sys.exit(128)
+os.execv(os.environ['REAL_GIT'], [os.environ['REAL_GIT'], *args])
 '''
 
 
@@ -167,8 +193,9 @@ class AgentSetupTests(unittest.TestCase):
         self.log = self.root / 'calls.jsonl'
         self.env = dict(os.environ, HOME=str(self.home),
                         PATH=f'{self.bin}:{os.environ["PATH"]}', CALL_LOG=str(self.log),
-                        FETCH_LOG=str(self.root / "fetch.log"))
-        for name, content in [('npx', NPX), ('curl', CURL),
+                        FETCH_LOG=str(self.root / "fetch.log"),
+                        REAL_GIT=shutil.which('git'), GIT_LOG=str(self.root / 'git.log'))
+        for name, content in [('npx', NPX), ('curl', CURL), ('git', GIT),
                               ('codex', '#!/bin/sh\nexit 0\n'),
                               ('claude', '#!/bin/sh\nexit 0\n'),
                               ('pi', PI)]:
@@ -646,6 +673,131 @@ target.chmod(0o755)
         term.expect('Item 1/2')
 
 
+    def waza_git_fixture(self):
+        repo = self.root / 'git-source'
+        repo.mkdir()
+        shutil.copytree(Path(self.env['WAZA_FILES']), repo / 'rules')
+        git = self.env['REAL_GIT']
+        for args in [('init', '-q', '-b', 'main'), ('add', '.'),
+                     ('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.com',
+                      'commit', '-qm', 'rules')]:
+            subprocess.run([git, '-C', str(repo), *args], check=True, capture_output=True)
+        commit = subprocess.check_output([git, '-C', str(repo), 'rev-parse', 'HEAD'], text=True).strip()
+        self.env.update(WAZA_GIT_REPO=str(repo), WAZA_COMMIT=commit)
+        return repo, commit
+
+    def test_waza_api_failure_clones_caches_and_cleans_checkout(self):
+        self.waza_bundle(('chinese', 'english'))
+        repo, commit = self.waza_git_fixture()
+        for failure in ('commit', 'catalog', 'invalid-json'):
+            with self.subTest(failure=failure):
+                self.env['FAIL_WAZA_API'] = failure
+                catalog = Path(self.env['WAZA_CATALOG'])
+                catalog.write_text('broken' if failure == 'invalid-json' else json.dumps(
+                    [{'name': 'chinese.md', 'type': 'file'}, {'name': 'english.md', 'type': 'file'}]))
+                result = self.source(
+                    'load_waza_rules || exit 1\n'
+                    'printf "CACHE=%s\\nCOMMIT=%s\\n" "$RESOURCE_TEMP" "$WAZA_RULES_COMMIT"\n'
+                    '[ -z "$(find "$RESOURCE_TEMP" -name "waza-clone.*")" ] || exit 2\n'
+                    'load_waza_rules || exit 3\n'
+                    'fetch_waza_rule waza-chinese || exit 4\n'
+                    'cat "$WAZA_RULES_PATH/waza-chinese.md"\n'
+                    'apply_rule waza-chinese global pi install waza')
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn('COMMIT=' + commit, result.stdout)
+                self.assertIn('Upstream chinese body.', result.stdout)
+                cache = re.search(r'CACHE=(.+)', result.stdout).group(1)
+                self.assertFalse(Path(cache).exists())
+        installed = (self.home / '.pi/agent/AGENTS.md').read_text()
+        self.assertIn('Upstream chinese body.', installed)
+        self.assertIn('/blob/' + commit + '/rules/chinese.md', installed)
+        self.assertEqual(len((self.root / 'git.log').read_text().splitlines()), 3)
+        self.assertNotIn('raw.githubusercontent', (self.root / 'fetch.log').read_text())
+
+    def test_waza_raw_fallback_preserves_pinned_commit_after_main_moves(self):
+        repo, commit = self.waza_git_fixture()
+        (repo / 'rules/anti-patterns.md').write_text('# New main\nDifferent body.\n')
+        git = self.env['REAL_GIT']
+        subprocess.run([git, '-C', str(repo), 'add', '.'], check=True)
+        subprocess.run([git, '-C', str(repo), '-c', 'user.name=Fixture',
+                        '-c', 'user.email=fixture@example.com', 'commit', '-qm', 'advance'], check=True)
+        self.env['FAIL_WAZA_RULE'] = 'anti-patterns.md'
+        result = self.source('load_waza_rules && fetch_waza_rule waza-anti-patterns && '
+                             'cat "$WAZA_RULES_PATH/waza-anti-patterns.md"')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('Upstream anti-patterns body.', result.stdout)
+        self.assertNotIn('Different body.', result.stdout)
+        self.env['FAIL_WAZA_API'] = 'catalog'
+        result = self.source('load_waza_rules && fetch_waza_rule waza-anti-patterns && '
+                             'cat "$WAZA_RULES_PATH/waza-anti-patterns.md"')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('Upstream anti-patterns body.', result.stdout)
+        self.env.pop('FAIL_WAZA_API')
+        self.env['FAIL_GIT_FETCH'] = '1'
+        result = self.source('load_waza_rules && fetch_waza_rule waza-anti-patterns')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('pinned commit unavailable', result.stderr)
+
+    def test_waza_clone_rejects_invalid_selected_heading_and_skips_symlinks(self):
+        repo, _ = self.waza_git_fixture()
+        (repo / 'rules/anti-patterns.md').write_text('Invalid title\n')
+        (repo / 'rules/link.md').symlink_to('anti-patterns.md')
+        git = self.env['REAL_GIT']
+        subprocess.run([git, '-C', str(repo), 'add', '.'], check=True)
+        subprocess.run([git, '-C', str(repo), '-c', 'user.name=Fixture',
+                        '-c', 'user.email=fixture@example.com', 'commit', '-qm', 'invalid'], check=True)
+        self.env['FAIL_WAZA_API'] = 'commit'
+        result = self.source('load_waza_rules || exit 1; '
+                             'printf "%s\\n" "${RULE_NAMES_WAZA[@]}"; '
+                             'fetch_waza_rule waza-anti-patterns')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('must start with H1 or H2', result.stderr)
+        self.assertEqual(result.stdout.strip(), 'waza-anti-patterns')
+
+    def test_waza_failed_or_interrupted_clone_cleans_temporary_resources(self):
+        self.env['FAIL_WAZA_API'] = 'commit'
+        for interrupt in ('', '1'):
+            with self.subTest(interrupt=interrupt):
+                self.env['INTERRUPT_CLONE'] = interrupt
+                result = self.source(
+                    'if load_waza_rules; then status=0; else status=$?; fi; '
+                    'printf "CACHE=%s\\n" "$RESOURCE_TEMP"; '
+                    '[ -z "$(find "$RESOURCE_TEMP" -name "waza-clone.*")" ] || exit 99; '
+                    'exit "$status"')
+                self.assertNotEqual(result.returncode, 0)
+                self.assertNotEqual(result.returncode, 99)
+                cache = re.search(r'CACHE=(.+)', result.stdout).group(1)
+                self.assertFalse(Path(cache).exists())
+
+    def test_waza_clone_rejects_empty_or_unsafe_catalog(self):
+        repo, _ = self.waza_git_fixture()
+        self.env['FAIL_WAZA_API'] = 'commit'
+        for filename in ('README.txt', 'bad name.md'):
+            with self.subTest(filename=filename):
+                shutil.rmtree(repo / 'rules')
+                (repo / 'rules').mkdir()
+                (repo / 'rules' / filename).write_text('# Example\n')
+                git = self.env['REAL_GIT']
+                subprocess.run([git, '-C', str(repo), 'add', '-A'], check=True)
+                subprocess.run([git, '-C', str(repo), '-c', 'user.name=Fixture',
+                                '-c', 'user.email=fixture@example.com', 'commit', '-qm', filename], check=True)
+                result = self.source('if load_waza_rules; then status=0; else status=$?; fi; '
+                                     '[ -z "$WAZA_RULES_PATH" ] || exit 99; exit "$status"')
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertIn('No Waza rules available' if filename.endswith('.txt') else
+                              'Invalid Waza rule filename', result.stderr)
+
+    def test_waza_missing_git_reports_failure_without_publishing_catalog(self):
+        self.env['FAIL_WAZA_API'] = 'commit'
+        result = self.source(
+            'require_command() { if [ "$1" = git ]; then '
+            'printf "Git unavailable\\n" >&2; return 1; fi; command -v "$1" >/dev/null; }\n'
+            'if load_waza_rules; then status=0; else status=$?; fi; '
+            'printf "%s" "$WAZA_RULES_ERROR"; '
+            '[ -z "$WAZA_RULES_PATH" ] || exit 99; exit "$status"')
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn('Git unavailable', result.stdout)
+
     def test_waza_selected_download_failure_preserves_configs_and_continues(self):
         self.waza_bundle(('chinese', 'english'))
         self.env['FAIL_WAZA_RULE'] = '/rules/english.md'
@@ -695,6 +847,7 @@ target.chmod(0o755)
         self.assertIn('/' + 'a' * 40 + '/rules/chinese.md', fetches)
         self.assertNotIn('/' + 'b' * 40, fetches)
         self.assertNotIn('/rules/english.md', fetches)
+        self.assertFalse((self.root / 'git.log').exists())
 
     def test_global_rule_headings_preserve_fences_unselected_blocks_and_user_content(self):
         fixture = self.root / 'headings'
@@ -800,6 +953,7 @@ target.chmod(0o755)
         term.expect('Item 1/3')
         term.send(b'\x1b[B \r')
         term.expect('Waza rules unavailable')
+        term.expect('fixture: Git clone unavailable')
         term.expect('Item 1/3')
         term.send(b'\x1b[B\r')
         term.expect('Choose rules')

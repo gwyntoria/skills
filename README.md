@@ -91,9 +91,9 @@ Project 规则统一写入启动命令时当前目录的 `AGENTS.md`，供 Codex
 
 资源相对脚本实际位置查找，符号链接会解析到真实脚本。`rules/project/` 和 `scripts/statusline.sh` 分别优先使用本地内容；缺少某个目录或文件时，从 GitHub `gwyntoria/skills` 的 `main` 分支下载临时资源，同一次运行复用，退出清理。本地规则目录不会混入远端规则，格式错误直接报告；远端获取失败不覆盖配置。改了本地 `rules/` 后重新安装即可更新。
 
-`Install / Update this command` 将命令安装到 `~/.local/bin/agent-setup`。实际脚本位于 `scripts/agent-setup.sh` 且仓库根目录存在 `rules/` 时，安装当前版本；从独立位置运行时，下载 GitHub `main` 最新脚本。安装文件通过 `bash -n` 后原子替换，下载或检查失败保留旧命令，下次启动生效。PATH 缺少 `~/.local/bin` 时仅打印配置方法，不修改 shell 配置。需要 Bash；远端获取需要 cURL，本仓库归档资源还需要 tar，Waza 目录解析需要 Node.js（可复用现有 nvm 引导）；保留原有 CLI 和 skills 安装任务所需的 Node.js、npx 等依赖。
+`Install / Update this command` 将命令安装到 `~/.local/bin/agent-setup`。实际脚本位于 `scripts/agent-setup.sh` 且仓库根目录存在 `rules/` 时，安装当前版本；从独立位置运行时，下载 GitHub `main` 最新脚本。安装文件通过 `bash -n` 后原子替换，下载或检查失败保留旧命令，下次启动生效。PATH 缺少 `~/.local/bin` 时仅打印配置方法，不修改 shell 配置。需要 Bash；远端获取需要 cURL，本仓库归档资源还需要 tar，Waza 目录解析需要 Node.js（可复用现有 nvm 引导），clone 兜底需要 Git；保留原有 CLI 和 skills 安装任务所需的 Node.js、npx 等依赖。
 
-Waza 规则每次启动后首次进入规则页时，通过 GitHub API 固定 `main` 的提交并读取目录；确认安装后仅从 raw 下载所选规则，始终使用该提交，退出清理临时文件。默认不勾选；安装标识使用 `waza-<规则名>`，支持上游的 H1 和 H2 标题。获取失败可重试、返回或跳过 Waza。再次安装只更新所选项，不卸载未选规则；旧 `agent-behavior` 不再提供，也不会自动清理已安装内容。
+Waza 规则每次启动后首次进入规则页时，通过 GitHub API 固定 `main` 的提交并读取目录；确认安装后从 raw 下载所选规则。API 请求或目录解析失败时自动尝试浅 clone；raw 正文下载失败时也自动尝试 clone。已固定提交后始终读取该版本，无法获取则报错；尚未固定时使用 clone 得到的 `main` 提交。clone 位于临时目录，解析并复制规则到本次运行的临时缓存后立即删除；失败或中断也会清理，规则缓存则在脚本退出时删除。默认不勾选；安装标识使用 `waza-<规则名>`，支持上游的 H1 和 H2 标题。API 与 clone 均失败时显示错误详情，可重试、返回或跳过 Waza。再次安装只更新所选项，不卸载未选规则；旧 `agent-behavior` 不再提供，也不会自动清理已安装内容。
 
 安装时按目标格式化所选规则的标题：Codex 全局 `~/.codex/AGENTS.md` 和 Pi 全局 `~/.pi/agent/AGENTS.md` 顶部使用 `# Global Rules`，各规则标题统一为二级标题；Claude 独立规则文件的标题统一为一级标题。子标题随规则标题调整层级，最深为六级，代码块和其他正文保持原样。项目 `AGENTS.md` 保留现有标题行为。Pi 全局目录遵循 `PI_CODING_AGENT_DIR`（如已设置），无需在 `settings.json` 中登记规则路径。重复安装不重复添加总标题，卸载规则后保留总标题；未选中的已有规则及用户自有内容保持原样，统一已有规则需要重新选择安装。
 

@@ -39,6 +39,7 @@ RULE_CATALOG_PROJECT=0
 RULE_NAMES_WAZA=()
 WAZA_RULES_PATH=""
 WAZA_RULES_COMMIT=""
+WAZA_RULES_ERROR=""
 
 WAZA_SKILLS_URL="https://github.com/tw93/waza"
 KAMI_SKILLS_URL="https://github.com/tw93/kami"
@@ -414,21 +415,10 @@ resolve_resource() {
     esac || { printf 'Invalid resource: %s\n' "$RESOURCE_PATH" >&2; return 1; }
 }
 
-# Pin the catalog before selection; every selected body uses the same commit.
-load_waza_rules() {
-    local staged commit name names=()
-    [ -n "$WAZA_RULES_PATH" ] && return 0
+# Keep API and Git acquisition separate; publish the catalog only after success.
+waza_catalog_api() {
+    local staged="$1" commit
     require_command curl || return 1
-    require_node || return 1
-    if [ -z "$RESOURCE_TEMP" ]; then
-        RESOURCE_TEMP="$(mktemp -d)" || return 1
-        trap cleanup_setup_resources EXIT
-        trap 'exit 130' INT
-        trap 'exit 143' TERM
-    fi
-    staged="$RESOURCE_TEMP/waza"
-    mkdir -p "$staged/rules" || return 1
-    printf 'Fetching Waza rule catalog from GitHub main...\n' >&2
     curl -fLsS https://api.github.com/repos/tw93/Waza/commits/main -o "$staged/commit.json" || return 1
     commit="$(node -e '
         const fs = require("fs");
@@ -436,6 +426,7 @@ load_waza_rules() {
         if (!/^[a-f0-9]{40}$/.test(data.sha)) { console.error("Invalid Waza commit"); process.exit(1); }
         console.log(data.sha);
     ' "$staged/commit.json")" || return 1
+    printf '%s\n' "$commit" > "$staged/resolved-commit" || return 1
     curl -fLsS "https://api.github.com/repos/tw93/Waza/contents/rules?ref=$commit" -o "$staged/catalog.json" || return 1
     node -e '
         const fs = require("fs");
@@ -452,10 +443,83 @@ load_waza_rules() {
         if (!names.length) { console.error("No Waza rules available"); process.exit(1); }
         console.log([...new Set(names)].sort().join("\n"));
     ' "$staged/catalog.json" > "$staged/names" || return 1
+}
+
+# The checkout never escapes this subshell. Only rule bytes and metadata survive it.
+waza_clone_snapshot() (
+    local staged="$1" pinned="${2:-}" checkout commit hash name
+    require_command git || return 1
+    checkout="$(mktemp -d "$RESOURCE_TEMP/waza-clone.XXXXXX")" || return 1
+    trap 'rm -rf -- "$checkout"' EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    printf 'Fetching Waza rules using Git clone...\n' >&2
+    git clone --quiet --depth 1 --no-checkout --single-branch --branch main \
+        https://github.com/tw93/Waza.git "$checkout/repo" || return 1
+    commit="$(git -C "$checkout/repo" rev-parse HEAD)" || return 1
+    if [ -n "$pinned" ] && [ "$commit" != "$pinned" ]; then
+        git -C "$checkout/repo" fetch --quiet --depth 1 origin "$pinned" || return 1
+        commit="$pinned"
+    fi
+    [[ "$commit" =~ ^[a-f0-9]{40}$ ]] || { printf 'Invalid Waza Git commit\n' >&2; return 1; }
+    # Read blobs without a worktree, excluding symlinks and nested directories.
+    git -C "$checkout/repo" ls-tree -z "$commit:rules" > "$checkout/tree" || return 1
+    mkdir -p "$checkout/snapshot/rules" || return 1
+    node -e '
+        const fs = require("fs");
+        const [tree, output] = process.argv.slice(1);
+        const entries = [];
+        for (const row of fs.readFileSync(tree, "utf8").split("\0")) {
+            if (!row) continue;
+            const match = /^(100644|100755) blob ([a-f0-9]{40})\t(.*)$/s.exec(row);
+            if (!match || !match[3].endsWith(".md")) continue;
+            if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]*\.md$/.test(match[3])) throw new Error("Invalid Waza rule filename");
+            entries.push(["waza-" + match[3].slice(0, -3), match[2]]);
+        }
+        if (!entries.length) throw new Error("No Waza rules available");
+        entries.sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0);
+        fs.writeFileSync(output + "/names", entries.map(e => e[0]).join("\n") + "\n");
+        fs.writeFileSync(output + "/blobs", entries.map(e => e[1] + "\t" + e[0]).join("\n") + "\n");
+    ' "$checkout/tree" "$checkout/snapshot" || return 1
+    while IFS=$'\t' read -r hash name; do
+        git -C "$checkout/repo" cat-file blob "$hash" > "$checkout/snapshot/rules/$name.md" || return 1
+    done < "$checkout/snapshot/blobs"
+    cp "$checkout/snapshot/rules/"*.md "$staged/rules/" || return 1
+    cp "$checkout/snapshot/names" "$staged/names" || return 1
+    printf '%s\n' "$commit" > "$staged/resolved-commit"
+)
+
+# Pin the catalog before selection; every selected body uses the same commit.
+load_waza_rules() {
+    local staged commit name names=()
+    [ -n "$WAZA_RULES_PATH" ] && return 0
+    require_node || return 1
+    if [ -z "$RESOURCE_TEMP" ]; then
+        RESOURCE_TEMP="$(mktemp -d)" || return 1
+        trap cleanup_setup_resources EXIT
+        trap 'exit 130' INT
+        trap 'exit 143' TERM
+    fi
+    staged="$RESOURCE_TEMP/waza"
+    rm -rf -- "$staged" || return 1
+    mkdir -p "$staged/rules" || return 1
+    printf 'Fetching Waza rule catalog from GitHub main...\n' >&2
+    if ! waza_catalog_api "$staged" 2> "$staged/error.log"; then
+        commit=""
+        if [ -f "$staged/resolved-commit" ]; then IFS= read -r commit < "$staged/resolved-commit"; fi
+        printf 'Waza API unavailable; trying Git clone.\n' >&2
+        if ! waza_clone_snapshot "$staged" "$commit" 2>> "$staged/error.log"; then
+            WAZA_RULES_ERROR="$(cat "$staged/error.log")"
+            printf '%s\n' "$WAZA_RULES_ERROR" >&2
+            return 1
+        fi
+    fi
+    IFS= read -r commit < "$staged/resolved-commit" || return 1
     while IFS= read -r name; do names+=("$name"); done < "$staged/names"
     RULE_NAMES_WAZA=("${names[@]}")
     WAZA_RULES_COMMIT="$commit"
     WAZA_RULES_PATH="$staged/rules"
+    WAZA_RULES_ERROR=""
 }
 
 fetch_waza_rule() {
@@ -466,12 +530,21 @@ fetch_waza_rule() {
     done
     [ "$found" -eq 1 ] || { printf 'Unknown Waza rule: %s\n' "$name" >&2; return 1; }
     candidate="$WAZA_RULES_PATH/$name.md"
-    [ -f "$candidate" ] && return 0
-    curl -fLsS "https://raw.githubusercontent.com/tw93/Waza/$WAZA_RULES_COMMIT/rules/${name#waza-}.md" \
-        -o "$candidate.download" || return 1
-    title=""; IFS= read -r title < "$candidate.download" || true
-    case "$title" in '# '* | '## '*) ;; *) printf 'Waza rule must start with H1 or H2: %s\n' "$name" >&2; return 1 ;; esac
-    mv "$candidate.download" "$candidate"
+    if [ ! -f "$candidate" ]; then
+        if curl -fLsS "https://raw.githubusercontent.com/tw93/Waza/$WAZA_RULES_COMMIT/rules/${name#waza-}.md" \
+            -o "$candidate.download"; then
+            mv "$candidate.download" "$candidate" || return 1
+        else
+            rm -f -- "$candidate.download"
+            printf 'Waza raw download unavailable; trying Git clone at %s.\n' "$WAZA_RULES_COMMIT" >&2
+            waza_clone_snapshot "$RESOURCE_TEMP/waza" "$WAZA_RULES_COMMIT" || return 1
+        fi
+    fi
+    title=""; IFS= read -r title < "$candidate" || true
+    case "$title" in '# '* | '## '*) ;; *)
+        rm -f -- "$candidate"
+        printf 'Waza rule must start with H1 or H2: %s\n' "$name" >&2; return 1 ;;
+    esac
 }
 
 resolve_rule_source() {
@@ -2543,7 +2616,7 @@ interactive_setup() {
                     fi
                 fi
                 if ! load_waza_rules; then
-                    choose_items 13 'Waza rules unavailable' 0 0 Retry 'Continue without Waza rules' Back || {
+                    choose_items 13 "Waza rules unavailable${WAZA_RULES_ERROR:+$'\n'$WAZA_RULES_ERROR}" 0 0 Retry 'Continue without Waza rules' Back || {
                         [ "$?" -eq 2 ] || return "$session_status"
                         page=tasks; continue
                     }
