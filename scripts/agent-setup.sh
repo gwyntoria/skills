@@ -30,7 +30,7 @@ RESOURCE_TEMP=""
 RESOURCE_PATH=""
 STATUSLINE_SOURCE=""
 RULE_SCOPE=global
-RULE_TARGETS=both
+RULE_TARGETS="codex claude pi"
 SELECTED_RULES=()
 SELECTED_RULE_SOURCES=()
 RULE_NAMES_GLOBAL=()
@@ -70,6 +70,7 @@ MENU_VISITED=()
 KEY=""
 REMOVE_CODEX=1
 REMOVE_CLAUDE=1
+REMOVE_PI=1
 REMOVE_RULES=0
 REMOVE_SKILLS=0
 REMOVE_SCOPE=global
@@ -530,6 +531,18 @@ install_setup_command() (
     esac
 )
 
+# Pi discovers global instructions here without a settings.json entry.
+pi_rule_path() {
+    local directory="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}"
+    # Match a literal tilde supplied in the environment.
+    # shellcheck disable=SC2088
+    case "$directory" in
+        '~') directory="$HOME" ;;
+        '~/'*) directory="$HOME/${directory#\~/}" ;;
+    esac
+    printf '%s/AGENTS.md\n' "${directory%/}"
+}
+
 apply_rule() {
     if [ "${4:-install}" = install ]; then
         resolve_rule_source "${5:-$2}" || return 1
@@ -632,7 +645,7 @@ resolve_targets() {
     local name
 
     case "$TARGET_OPT" in
-    claude | codex)
+    claude | codex | pi | 'codex claude' | 'codex pi' | 'claude pi' | 'codex claude pi')
         resolved="$TARGET_OPT"
         ;;
     both)
@@ -652,7 +665,7 @@ resolve_targets() {
         fi
         ;;
     *)
-        error "unknown target: $TARGET_OPT (expected claude, codex, both, or auto)"
+        error "unknown target: $TARGET_OPT (expected selected codex, claude, pi targets, both, or auto)"
         return 1
         ;;
     esac
@@ -702,6 +715,16 @@ codex_file_path() {
     case "$1" in
     global) printf '%s\n' "$HOME/.codex/AGENTS.md" ;;
     project) printf '%s\n' "$PROJECT_DIR/AGENTS.md" ;;
+    esac
+}
+
+managed_file_path() {
+    case "$1" in
+        claude) claude_rule_path "$2" ;;
+        codex) codex_file_path "$2" ;;
+        pi)
+            if [ "$2" = global ]; then pi_rule_path
+            else printf '%s/AGENTS.md\n' "$PROJECT_DIR"; fi ;;
     esac
 }
 
@@ -1190,10 +1213,7 @@ write_managed_block() {
     local omit_h1=0
     local body="$RULE_SOURCE"
 
-    case "$target" in
-    claude) destination="$(claude_rule_path "$scope")" ;;
-    codex) destination="$(codex_file_path "$scope")" ;;
-    esac
+    destination="$(managed_file_path "$target" "$scope")"
 
     if ! resolved="$(resolve_symlinks "$destination")"; then
         error "could not resolve $destination"
@@ -1218,7 +1238,7 @@ write_managed_block() {
         eol=$'\r'
     fi
 
-    if [ "$target" = "codex" ] && [ "$scope" = "global" ]; then
+    if [ "$target" != "claude" ] && [ "$scope" = "global" ]; then
         body="$SCRATCH_DIR/codex-body"
         format_rule_headings "$RULE_SOURCE" 2 >"$body"
     elif [ "$target" = "codex" ] && [ "$RULE_CLASSIFICATION" = "project" ]; then
@@ -1234,7 +1254,7 @@ write_managed_block() {
         merge_block "$resolved" "$block_file" "$merged_file"
     fi
 
-    if [ "$target" = "codex" ] && [ "$scope" = "global" ] &&
+    if [ "$target" != "claude" ] && [ "$scope" = "global" ] &&
        [ "$(head -n 1 "$merged_file" | tr -d '\r')" != '# Global Rules' ]; then
         { printf '# Global Rules%s\n%s\n' "$eol" "$eol"; cat "$merged_file"; } >"$SCRATCH_DIR/titled"
         mv "$SCRATCH_DIR/titled" "$merged_file"
@@ -1266,17 +1286,14 @@ install_managed_file() {
     #   1 = nothing to adopt, 0 = adopted, 2 = refused
     local adopt_status=1
 
-    case "$target" in
-    claude) destination="$(claude_rule_path "$scope")" ;;
-    codex) destination="$(codex_file_path "$scope")" ;;
-    esac
+    destination="$(managed_file_path "$target" "$scope")"
 
     # Checked before the write decision, not after it: AGENTS.override.md wins
     # over AGENTS.md, so the rule is inert even when nothing needed writing.
-    if [ "$target" = "codex" ]; then
+    if [ "$target" != "claude" ]; then
         override="$(dirname "$destination")/AGENTS.override.md"
         if [ -f "$override" ]; then
-            warn "$override exists and takes precedence; Codex will not read $(basename "$destination")."
+            warn "$override exists and takes precedence; $target will not read $(basename "$destination")."
         fi
     fi
 
@@ -1310,10 +1327,7 @@ remove_managed_file() {
     local resolved
     local rendered
 
-    case "$target" in
-    claude) destination="$(claude_rule_path "$scope")" ;;
-    codex) destination="$(codex_file_path "$scope")" ;;
-    esac
+    destination="$(managed_file_path "$target" "$scope")"
 
     if [ ! -f "$destination" ]; then
         printf '  not installed (%s, %s): %s\n' "$target" "$scope" "$destination"
@@ -1400,13 +1414,9 @@ preflight() {
                 fi
             done
             ;;
-        codex)
+        codex | pi)
             for scope in $SCOPES; do
-                if [ "$scope" = "global" ]; then
-                    directory="$HOME/.codex"
-                else
-                    directory="$PROJECT_DIR"
-                fi
+                directory="$(dirname "$(managed_file_path "$target" "$scope")")"
                 if [ ! -d "$directory" ]; then
                     if ! mkdir -p "$directory"; then
                         error "cannot create $directory"
@@ -1491,6 +1501,13 @@ run() {
                     install_codex "$scope" || status=1
                 else
                     remove_codex "$scope" || status=1
+                fi
+                ;;
+            pi)
+                if [ "$MODE" = "install" ]; then
+                    install_managed_file pi "$scope" || status=1
+                else
+                    remove_managed_file pi "$scope" || status=1
                 fi
                 ;;
             esac
@@ -1847,12 +1864,12 @@ choose_skill_repositories_page() {
 # The private manifest binds selection IDs to scanned paths and content hashes.
 # No source checkout or network access is required to remove installed content.
 removal_inventory() {
-    node - "$HOME" "$PROJECT_TARGET" "$REMOVE_SCOPE" "$REMOVAL_TEMP/inventory.json" "$@" <<'JS'
+    node - "$HOME" "$PROJECT_TARGET" "$REMOVE_SCOPE" "$REMOVAL_TEMP/inventory.json" "$(pi_rule_path)" "$@" <<'JS'
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const cp = require('child_process');
-const [home, project, scope, manifest, action, ...args] = process.argv.slice(2);
+const [home, project, scope, manifest, piRulePath, action, ...args] = process.argv.slice(2);
 const red = s => `\x1b[31m${s}\x1b[0m`;
 const cyan = s => `\x1b[36m${s}\x1b[0m`;
 const yellow = s => `\x1b[33m${s}\x1b[0m`;
@@ -1935,19 +1952,21 @@ function repository(record) {
     const match = source.replace(/^https?:\/\/github.com\//, '').replace(/^git@github.com:/, '').match(/^([\w.-]+)\/([\w.-]+)(?:\/|$)/);
     return match ? `${match[1]}/${match[2].replace(/\.git$/, '')}`.toLowerCase() : 'Unknown / local';
 }
-function scan(codex, claude, rules, skills) {
-    for (const directory of [...(skills ? ['.agents'] : []), ...(claude ? ['.claude'] : []), ...(rules && codex && scope === 'global' ? ['.codex'] : [])]) {
+function scan(codex, claude, rules, skills, pi = false) {
+    const piRelative = pi && rules && scope === 'global' ? path.relative(root, path.resolve(piRulePath)) : null;
+    if (piRelative !== null) full(piRelative); // Preserve the HOME boundary for custom Pi paths.
+    for (const directory of [...(skills && (codex || claude) ? ['.agents'] : []), ...(claude ? ['.claude'] : []), ...(rules && codex && scope === 'global' ? ['.codex'] : [])]) {
         if (stat(full(directory))?.isSymbolicLink()) throw Error(`Refusing symlinked directory: ${full(directory)}`);
     }
-    const entries = [], lock = skills ? readLock() : {valid: true};
+    const entries = [], lock = skills && (codex || claude) ? readLock() : {valid: true};
     const add = entry => {
         entries.push({...entry, id: entries.length, snapshot: fingerprint(entry.relative), parents: parents(entry.relative)});
     };
-    for (const agent of ['codex', 'claude']) {
-        if (!(agent === 'codex' ? codex : claude)) continue;
+    for (const agent of ['codex', 'claude', 'pi']) {
+        if (!({codex, claude, pi}[agent]) || (agent === 'pi' && scope !== 'global')) continue;
         if (rules) {
             const relative = agent === 'codex' ? (scope === 'project' ? 'AGENTS.md' : '.codex/AGENTS.md') :
-                (scope === 'global' ? '.claude/CLAUDE.md' : null);
+                agent === 'pi' ? piRelative : (scope === 'global' ? '.claude/CLAUDE.md' : null);
             const info = relative ? stat(full(relative)) : null;
             if (info?.isSymbolicLink()) add({kind: 'rules', type: 'link', agent, relative, name: path.basename(relative)});
             else if (info?.isFile()) {
@@ -1968,7 +1987,7 @@ function scan(codex, claude, rules, skills) {
                 walk('.claude/rules');
             }
         }
-        if (skills) {
+        if (skills && agent !== 'pi') {
             const root = agent === 'codex' ? '.agents/skills' : '.claude/skills';
             const info = stat(full(root));
             if (info?.isSymbolicLink()) {
@@ -1992,7 +2011,7 @@ function scan(codex, claude, rules, skills) {
     }
     if (skills && !lock.valid) console.error(yellow('Skill lock is unreadable; skills are grouped under Unknown / local. Codex deletion requires a valid lock.'));
     return {scope, root: path.resolve(root), rootIdentity: [rootInfo.dev, rootInfo.ino],
-        entries, selected: [], lockSnapshot: skills ? fingerprint(lockPath) : null};
+        entries, selected: [], piRulePath: piRelative === null ? null : path.resolve(piRulePath), lockSnapshot: skills && (codex || claude) ? fingerprint(lockPath) : null};
 }
 function selected(data) {
     const ids = new Set(data.selected);
@@ -2049,8 +2068,9 @@ if (action === 'scan') {
         JSON.stringify(data.rootIdentity) !== JSON.stringify([rootInfo.dev, rootInfo.ino])) {
         throw Error('Removal scope or root changed; rescan and select again');
     }
+    if (data.piRulePath && data.piRulePath !== path.resolve(piRulePath)) throw Error('Pi rule path changed; rescan and select again');
     if (action === 'rows') {
-        for (const e of data.entries) console.log([e.id, e.kind, display(e.group || '-'), `${e.agent === 'codex' ? 'Codex' : 'Claude'} / ${display(e.name)} [${e.type}]`].join('\t'));
+        for (const e of data.entries) console.log([e.id, e.kind, display(e.group || '-'), `${{codex: 'Codex', claude: 'Claude', pi: 'Pi'}[e.agent]} / ${display(e.name)} [${e.type}]`].join('\t'));
     } else if (action === 'select') {
         data.selected = [...new Set(args.map(Number))];
         if (data.selected.some(id => !data.entries.some(e => e.id === id))) throw Error('Invalid removal selection');
@@ -2136,7 +2156,7 @@ scan_removal_inventory() {
     trap cleanup_setup_resources EXIT
     trap 'exit 130' INT
     trap 'exit 143' TERM
-    removal_inventory scan "$REMOVE_CODEX" "$REMOVE_CLAUDE" "$REMOVE_RULES" "$REMOVE_SKILLS" || return 1
+    removal_inventory scan "$REMOVE_CODEX" "$REMOVE_CLAUDE" "$REMOVE_RULES" "$REMOVE_SKILLS" "$REMOVE_PI" || return 1
     rows=$(removal_inventory rows) || return 1
     REMOVAL_RULE_IDS=(); REMOVAL_RULE_LABELS=(); REMOVAL_SKILL_IDS=(); REMOVAL_SKILL_LABELS=(); REMOVAL_SKILL_GROUPS=()
     REMOVAL_RULE_SELECTION=(); REMOVAL_SKILL_SELECTION=()
@@ -2280,7 +2300,7 @@ execute_plan() {
 }
 
 print_install_plan() {
-    local i destination index source_scope
+    local i destination index source_scope rule_targets
     local labels=('Codex CLI' 'Claude Code CLI' 'Rules' 'Claude statusline' 'Skills' 'Pi CLI')
     printf '\nExecution plan:\n'
     for i in "${AGENT_ITEMS[@]+"${AGENT_ITEMS[@]}"}"; do
@@ -2300,17 +2320,23 @@ print_install_plan() {
             else
                 printf '  Rule source: %s/%s.md\n' "$RESOURCE_PATH" "$i"
             fi
-            printf '  \033[32m%s / %s -> %s\033[0m\n' "$RULE_SCOPE" "$i" "$RULE_TARGETS"
             if [ "$RULE_SCOPE" = project ]; then
-                if [ "$RULE_TARGETS" != claude ]; then printf '    \033[32m%s/AGENTS.md\033[0m\n' "$PROJECT_TARGET"; fi
-                if [ "$RULE_TARGETS" != codex ]; then printf '    \033[32m%s/.claude/rules/%s.md\033[0m\n' "$PROJECT_TARGET" "$i"; fi
+                printf '  \033[32mproject / %s -> AGENTS.md\033[0m\n' "$i"
+                printf '    \033[32m%s/AGENTS.md\033[0m\n' "$PROJECT_TARGET"
             else
-                if [ "$RULE_TARGETS" != claude ]; then printf '    \033[32m%s/.codex/AGENTS.md\033[0m\n' "$HOME"; fi
-                if [ "$RULE_TARGETS" != codex ]; then
-                    destination="$HOME/.claude/rules/$i.md"
-                    if [ "$i" = agent-behavior ]; then destination="$HOME/.claude/CLAUDE.md"; fi
-                    printf '    \033[32m%s\033[0m\n' "$destination"
-                fi
+                printf '  \033[32m%s / %s -> %s\033[0m\n' "$RULE_SCOPE" "$i" "$RULE_TARGETS"
+                rule_targets="$RULE_TARGETS"
+                if [ "$rule_targets" = both ]; then rule_targets='codex claude'; fi
+                for destination in $rule_targets; do
+                    case "$destination" in
+                        codex) printf '    \033[32m%s/.codex/AGENTS.md\033[0m\n' "$HOME" ;;
+                        pi) printf '    \033[32m%s\033[0m\n' "$(pi_rule_path)" ;;
+                        claude)
+                            destination="$HOME/.claude/rules/$i.md"
+                            if [ "$i" = agent-behavior ]; then destination="$HOME/.claude/CLAUDE.md"; fi
+                            printf '    \033[32m%s\033[0m\n' "$destination" ;;
+                    esac
+                done
             fi
         done
     fi
@@ -2381,14 +2407,20 @@ interactive_setup() {
                 if [ "${MENU_SELECTED[0]}" -eq 0 ]; then REMOVE_SCOPE=global; else REMOVE_SCOPE=project; fi
                 page=remove_agents ;;
             remove_agents)
-                choose_items 4 'Remove: choose agents' 1 1 Codex 'Claude Code' || {
+                local remove_agent_labels=(Codex 'Claude Code')
+                if [ "$REMOVE_SCOPE" = global ]; then
+                    remove_agent_labels+=('Pi (rules only)')
+                elif [ "${MENU_CURSORS[4]:-0}" -gt 1 ]; then
+                    MENU_CURSORS[4]=1
+                fi
+                choose_items 4 'Remove: choose agents' 1 1 "${remove_agent_labels[@]}" || {
                     [ "$?" -eq 2 ] || return "$session_status"
                     page=remove_scope; continue
                 }
                 [ "${#MENU_SELECTED[@]}" -gt 0 ] || { printf 'No agents selected; cancelled.\n'; page=complete; continue; }
-                REMOVE_CODEX=0; REMOVE_CLAUDE=0
+                REMOVE_CODEX=0; REMOVE_CLAUDE=0; REMOVE_PI=0
                 for i in "${MENU_SELECTED[@]}"; do
-                    if [ "$i" -eq 0 ]; then REMOVE_CODEX=1; else REMOVE_CLAUDE=1; fi
+                    case "$i" in 0) REMOVE_CODEX=1 ;; 1) REMOVE_CLAUDE=1 ;; 2) REMOVE_PI=1 ;; esac
                 done
                 page=remove_categories ;;
             remove_categories)
@@ -2401,7 +2433,7 @@ interactive_setup() {
                 for i in "${MENU_SELECTED[@]}"; do
                     if [ "$i" -eq 0 ]; then REMOVE_RULES=1; else REMOVE_SKILLS=1; fi
                 done
-                signature="$REMOVE_SCOPE/$PROJECT_TARGET/$REMOVE_CODEX/$REMOVE_CLAUDE/$REMOVE_RULES/$REMOVE_SKILLS"
+                signature="$REMOVE_SCOPE/$PROJECT_TARGET/$REMOVE_CODEX/$REMOVE_CLAUDE/$REMOVE_PI/$REMOVE_RULES/$REMOVE_SKILLS/$(pi_rule_path)"
                 if [ "$removal_scanned" -eq 0 ] || [ "$signature" != "$removal_signature" ]; then
                     if ! scan_removal_inventory; then FAILED+=('Installed content scan failed'); show_summary=1; page=complete; continue; fi
                     removal_signature="$signature"; removal_scanned=1
@@ -2540,24 +2572,28 @@ interactive_setup() {
                 for i in "${MENU_SELECTED[@]+"${MENU_SELECTED[@]}"}"; do
                     SELECTED_RULES+=("${rule_names[i]}"); SELECTED_RULE_SOURCES+=("${rule_sources[i]}")
                 done
-                if [ "${#SELECTED_RULES[@]}" -gt 0 ]; then page=rule_targets; else page=after_rules; fi ;;
-            rule_targets)
-                choose_items 8 'Rules: choose agents' 1 1 Codex 'Claude Code' || {
-                    [ "$?" -eq 2 ] || return "$session_status"
-                    page=rule_choices; continue
-                }
-                [ "${#MENU_SELECTED[@]}" -gt 0 ] || { printf 'No rule targets selected; cancelled.\n'; page=complete; continue; }
-                RULE_TARGETS=both
-                if [ "${#MENU_SELECTED[@]}" -eq 1 ]; then
-                    if [ "${MENU_SELECTED[0]}" -eq 0 ]; then RULE_TARGETS=codex; else RULE_TARGETS=claude; fi
-                fi
-                page=rule_scope ;;
+                if [ "${#SELECTED_RULES[@]}" -gt 0 ]; then page=rule_scope; else page=after_rules; fi ;;
             rule_scope)
                 choose_items 7 'Rules: choose scope' 0 0 Global Project || {
                     [ "$?" -eq 2 ] || return "$session_status"
-                    page=rule_targets; continue
+                    page=rule_choices; continue
                 }
-                if [ "${MENU_SELECTED[0]}" -eq 0 ]; then RULE_SCOPE=global; else RULE_SCOPE=project; fi
+                if [ "${MENU_SELECTED[0]}" -eq 0 ]; then
+                    RULE_SCOPE=global; page=rule_targets
+                else
+                    RULE_SCOPE=project; RULE_TARGETS=codex; page=after_rules
+                fi ;;
+            rule_targets)
+                choose_items 8 'Rules: choose agents' 1 1 Codex 'Claude Code' Pi || {
+                    [ "$?" -eq 2 ] || return "$session_status"
+                    page=rule_scope; continue
+                }
+                [ "${#MENU_SELECTED[@]}" -gt 0 ] || { printf 'No rule targets selected; cancelled.\n'; page=complete; continue; }
+                RULE_TARGETS=""
+                for i in "${MENU_SELECTED[@]}"; do
+                    case "$i" in 0) destination=codex ;; 1) destination=claude ;; 2) destination=pi ;; esac
+                    RULE_TARGETS="${RULE_TARGETS:+$RULE_TARGETS }$destination"
+                done
                 page=after_rules ;;
             after_rules)
                 if [ "$INSTALL_SKILLS" -eq 1 ]; then
@@ -2574,7 +2610,9 @@ interactive_setup() {
                 done
                 choose_items 6 'Choose skill repositories' 1 0 "${repo_labels[@]}" || {
                     [ "$?" -eq 2 ] || return "$session_status"
-                    if [[ " ${AGENT_ITEMS[*]+${AGENT_ITEMS[*]}} " = *" 2 "* ]]; then page=rule_scope; else page=tasks; fi
+                    if [[ " ${AGENT_ITEMS[*]+${AGENT_ITEMS[*]}} " = *" 2 "* ]]; then
+                        if [ "$RULE_SCOPE" = global ] && [ "${#SELECTED_RULES[@]}" -gt 0 ]; then page=rule_targets; else page=rule_scope; fi
+                    else page=tasks; fi
                     continue
                 }
                 SELECTED_REPOS=("${MENU_SELECTED[@]+"${MENU_SELECTED[@]}"}")
@@ -2619,7 +2657,9 @@ interactive_setup() {
                         [ "$menu_status" -eq 2 ] || return "$session_status"
                         if [ "$INSTALL_SKILLS" -eq 1 ]; then
                             if [ "${#SELECTED_SKILLS[@]}" -gt 0 ]; then page=targets; else page=skill_repos; fi
-                        else page=rule_scope; fi
+                        else
+                            if [ "$RULE_SCOPE" = global ] && [ "${#SELECTED_RULES[@]}" -gt 0 ]; then page=rule_targets; else page=rule_scope; fi
+                        fi
                         continue
                     }
                     if [ "${MENU_SELECTED[0]}" -ne 0 ]; then printf 'Cancelled.\n'; page=complete; continue; fi
@@ -2660,8 +2700,8 @@ interactive_setup() {
                 AGENT_ITEMS=(); SELECTED_SKILLS=(); SELECTED_RULES=(); SELECTED_RULE_SOURCES=()
                 SKILL_NAMES=(); SKILL_SOURCES=(); SKILL_GROUPS=(); SKILL_PICKED=(); SKILL_EXPLICIT=()
                 SELECTED_REPOS=(); VIEW_SKILL_INDICES=()
-                TARGET_AGENTS=(codex claude-code); RULE_TARGETS=both; RULE_SCOPE=global
-                REMOVE_CODEX=1; REMOVE_CLAUDE=1; REMOVE_RULES=0; REMOVE_SKILLS=0; REMOVE_SCOPE=global
+                TARGET_AGENTS=(codex claude-code); RULE_TARGETS="codex claude pi"; RULE_SCOPE=global
+                REMOVE_CODEX=1; REMOVE_CLAUDE=1; REMOVE_PI=1; REMOVE_RULES=0; REMOVE_SKILLS=0; REMOVE_SCOPE=global
                 REMOVAL_RULE_SELECTION=(); REMOVAL_SKILL_SELECTION=(); removal_scanned=0
                 if [ -n "$REMOVAL_TEMP" ]; then rm -rf -- "$REMOVAL_TEMP"; REMOVAL_TEMP=""; fi
                 INTERACTIVE_RESULT=0; show_summary=0; INSTALL_SKILLS=0

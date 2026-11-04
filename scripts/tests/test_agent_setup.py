@@ -173,6 +173,7 @@ class AgentSetupTests(unittest.TestCase):
                               ('claude', '#!/bin/sh\nexit 0\n'),
                               ('pi', PI)]:
             self.stub(name, content)
+        self.env.pop('PI_CODING_AGENT_DIR', None)
         self.waza_bundle()
         self.old = self.home / '.agents/skills/existing/SKILL.md'
         self.old.parent.mkdir(parents=True)
@@ -338,7 +339,7 @@ target.chmod(0o755)
         terminal.expect('Item 1/5')
         return terminal
 
-    def removal_terminal(self, types=('Skills',), agents='both', scope='global', cwd=None):
+    def removal_terminal(self, types=('Skills',), agents='all', scope='global', cwd=None):
         term = self.terminal(cwd=cwd)
         term.send(b'\x1b[B\r')
         term.expect('Remove: choose scope')
@@ -346,9 +347,10 @@ target.chmod(0o755)
         if scope == 'project': term.send(b'\x1b[B')
         term.send(b'\r')
         term.expect('Remove: choose agents')
-        term.expect('Item 1/2')
-        if agents == 'codex': term.send(b'\x1b[B ')
-        elif agents == 'claude': term.send(b' ')
+        term.expect('Item 1/3' if scope == 'global' else 'Item 1/2')
+        if agents != 'all':
+            index = {'codex': 0, 'claude': 1, 'pi': 2}[agents]
+            term.send(b'n' + b'\x1b[B' * index + b' ')
         term.send(b'\r')
         term.expect('Remove: choose content')
         term.expect('Item 1/2')
@@ -363,8 +365,8 @@ target.chmod(0o755)
         command = f'REMOVE_SCOPE={shlex.quote(scope)}\nREMOVAL_TEMP={shlex.quote(str(folder))}\nremoval_inventory {shlex.join([action, *map(str, args)])}'
         return self.source(command, cwd=cwd)
 
-    def scan_entries(self, codex=True, claude=True, rules=True, skills=True):
-        result = self.inventory('scan', *map(int, [codex, claude, rules, skills]))
+    def scan_entries(self, codex=True, claude=True, rules=True, skills=True, pi=False):
+        result = self.inventory('scan', *map(int, [codex, claude, rules, skills, pi]))
         self.assertEqual(result.returncode, 0, result.stderr)
         return json.loads((self.root / 'plan/inventory.json').read_text())['entries']
 
@@ -533,7 +535,7 @@ target.chmod(0o755)
         term.expect('Item 1/2')
         term.send(b'b')
         term.expect('Remove: choose agents')
-        term.expect('Item 1/2')
+        term.expect('Item 2/3')
         term.send(b'b')
         term.expect('Remove: choose scope')
         term.expect('Item 1/2')
@@ -541,7 +543,7 @@ target.chmod(0o755)
         term.expect('Remove: choose agents')
         term.expect('[ ] Codex')
         term.expect('[x] Claude Code')
-        term.expect('Item 1/2')
+        term.expect('Item 2/2')
         term.send(b'\r')
         term.expect('Remove: choose content')
         term.expect('Item 1/2')
@@ -627,19 +629,22 @@ target.chmod(0o755)
         term.expect('Item 1/4')
         return term
 
-    def rule_agents_and_scope(self, term, agents='both', scope='project'):
-        term.expect('Rules: choose agents')
-        term.expect('Item 1/2')
-        if agents == 'claude':
-            term.send(b' ')
-        elif agents == 'codex':
-            term.send(b'\x1b[B ')
-        term.send(b'\r')
+    def rule_agents_and_scope(self, term, agents='all', scope='project'):
         term.expect('Rules: choose scope')
         term.expect('Item 1/2')
         term.send(b'\x1b[B\r' if scope == 'project' else b'\r')
+        if scope == 'global':
+            term.expect('Rules: choose agents')
+            term.expect('Item 1/3')
+            for label in ['[x] Codex', '[x] Claude Code', '[x] Pi']:
+                self.assertIn(label, term.transcript.decode())
+            if agents != 'all':
+                index = {'codex': 0, 'claude': 1, 'pi': 2}[agents]
+                term.send(b'n' + b'\x1b[B' * index + b' ')
+            term.send(b'\r')
         term.expect('Confirm installation')
         term.expect('Item 1/2')
+
 
     def test_waza_selected_download_failure_preserves_configs_and_continues(self):
         self.waza_bundle(('chinese', 'english'))
@@ -819,25 +824,18 @@ target.chmod(0o755)
         term.send(b'\x1b[B \r')
         self.rule_agents_and_scope(term)
         self.assertIn(str(nested / 'AGENTS.md'), term.transcript.decode())
-        self.assertIn(str(nested / '.claude/rules/c-project.md'), term.transcript.decode())
+        self.assertNotIn('Rules: choose agents', term.transcript.decode())
         self.assertIn('Rule source:', term.transcript.decode())
         frame = term.transcript.decode().rsplit('\x1b[H\x1b[2J', 1)[-1]
         self.assertIn(str(nested / 'AGENTS.md'), frame)
         self.assertIn('Execution plan:', frame)
+        self.assertIn('project / c-project -> AGENTS.md', frame)
         term.send(b'b')
         term.expect('Rules: choose scope')
         term.expect('> Project')
         term.send(b'b')
-        term.expect('Rules: choose agents')
-        term.expect('Item 1/2')
-        term.send(b'b')
         term.expect('Choose rules')
         term.expect('> [x] project / c-project')
-        term.send(b'\r')
-        term.expect('Rules: choose agents')
-        term.expect('Item 1/2')
-        self.assertIn('[x] Codex', term.transcript.decode())
-        self.assertIn('[x] Claude Code', term.transcript.decode())
         term.send(b'\r')
         term.expect('Rules: choose scope')
         term.expect('> Project')
@@ -852,26 +850,25 @@ target.chmod(0o755)
         self.assertEqual(text.count('<!-- gwyn-space-skills: c-project:start -->'), 1)
         self.assertIn('Installed from rules/project/c-project.md by agent-setup.sh', text)
         self.assertEqual((project / 'AGENTS.md').read_text(), 'root must stay unchanged\n')
-        self.assertEqual((nested / '.claude/rules/c-project.md').read_bytes(),
-                         (SCRIPT.parents[1] / 'rules/project/c-project.md').read_bytes())
-        result = self.source('apply_rule c-project project both', cwd=nested)
+        self.assertFalse((nested / '.claude').exists())
+        result = self.source('apply_rule c-project project codex', cwd=nested)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual((nested / 'AGENTS.md').read_text(), text)
 
     def test_rule_pages_q_defaults_and_scope_selection_preserved(self):
-        for page in ['rules', 'agents', 'scope', 'confirm']:
+        for page in ['rules', 'scope', 'agents', 'confirm']:
             with self.subTest(page=page):
                 term = self.rule_terminal(cwd=self.root)
                 if page != 'rules':
                     term.send(b' \r')
-                    term.expect('Rules: choose agents')
-                    term.expect('Item 1/2')
-                    self.assertIn('[x] Codex', term.transcript.decode())
-                    self.assertIn('[x] Claude Code', term.transcript.decode())
-                if page in ['scope', 'confirm']:
-                    term.send(b'\r')
                     term.expect('Rules: choose scope')
                     term.expect('Item 1/2')
+                if page in ['agents', 'confirm']:
+                    term.send(b'\r')
+                    term.expect('Rules: choose agents')
+                    term.expect('Item 1/3')
+                    for label in ['[x] Codex', '[x] Claude Code', '[x] Pi']:
+                        self.assertIn(label, term.transcript.decode())
                 if page == 'confirm':
                     term.send(b'\r')
                     term.expect('Confirm installation')
@@ -879,15 +876,20 @@ target.chmod(0o755)
                 term.send(b'q')
                 self.assertEqual(term.finish(), 0)
                 self.assertFalse((self.home / '.codex/AGENTS.md').exists())
+                self.assertFalse((self.home / '.pi').exists())
         term = self.rule_terminal(cwd=self.root)
         term.send(b'an\x1b[B \r')  # all, none, c-project
-        self.rule_agents_and_scope(term, agents='claude')
-        term.send(b'b')
-        term.expect('Rules: choose scope')
-        term.expect('> Project')
+        self.rule_agents_and_scope(term, agents='claude', scope='global')
         term.send(b'b')
         term.expect('Rules: choose agents')
-        term.expect('[ ] Codex')
+        term.expect('> [x] Claude Code')
+        term.expect('[ ] Pi')
+        frame = term.transcript.decode().rsplit('\x1b[H\x1b[2J', 1)[-1]
+        self.assertIn('[ ] Codex', frame)
+        self.assertIn('[ ] Pi', frame)
+        term.send(b'b')
+        term.expect('Rules: choose scope')
+        term.expect('> Global')
         term.send(b'b')
         term.expect('Choose rules')
         term.expect('> [x] project / c-project')
@@ -898,14 +900,64 @@ target.chmod(0o755)
         self.assertEqual(term.finish(), 0)
 
     def test_global_rule_ui_installs_only_selected_agent(self):
-        term = self.rule_terminal(cwd=self.root)
-        term.send(b' \r')  # Waza / anti-patterns
-        self.rule_agents_and_scope(term, agents='claude', scope='global')
-        term.send(b'\r')
-        term.expect('1 succeeded, 0 failed')
-        self.assertEqual(term.finish_action(), 0)
-        self.assertTrue((self.home / '.claude/rules/waza-anti-patterns.md').exists())
+        for agent in ['claude', 'codex', 'pi']:
+            with self.subTest(agent=agent):
+                # Keep each selection isolated so unexpected destinations are visible.
+                for directory in ['.claude', '.codex', '.pi']:
+                    shutil.rmtree(self.home / directory, ignore_errors=True)
+                term = self.rule_terminal(cwd=self.root)
+                term.send(b' \r')
+                self.rule_agents_and_scope(term, agents=agent, scope='global')
+                destinations = {
+                    'claude': self.home / '.claude/rules/waza-anti-patterns.md',
+                    'codex': self.home / '.codex/AGENTS.md',
+                    'pi': self.home / '.pi/agent/AGENTS.md',
+                }
+                frame = term.transcript.decode().rsplit('\x1b[H\x1b[2J', 1)[-1]
+                self.assertIn(str(destinations[agent]), frame)
+                for other in destinations:
+                    if other != agent:
+                        self.assertNotIn(str(destinations[other]), frame)
+                term.send(b'\r')
+                term.expect('1 succeeded, 0 failed')
+                self.assertEqual(term.finish_action(), 0)
+                for name, destination in destinations.items():
+                    self.assertEqual(destination.exists(), name == agent)
+
+    def test_pi_global_engine_custom_directory_updates_and_preserves_content(self):
+        self.env['PI_CODING_AGENT_DIR'] = '~/custom pi'
+        destination = self.home / 'custom pi/AGENTS.md'
+        destination.parent.mkdir()
+        personal = 'Personal notes.\n'
+        destination.write_text(personal)
+        command = 'apply_rule c-project global pi install project'
+        result = self.source(command)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        text = destination.read_text()
+        self.assertTrue(text.startswith('# Global Rules\n\n' + personal))
+        self.assertIn('## C Projects Agent Instructions', text)
+        self.assertIn('### Coding Style & Naming Conventions', text)
+        self.assertFalse((self.home / '.pi').exists())
+        result = self.source(command)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(destination.read_text(), text)
+        self.assertIn('already current (pi, global)', result.stdout)
+        destination.write_text(personal + '<!-- gwyn-space-skills: c-project:start -->\n')
+        before = destination.read_bytes()
+        result = self.source(command)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('unbalanced markers', result.stderr)
+        self.assertEqual(destination.read_bytes(), before)
+
+    def test_pi_global_preflight_failure_prevents_other_agent_writes(self):
+        blocked = self.home / 'not-a-directory'
+        blocked.write_text('keep me')
+        self.env['PI_CODING_AGENT_DIR'] = str(blocked)
+        result = self.source('apply_rule c-project global "codex claude pi" install project')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(blocked.read_text(), 'keep me')
         self.assertFalse((self.home / '.codex/AGENTS.md').exists())
+        self.assertFalse((self.home / '.claude/rules/c-project.md').exists())
 
     def test_mixed_rule_sources_install_to_selected_scope(self):
         for scope in ['project', 'global']:
@@ -927,10 +979,16 @@ target.chmod(0o755)
                 self.assertIn('Installed from rules/project/c-project.md', text)
                 self.assertEqual(text.count('waza-anti-patterns:start'), 1)
                 self.assertEqual(text.count('c-project:start'), 1)
-                claude = project / '.claude/rules' if scope == 'project' else self.home / '.claude/rules'
-                self.assertTrue((claude / 'c-project.md').exists())
-                behavior = claude / 'waza-anti-patterns.md'
-                self.assertTrue(behavior.exists())
+                if scope == 'project':
+                    self.assertNotIn('Rules: choose agents', term.transcript.decode())
+                    self.assertFalse((project / '.claude').exists())
+                    self.assertFalse((self.home / '.pi').exists())
+                else:
+                    claude = self.home / '.claude/rules'
+                    self.assertTrue((claude / 'c-project.md').exists())
+                    self.assertTrue((claude / 'waza-anti-patterns.md').exists())
+                    pi = self.home / '.pi/agent/AGENTS.md'
+                    self.assertEqual(pi.read_text(), codex.read_text())
 
     def test_rule_engine_preserves_old_markers_and_rejects_conflicts(self):
         project = self.root / 'project'
@@ -1553,6 +1611,189 @@ main"""]
             self.assertIn('.codex/AGENTS.md', tar.getnames())
             self.assertIn('.claude/rules/nested/.custom.md', tar.getnames())
 
+    def pi_removal_fixture(self, directory=None):
+        directory = directory or self.home / '.pi/agent'
+        directory.mkdir(parents=True, exist_ok=True)
+        target = directory / 'AGENTS.md'
+        personal = '# Global Rules\n\nPersonal rules.\n'
+        blocks = {name: (f'<!-- gwyn-space-skills: {name}:start -->\n'
+                         f'## {name}\nBody.\n<!-- gwyn-space-skills: {name}:end -->\n')
+                  for name in ['one', 'two']}
+        target.write_text(personal + blocks['one'] + blocks['two'])
+        return target, personal, blocks
+
+    def test_pi_removal_ui_only_pi_preserves_other_agents_and_config(self):
+        target, personal, blocks = self.pi_removal_fixture()
+        settings = target.parent / 'settings.json'
+        settings.write_text('{"keep": true}')
+        codex = self.home / '.codex/AGENTS.md'
+        codex.parent.mkdir()
+        codex.write_text('Codex user rules.\n')
+        claude = self.home / '.claude/rules/keep.md'
+        claude.parent.mkdir(parents=True)
+        claude.write_text('Claude user rules.\n')
+        term = self.removal_terminal(types=('Rules',), agents='pi')
+        term.expect('Pi / one [block]')
+        term.expect('Pi / two [block]')
+        term.expect('Item 1/2')
+        frame = term.transcript.decode().rsplit('\x1b[H\x1b[2J', 1)[-1]
+        self.assertNotIn('Codex /', frame)
+        self.assertNotIn('Claude /', frame)
+        term.send(b' \r')
+        term.expect(str(target))
+        term.expect('Create backup? [y/N]')
+        term.send(b'\n')
+        term.expect('Type DELETE')
+        self.assertIn('## one', target.read_text())
+        term.send(b'DELETE\n')
+        term.expect('1 succeeded, 0 failed')
+        self.assertEqual(term.finish_action(), 0)
+        self.assertEqual(target.read_text(), personal + blocks['two'])
+        self.assertEqual(settings.read_text(), '{"keep": true}')
+        self.assertEqual(codex.read_text(), 'Codex user rules.\n')
+        self.assertEqual(claude.read_text(), 'Claude user rules.\n')
+        self.assertFalse(list(self.home.glob('.agent-rules-backup-*')))
+
+    def test_global_removal_defaults_include_pi_and_mixed_agents(self):
+        target, personal, blocks = self.pi_removal_fixture()
+        codex = self.home / '.codex/AGENTS.md'
+        codex.parent.mkdir()
+        codex.write_text('Codex notes.\n' + blocks['one'])
+        term = self.removal_terminal(types=('Rules',))
+        self.assertIn('[x] Pi (rules only)', term.transcript.decode())
+        term.expect('Codex / one [block]')
+        term.expect('Pi / one [block]')
+        term.expect('Pi / two [block]')
+        term.expect('Item 1/3')
+        term.send(b'a\r')
+        term.expect('Create backup? [y/N]')
+        term.send(b'\n')
+        term.expect('Type DELETE')
+        term.send(b'DELETE\n')
+        term.expect('3 succeeded, 0 failed')
+        self.assertEqual(term.finish_action(), 0)
+        self.assertEqual(target.read_text(), personal)
+        self.assertEqual(codex.read_text(), 'Codex notes.\n')
+
+    def test_pi_removal_scope_switch_keeps_project_two_agent_menu(self):
+        term = self.removal_terminal(types=('Rules',), agents='pi')
+        # No installed Pi rules: return through the completed action and inspect
+        # project scope in a fresh removal, preserving the normal project flow.
+        term.expect('No removal targets selected.')
+        term.return_home()
+        term.send(b'\x1b[B\r')
+        term.expect('Remove: choose scope')
+        term.expect('Item 1/2')
+        term.send(b'\r')
+        term.expect('Remove: choose agents')
+        term.expect('Item 1/3')
+        term.send(b'\x1b[B\x1b[Bb')
+        term.expect('Remove: choose scope')
+        term.expect('Item 1/2')
+        term.send(b'\x1b[B\r')
+        term.expect('Remove: choose agents')
+        term.expect('Item 2/2')
+        frame = term.transcript.decode().rsplit('\x1b[H\x1b[2J', 1)[-1]
+        self.assertNotIn('Pi', frame)
+        term.send(b'q')
+        self.assertEqual(term.finish(), 0)
+
+    def test_pi_removal_selected_block_backup_and_user_content(self):
+        target, personal, blocks = self.pi_removal_fixture()
+        before = target.read_bytes()
+        entries = self.scan_entries(codex=False, claude=False, skills=False, pi=True)
+        self.assertEqual([(e['agent'], e['name']) for e in entries], [('pi', 'one'), ('pi', 'two')])
+        rows = self.inventory('rows')
+        self.assertIn('Pi / one [block]', rows.stdout)
+        self.select_entries([entries[0]])
+        preview = self.inventory('preview')
+        self.assertEqual(preview.returncode, 0, preview.stderr)
+        self.assertIn(str(target), preview.stdout)
+        result = self.inventory('remove', '1')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(target.read_text(), personal + blocks['two'])
+        backup, = self.home.glob('.agent-rules-backup-*/removal.tar')
+        with tarfile.open(backup) as archive:
+            self.assertEqual(archive.extractfile('.pi/agent/AGENTS.md').read(), before)
+        self.assertTrue(self.old.exists())
+
+    def test_pi_removal_custom_directory_and_path_change_require_rescan(self):
+        target, _, _ = self.pi_removal_fixture(self.home / 'custom pi')
+        self.env['PI_CODING_AGENT_DIR'] = '~/custom pi'
+        entries = self.scan_entries(codex=False, claude=False, skills=False, pi=True)
+        self.assertEqual(len(entries), 2)
+        self.assertEqual(entries[0]['relative'], 'custom pi/AGENTS.md')
+        self.select_entries(entries)
+        before = target.read_bytes()
+        self.env['PI_CODING_AGENT_DIR'] = str(self.home / 'other pi')
+        result = self.inventory('remove')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Pi rule path changed', result.stderr)
+        self.assertEqual(target.read_bytes(), before)
+
+    def test_pi_removal_rejects_external_directory_and_symlinked_parents(self):
+        external, _, _ = self.pi_removal_fixture(self.root / 'external pi')
+        before = external.read_bytes()
+        self.env['PI_CODING_AGENT_DIR'] = str(external.parent)
+        result = self.inventory('scan', 0, 0, 1, 0, 1)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Path outside removal root', result.stderr)
+        self.assertEqual(external.read_bytes(), before)
+        link = self.home / 'linked pi'
+        link.symlink_to(external.parent, target_is_directory=True)
+        self.env['PI_CODING_AGENT_DIR'] = str(link)
+        result = self.inventory('scan', 0, 0, 1, 0, 1)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Unsafe parent directory', result.stderr)
+        self.assertEqual(external.read_bytes(), before)
+
+    def test_pi_removal_file_symlink_only_removes_link(self):
+        target, _, _ = self.pi_removal_fixture(self.root / 'external pi')
+        before = target.read_bytes()
+        link = self.home / '.pi/agent/AGENTS.md'
+        link.parent.mkdir(parents=True)
+        link.symlink_to(target)
+        entries = self.scan_entries(codex=False, claude=False, skills=False, pi=True)
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0]['type'], 'link')
+        self.select_entries(entries)
+        result = self.inventory('remove')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(link.is_symlink())
+        self.assertEqual(target.read_bytes(), before)
+
+    def test_pi_removal_rejects_broken_markers_changed_files_and_backup_failure(self):
+        target, _, _ = self.pi_removal_fixture()
+        before = target.read_bytes()
+        target.write_text('<!-- gwyn-space-skills: broken:start -->\n')
+        result = self.inventory('scan', 0, 0, 1, 0, 1)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Unbalanced managed rule markers', result.stderr)
+        target.write_bytes(before)
+        entries = self.scan_entries(codex=False, claude=False, skills=False, pi=True)
+        self.select_entries(entries)
+        target.write_bytes(before + b'User edit.\n')
+        result = self.inventory('remove')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Content changed', result.stderr)
+        self.assertEqual(target.read_bytes(), before + b'User edit.\n')
+        target.write_bytes(before)
+        entries = self.scan_entries(codex=False, claude=False, skills=False, pi=True)
+        self.select_entries(entries)
+        self.stub('tar', '#!/bin/sh\nexit 23\n')
+        result = self.inventory('remove', '1')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Backup failed; nothing removed', result.stderr)
+        self.assertEqual(target.read_bytes(), before)
+
+    def test_pi_removal_skills_only_does_not_scan_other_agent_skills(self):
+        self.pi_removal_fixture()
+        # An unrelated unsafe source must not affect a Pi-only skills request.
+        shutil.rmtree(self.home / '.agents')
+        (self.home / '.agents').symlink_to(self.root / 'missing')
+        entries = self.scan_entries(codex=False, claude=False, rules=False, skills=True, pi=True)
+        self.assertEqual(entries, [])
+
     def test_multiple_blocks_in_same_file_remove_together(self):
         target = self.home / '.codex/AGENTS.md'
         target.parent.mkdir()
@@ -1741,8 +1982,8 @@ main"""]
         term.expect('Item 1/2')
         term.send(b'\r')
         term.expect('Remove: choose agents')
-        term.expect('Item 1/2')
-        term.send(b' \x1b[Bb')  # Claude only; return to scope
+        term.expect('Item 1/3')
+        term.send(b'n\x1b[B b')  # Claude only; return to scope
         term.expect('Remove: choose scope')
         term.expect('Item 1/2')
         term.send(b'b')
@@ -1770,7 +2011,7 @@ main"""]
         term.expect('Item 1/2')
         term.send(b'\r')
         term.expect('Remove: choose agents')
-        term.expect('Item 1/2')
+        term.expect('Item 1/3')
         term.send(b'\r')
         term.expect('Remove: choose content')
         term.expect('Item 1/2')

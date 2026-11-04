@@ -74,7 +74,7 @@
 | [`writing-repo.md`](rules/project/writing-repo.md) | 项目 | Markdown 写作仓库的资源路径、引用方式和格式检查规则 |
 | [`chinese-punctuation.md`](rules/project/chinese-punctuation.md) | 项目 | 终端回复的中文半角标点、空格规则和适用范围 |
 
-规则通过 [`scripts/agent-setup.sh`](scripts/agent-setup.sh) 的交互菜单安装：选择 `Install / Update` → `Rules`，依次多选规则、多选目标 Agent、选择 Global 或 Project 范围，再确认安装。Agent 默认全选，规则默认不选；选择页支持 `b` 返回、`q` 退出，并保留勾选与光标。确认页展示资源来源和完整安装路径。规则页按 Waza 和本仓库来源分组列出规则，允许跨范围安装；所选规则统一安装到最后选择的范围，确认页保留原始来源。
+规则通过 [`scripts/agent-setup.sh`](scripts/agent-setup.sh) 的交互菜单安装：选择 `Install / Update` → `Rules`，依次多选规则、选择 Global 或 Project 范围。Global 再选择目标 Agent（Codex、Claude Code、Pi 默认全选）；Project 跳过 Agent 选择，直接写入启动目录的 `AGENTS.md`，最后确认安装。规则默认不选；选择页支持 `b` 返回、`q` 退出，并保留勾选与光标。确认页展示资源来源和完整安装路径。规则页按 Waza 和本仓库来源分组列出规则，允许跨范围安装；所选规则统一安装到最后选择的范围，确认页保留原始来源。
 
 ```bash
 # 在仓库中打开菜单，可安装规则或安装本地命令
@@ -87,7 +87,7 @@ agent-setup
 
 Matt skills 的安装菜单默认全选。勾选技能会递归补齐依赖，并标明自动补齐的原因；取消依赖会连带取消上层技能，清理不再需要的自动补齐项，保留手动选择项和仍被共用的依赖。“全选”将全部项视为手动选择，“全不选”清空选择。依赖表随脚本维护，包含技能明确调用的条件分支，排除工作流推荐和项目配置前置条件；网页名单缺少必要依赖时，阻止选择受影响的技能并提示原因。卸载菜单保持独立选择。
 
-Project 规则安装到启动命令时的当前目录，包括 Git 子目录和非 Git 目录，不自动寻找仓库根目录。先确认当前路径，再在确认页执行安装。
+Project 规则统一写入启动命令时当前目录的 `AGENTS.md`，供 Codex、Pi 等支持该文件的 Agent 加载；不另写 `.claude/rules/`。当前目录可以是 Git 子目录或非 Git 目录，不自动寻找仓库根目录。先确认当前路径，再在确认页执行安装。
 
 资源相对脚本实际位置查找，符号链接会解析到真实脚本。`rules/project/` 和 `scripts/statusline.sh` 分别优先使用本地内容；缺少某个目录或文件时，从 GitHub `gwyntoria/skills` 的 `main` 分支下载临时资源，同一次运行复用，退出清理。本地规则目录不会混入远端规则，格式错误直接报告；远端获取失败不覆盖配置。改了本地 `rules/` 后重新安装即可更新。
 
@@ -95,7 +95,9 @@ Project 规则安装到启动命令时的当前目录，包括 Git 子目录和�
 
 Waza 规则每次启动后首次进入规则页时，通过 GitHub API 固定 `main` 的提交并读取目录；确认安装后仅从 raw 下载所选规则，始终使用该提交，退出清理临时文件。默认不勾选；安装标识使用 `waza-<规则名>`，支持上游的 H1 和 H2 标题。获取失败可重试、返回或跳过 Waza。再次安装只更新所选项，不卸载未选规则；旧 `agent-behavior` 不再提供，也不会自动清理已安装内容。
 
-安装时按目标格式化所选规则的标题：Codex 全局 `~/.codex/AGENTS.md` 顶部使用 `# Global Rules`，各规则标题统一为二级标题；Claude 独立规则文件的标题统一为一级标题。子标题随规则标题调整层级，最深为六级，代码块和其他正文保持原样。Codex 项目范围保留现有标题行为。重复安装不重复添加总标题，卸载规则后保留总标题；未选中的已有规则及用户自有内容保持原样，统一已有规则需要重新选择安装。
+安装时按目标格式化所选规则的标题：Codex 全局 `~/.codex/AGENTS.md` 和 Pi 全局 `~/.pi/agent/AGENTS.md` 顶部使用 `# Global Rules`，各规则标题统一为二级标题；Claude 独立规则文件的标题统一为一级标题。子标题随规则标题调整层级，最深为六级，代码块和其他正文保持原样。项目 `AGENTS.md` 保留现有标题行为。Pi 全局目录遵循 `PI_CODING_AGENT_DIR`（如已设置），无需在 `settings.json` 中登记规则路径。重复安装不重复添加总标题，卸载规则后保留总标题；未选中的已有规则及用户自有内容保持原样，统一已有规则需要重新选择安装。
+
+Global Remove 默认选中 Codex、Claude Code 和 Pi；Pi 仅支持卸载 `AGENTS.md` 中选中的托管规则块，不处理 CLI、附带包或技能。Pi 自定义规则路径必须位于 HOME 内，父目录不得经过软链接；规则文件若为软链接，只删除链接，保留目标文件。删除前展示完整路径和规则名，保留可选备份与 `DELETE` 确认；选择备份时，备份失败则停止删除。备份后打印恢复命令。
 
 `--agent` 在有终端时进入 Agent 多选和安装确认；无终端时安装全部三个 CLI 及其附带组件。Agent 默认全选 Codex、Claude Code、Pi；Claude Code 附带 statusline，Pi 附带 `npm:pi-web-access`、`npm:pi-subagents`、`npm:pi-powerline-footer`。交互安装的任务页按 Skills、Rules、Agent 分组，Rules 和 Skills 保持独立选择。与 `--skill` 同用时，有终端进入技能选择，无终端保持安装全部已配置技能的行为。
 
