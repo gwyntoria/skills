@@ -249,6 +249,57 @@ remove_managed_block() {
     fi
 }
 
+# 备份命名沿用 agent-setup.sh 的 .pre-<事件>.bak-<时间戳> 约定，
+# UTC 时间戳便于枚举和排序，也不受时区影响。
+timestamp() {
+    date -u '+%Y%m%dT%H%M%SZ'
+}
+
+# 写入 shell 配置前先备份；备份失败即放弃覆盖，原文件保持不动。
+# 原件备份（pre-env-setup-wsl.bak）只在目标尚未被本脚本托管时建立一次：
+# 此刻文件内容就是安装前的样子。此后每次改动另存一份带时间戳的上一版。
+backup_shell_config() (
+    local target="$1" directory="$2" filename="$3"
+    local pristine="$directory/${filename}.pre-env-setup-wsl.bak"
+    local increment stamp temporary_backup='' suffix='' count=1
+    trap 'if [ -n "$temporary_backup" ]; then rm -f -- "$temporary_backup"; fi' EXIT
+
+    # 调用方通过 || 检查返回值，函数内不能依赖 set -e。
+    if ! stamp=$(timestamp) || [ -z "$stamp" ]; then
+        printf '错误：无法生成配置备份时间戳；原文件已保留。\n' >&2
+        return 1
+    fi
+
+    if [ ! -e "$pristine" ]; then
+        if grep -Fq -- "$SHELL_BLOCK_START" "$target"; then
+            printf '提示：配置已含托管块，无法补建安装前原件备份；本次改动仍会留下带时间戳的备份。\n'
+        elif ! temporary_backup=$(mktemp "$pristine.tmp.XXXXXX") ||
+             ! cp -p -- "$target" "$temporary_backup" ||
+             ! mv -T -- "$temporary_backup" "$pristine"; then
+            printf '错误：无法备份原始配置：%s%s%s；原文件已保留。\n' "${BLUE:-}" "$pristine" "${RESET:-}" >&2
+            return 1
+        else
+            printf '原始配置备份：%s%s%s\n' "${BLUE:-}" "$pristine" "${RESET:-}"
+        fi
+    fi
+
+    increment="$directory/${filename}.env-setup-wsl.bak-$stamp"
+    # 同一秒内的连续运行也不能静默覆盖上一份备份。
+    while [ -e "$increment$suffix" ]; do
+        count=$((count + 1))
+        suffix="-$count"
+    done
+    increment="$increment$suffix"
+    if ! cp -p -- "$target" "$increment"; then
+        printf '错误：无法备份当前配置：%s%s%s；原文件已保留。\n' "${BLUE:-}" "$increment" "${RESET:-}" >&2
+        return 1
+    fi
+    printf '配置备份：%s%s%s\n' "${BLUE:-}" "$increment" "${RESET:-}"
+    printf '恢复命令：%s' "${MAGENTA:-}"
+    printf 'cp -p -- %q %q' "$increment" "$target"
+    printf '%s\n' "${RESET:-}"
+)
+
 # ------------------------------------------------------------
 # Argument parsing
 # ------------------------------------------------------------
@@ -256,8 +307,10 @@ remove_managed_block() {
 usage() {
     printf '用法：%s [选项]\n' "$PROGRAM_NAME"
     printf '\n交互式 Fish/Zsh/Bash 环境配置：选择 shell 和组件，确认后安装并设置默认 shell。\n'
-    printf '可选：系统基础包、Homebrew/eza、lazygit、uv/Python、nvm/Node.js、Starship。\n'
+    printf '可选：系统基础包、Homebrew/eza、lazygit、uv/Python、nvm/Node.js、Starship、fzf。\n'
     printf '\n选项：\n  -h, --help       显示帮助（无需交互终端）\n'
+    printf '\n配置备份：写入前先在配置文件同目录留下 <配置名>.pre-env-setup-wsl.bak（安装前原件，仅一份）\n'
+    printf '和 <配置名>.env-setup-wsl.bak-<UTC 时间戳>（每次改动各一份），并打印对应的恢复命令。\n'
     printf '\n安装需要交互终端；NO_COLOR 可禁用颜色，不提供无人值守安装参数。\n'
     printf '保留版本环境变量：PYTHON_VERSION=3.14、NODE_VERSION=lts/*。\n'
 }
@@ -947,7 +1000,7 @@ FISH
 )
 
 prepare_fish_config() (
-    local target directory temporary_file backup_file other_rc
+    local target directory temporary_file other_rc
     if [ -L "$SHELL_RC" ] && [ ! -e "$SHELL_RC" ]; then
         printf '错误：配置符号链接的目标不存在，保留原链接。\n' >&2
         return 1
@@ -1043,17 +1096,14 @@ FISH
     if [ -f "$target" ] && cmp -s "$target" "$temporary_file"; then return 0; fi
     if [ -f "$target" ]; then
         chmod --reference="$target" "$temporary_file"
-        backup_file=$(mktemp "$directory/config.fish.env-setup-wsl.backup.XXXXXX")
-        cp -p -- "$target" "$backup_file"
-        printf '配置备份：%s\n恢复命令：' "$backup_file"
-        printf 'cp -p -- %q %q\n' "$backup_file" "$target"
+        backup_shell_config "$target" "$directory" "${target##*/}" || return 1
     fi
     mv -- "$temporary_file" "$target"
 )
 
 prepare_shell_config() (
     if [ "$SHELL_NAME" = fish ]; then prepare_fish_config; return; fi
-    local target directory filename temporary_file backup_file cleanup_command
+    local target directory filename temporary_file cleanup_command
     if [ -L "$SHELL_RC" ] && [ ! -e "$SHELL_RC" ]; then
         printf '错误：配置符号链接的目标不存在，保留原链接。\n' >&2
         return 1
@@ -1179,12 +1229,7 @@ FZF
     fi
     if [ -f "$target" ]; then
         chmod --reference="$target" "$temporary_file"
-        backup_file=$(mktemp "$directory/${filename}.env-setup-wsl.backup.XXXXXX")
-        cp -p -- "$target" "$backup_file"
-        printf '配置备份：%s%s%s\n' "$BLUE" "$backup_file" "$RESET"
-        printf '恢复命令：%s' "$MAGENTA"
-        printf 'cp -p -- %q %q' "$backup_file" "$target"
-        printf '%s\n' "$RESET"
+        backup_shell_config "$target" "$directory" "$filename" || return 1
     fi
     mv -- "$temporary_file" "$target"
 )

@@ -95,14 +95,6 @@ elif name in ('7zz', '7z'):
     print('7-Zip fixture')
 elif name == 'node':
     print('v' + os.environ.get('FIXTURE_NODE_VERSION', '24'))
-elif name in ('codex', 'claude'):
-    if os.environ.get('FAIL_' + name.upper()): sys.exit(61)
-    print(name + ' fixture version')
-elif name == 'agent-setup':
-    if os.environ.get('SHELL') != os.environ.get('EXPECTED_SHELL', '/bin/bash'): sys.exit(68)
-    print('fixture: raw agent/skill log', flush=True)
-    print('fixture: active node ' + os.environ.get('FIXTURE_NODE_VERSION', 'none'), flush=True)
-    sys.exit(int(os.environ.get('AGENT_EXIT', '0')))
 elif name in ('brew', 'eza', 'lazygit', 'uv', 'npm', 'git'):
     if name == 'git' and args[:1] == ['clone']:
         if os.environ.get('FAIL_OMZ'): sys.exit(71)
@@ -173,16 +165,6 @@ elif name == 'curl':
     elif 'Homebrew' in url:
         print('test "$NONINTERACTIVE" = 1')
         print('cp "$FIXTURE_BIN/brew-fixture" "$FIXTURE_BIN/brew"')
-    elif 'codex/install.sh' in url or 'claude.ai/install.sh' in url:
-        tool = 'codex' if 'codex' in url else 'claude'
-        if tool == 'codex' and os.environ.get('FAIL_CODEX_DOWNLOAD'): sys.exit(62)
-        if tool == 'codex':
-            print('test "$CODEX_INSTALL_DIR" = "$HOME/.local/bin" || exit 66')
-            print('test "$CODEX_NON_INTERACTIVE" = true || exit 67')
-        print('test "$SHELL" = "$EXPECTED_SHELL" || echo polluted >> "$HOME/.profile"')
-        print('case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) echo polluted >> "$HOME/.profile" ;; esac')
-        print('mkdir -p "$HOME/.local/bin"')
-        print('cp "$FIXTURE_BIN/' + tool + '-fixture" "$HOME/.local/bin/' + tool + '"')
     else: sys.exit(98)
 else:
     print('UNEXPECTED external command: ' + name, file=sys.stderr)
@@ -249,7 +231,7 @@ class WslSetupTests(unittest.TestCase):
         self.bin.mkdir()
         # No inherited PATH: even unexpected future installer calls cannot reach real tools.
         for name in ['awk', 'cat', 'chmod', 'cmp', 'cp', 'dirname', 'grep', 'id',
-                     'mktemp', 'mv', 'readlink', 'rm', 'basename', 'bash', 'mkdir', 'install', 'touch', 'head', 'sh', 'env']:
+                     'date', 'mktemp', 'mv', 'readlink', 'rm', 'basename', 'bash', 'mkdir', 'install', 'touch', 'head', 'sh', 'env']:
             (self.bin / name).symlink_to(shutil.which(name))
         for name in ['apt', 'apt-cache', 'sudo', 'getent', 'dpkg-query', 'chsh', 'tput',
                      '7zz', 'curl', 'wget', 'brew', 'git', 'nvm', 'uv']:
@@ -312,15 +294,6 @@ class WslSetupTests(unittest.TestCase):
         nvm.mkdir(exist_ok=True)
         (nvm / 'nvm.sh').write_text((self.bin / 'nvm-fixture').read_text())
 
-    def ai_fixture(self):
-        self.dev_fixture()
-        for name in ['codex', 'claude', 'codex-fixture', 'claude-fixture', 'starship']:
-            self.stub(name, STUB)
-        self.stub('npx', STUB)
-        entry = self.root / 'agent-setup.sh'
-        entry.write_text('#!/bin/bash\nexec agent-setup "$@"\n')
-        self.stub('agent-setup', STUB)
-
     def test_starship_defaults_install_and_bash_hooks_preserve_user_prompt(self):
         self.stub('starship-fixture', STUB)
         self.stub('wslpath', STUB)
@@ -329,7 +302,7 @@ class WslSetupTests(unittest.TestCase):
         term.expect('[x] Starship')
         term.send(b'q')
         term.finish()
-        output, code = self.confirm(self.choose_only({8}))
+        output, code = self.confirm(self.choose_only({5}))
         self.assertEqual(code, 0, output)
         self.assertIn('[成功] Starship', output)
         self.assertEqual(self.zshrc.read_text(), '# untouched zsh\n')
@@ -341,7 +314,7 @@ class WslSetupTests(unittest.TestCase):
         self.assertEqual((self.home / 'prompt-loads').read_text().splitlines(), ['starship-loaded'])
         self.assertEqual(loaded.stdout.count('\x1b]9;9;C:\\fixture dir\x1b\\'), 1)
         self.assertEqual(len([c for c in self.calls('curl') if 'starship.rs' in c[-1]]), 1)
-        output, code = self.confirm(self.choose_only({8}))
+        output, code = self.confirm(self.choose_only({5}))
         self.assertEqual(code, 0, output)
         self.assertEqual(len([c for c in self.calls('curl') if 'starship.rs' in c[-1]]), 1)
 
@@ -357,7 +330,7 @@ class WslSetupTests(unittest.TestCase):
                              'user_prompt() { print user >> "$HOME/user-prompts"; }\n'
                              'precmd_functions=(user_prompt)\nsource "$ZSH/oh-my-zsh.sh"\n')
         for selected in [True, True, False]:
-            output, code = self.confirm(self.choose_only({8} if selected else set(), shell='zsh'))
+            output, code = self.confirm(self.choose_only({5} if selected else set(), shell='zsh'))
             self.assertEqual(code, 0, output)
             for filename in ['prompt-loads', 'theme-loads', 'user-prompts']:
                 (self.home / filename).unlink(missing_ok=True)
@@ -383,7 +356,7 @@ class WslSetupTests(unittest.TestCase):
                 self.env['FAIL_STARSHIP'] = '1'
                 rc = self.bashrc if shell == 'bash' else self.zshrc
                 rc.write_text('ZSH_THEME="kept-theme"\n# user prompt\n')
-                output, code = self.confirm(self.choose_only({8}, shell=shell))
+                output, code = self.confirm(self.choose_only({5}, shell=shell))
                 self.assertEqual(code, 1, output)
                 self.assertIn('[失败] Starship', output)
                 self.assertIn('[成功] 默认 shell 切换', output)
@@ -393,10 +366,10 @@ class WslSetupTests(unittest.TestCase):
                 self.assertNotIn('starship init', config)
                 self.assertNotIn('prompt-theme >>>', config)
                 self.env.pop('FAIL_STARSHIP')
-                output, code = self.confirm(self.choose_only({8}, shell=shell))
+                output, code = self.confirm(self.choose_only({5}, shell=shell))
                 self.assertEqual(code, 0, output)
                 self.env['FAIL_STARSHIP'] = '1'
-                output, code = self.confirm(self.choose_only({8}, shell=shell))
+                output, code = self.confirm(self.choose_only({5}, shell=shell))
                 self.assertEqual(code, 1, output)
                 self.assertIn('starship init ' + shell, rc.read_text())
                 if shell == 'zsh': self.assertIn('prompt-theme >>>', rc.read_text())
@@ -407,7 +380,7 @@ class WslSetupTests(unittest.TestCase):
         self.stub('wslpath', STUB)
         self.bashrc.write_text("PROMPT_COMMAND=('echo first' 'echo second')\n"
                               'starship_precmd_user_func=user_callback\n')
-        output, code = self.confirm(self.choose_only({8}))
+        output, code = self.confirm(self.choose_only({5}))
         self.assertEqual(code, 0, output)
         loaded = subprocess.run(['/bin/bash', '--noprofile', '--norc', '-c',
                                  'source "$HOME/.bashrc"; source "$HOME/.bashrc"; '
@@ -422,7 +395,7 @@ class WslSetupTests(unittest.TestCase):
     def test_starship_missing_download_dependency_cascades_and_skips_on_failure(self):
         (self.bin / 'curl').unlink()
         self.env['FAIL_UPDATE'] = '1'
-        term = self.choose_only({8})
+        term = self.choose_only({5})
         term.send(b'\r')
         term.expect('确认执行')
         plan = re.sub(r'\x1b\[[0-9;?]*[a-zA-Z]', '', term.output.decode()).split('安装计划')[-1]
@@ -435,7 +408,7 @@ class WslSetupTests(unittest.TestCase):
         self.assertNotIn('starship init', self.bashrc.read_text())
         self.assertTrue(self.calls('chsh'))
         self.assertFalse(self.calls('curl'))
-        term = self.choose_only({8})
+        term = self.choose_only({5})
         term.send(b' \r')
         term.expect('确认执行')
         plan = re.sub(r'\x1b\[[0-9;?]*[a-zA-Z]', '', term.output.decode()).split('安装计划')[-1]
@@ -449,14 +422,14 @@ class WslSetupTests(unittest.TestCase):
         target.write_text('# custom\n')
         target.chmod(0o600)
         self.bashrc.symlink_to(target)
-        output, code = self.confirm(self.choose_only({8}))
+        output, code = self.confirm(self.choose_only({5}))
         self.assertEqual(code, 0, output)
         self.assertTrue(self.bashrc.is_symlink())
         self.assertEqual(target.stat().st_mode & 0o777, 0o600)
         self.assertIn('恢复命令：', output)
         invalid = target.read_text() + '# >>> env-setup-wsl.sh Windows Terminal CWD hook >>>\n'
         target.write_text(invalid)
-        output, code = self.confirm(self.choose_only({8}))
+        output, code = self.confirm(self.choose_only({5}))
         self.assertEqual(code, 1, output)
         self.assertEqual(target.read_text(), invalid)
         self.assertIn('[失败] Bash 配置', output)
@@ -472,7 +445,7 @@ class WslSetupTests(unittest.TestCase):
                               'starship_precmd_user_func="__wt_update_cwd"\n'
                               'eval "$(starship init bash)"\n'
                               '# <<< env-setup-wsl.sh Windows Terminal CWD hook <<<\n')
-        output, code = self.confirm(self.choose_only({8}))
+        output, code = self.confirm(self.choose_only({5}))
         self.assertEqual(code, 0, output)
         loaded = subprocess.run(['/bin/bash', '--noprofile', '--norc', '-c',
                                  'source "$HOME/.bashrc"; eval "$PROMPT_COMMAND"'],
@@ -771,7 +744,8 @@ class WslSetupTests(unittest.TestCase):
         self.assertNotIn('bash_completion', config)
         self.assertTrue(self.zshrc.is_symlink())
         self.assertEqual(target.stat().st_mode & 0o777, 0o640)
-        self.assertEqual(len(list(self.home.glob('linked zsh startup.env-setup-wsl.backup.*'))), 1)
+        self.assertEqual((self.home / 'linked zsh startup.pre-env-setup-wsl.bak').read_text(), original)
+        self.assertEqual(len(list(self.home.glob('linked zsh startup.env-setup-wsl.bak-*'))), 1)
         self.assertFalse([c for c in self.calls('git') if 'clone' in c])
         self.assertEqual(self.bashrc.read_text(), '# keep bash\n')
         result = subprocess.run([ZSH_BINARY, '-dfc', 'source "$HOME/.zshrc"; alias ls; print -r -- "$NVM_DIR"'],
@@ -791,25 +765,6 @@ class WslSetupTests(unittest.TestCase):
         self.assertIn(['apt', 'install', '-y', 'git'], self.calls())
         self.assertIn('Oh My Zsh 依赖 git', output)
         self.assertTrue(self.calls('chsh'))
-
-    def test_zsh_all_native_installers_respect_target_and_delegate_after_node(self):
-        self.ai_fixture()
-        self.stub('zsh', STUB)
-        self.bashrc.write_text('# untouched bash\n')
-        profile = self.home / '.profile'
-        profile.write_text('# untouched profile\n')
-        for name in ['codex', 'claude', 'uv']:
-            (self.bin / name).unlink()
-        shutil.rmtree(self.home / '.nvm')
-        output, code = self.confirm(self.choose_only({3, 7}, shell='zsh'))
-        self.assertEqual(code, 0, output)
-        self.assertEqual(self.bashrc.read_text(), '# untouched bash\n')
-        self.assertEqual(profile.read_text(), '# untouched profile\n')
-        self.assertNotIn('polluted', self.zshrc.read_text())
-        self.assertIn('[成功] Agent/Skill 配置', output)
-        self.assertIn('fixture: active node lts/*', output)
-        self.assertLess(self.calls().index(self.calls('agent-setup')[0]),
-                        self.calls().index(self.calls('chsh')[0]))
 
     def test_zsh_failures_preserve_other_shell_and_switch_only_after_valid_config(self):
         for failure in ['shell', 'config', 'framework', 'runtime', 'switch']:
@@ -872,7 +827,7 @@ class WslSetupTests(unittest.TestCase):
         self.stub('fish', STUB)
         self.stub('fzf', STUB)
         self.stub('wslpath', STUB)
-        output, code = self.confirm(self.choose_only({9}, shell='fish'))
+        output, code = self.confirm(self.choose_only({6}, shell='fish'))
         self.assertEqual(code, 0, output)
         fishrc = self.home / '.config/fish/config.fish'
         generated = fishrc.read_bytes()
@@ -880,7 +835,7 @@ class WslSetupTests(unittest.TestCase):
                                  'test "$FIXTURE_FZF_LOADED" = 1; and test "$EDITOR" = "code --wait"; and functions -q __env_setup_wsl_update_cwd'],
                                 env=dict(self.env, WSL_DISTRO_NAME='Fixture'), capture_output=True, text=True)
         self.assertEqual(loaded.returncode, 0, loaded.stderr)
-        output, code = self.confirm(self.choose_only({9}, shell='fish'))
+        output, code = self.confirm(self.choose_only({6}, shell='fish'))
         self.assertEqual(code, 0, output)
         self.assertEqual(fishrc.read_bytes(), generated)
 
@@ -889,7 +844,7 @@ class WslSetupTests(unittest.TestCase):
         term = self.choose_only(set(), shell='zsh', plugins=['fzf'])
         term.send(b'b')
         term.expect('选择安装组件（Zsh）')
-        term.send(b'\x1b[B' * 9 + b' ' + b'\r')
+        term.send(b'\x1b[B' * 6 + b' ' + b'\r')
         term.expect('选择 Zsh 插件')
         term.expect('方向键移动')
         screen = re.sub(r'\x1b\[[0-9;?]*[a-zA-Z]', '', term.output.decode()).split('选择 Zsh 插件')[-1]
@@ -983,127 +938,11 @@ class WslSetupTests(unittest.TestCase):
                 elif kind == 'shared': self.assertTrue(self.zshrc.samefile(self.bashrc))
                 else: self.assertEqual(self.zshrc.read_text(), 'if broken\n')
 
-    def test_native_clis_install_and_verify_without_touching_other_profiles(self):
-        self.ai_fixture()
-        (self.bin / 'codex').unlink()
-        (self.bin / 'claude').unlink()
-        profile = self.home / '.profile'
-        profile.write_text('# keep profile\n')
-        self.env['SHELL'] = '/bin/zsh'
-        output, code = self.confirm(self.choose_only({5, 6}))
-        self.assertEqual(code, 0, output)
-        self.assertIn(['curl', '-fsSL', 'https://chatgpt.com/codex/install.sh'], self.calls())
-        self.assertIn(['curl', '-fsSL', 'https://claude.ai/install.sh'], self.calls())
-        self.assertIn(['codex', '--version'], self.calls())
-        self.assertIn(['claude', '--version'], self.calls())
-        self.assertIn('[成功] Codex CLI', output)
-        self.assertIn('[成功] Claude Code', output)
-        self.assertEqual(self.zshrc.read_text(), '# untouched zsh\n')
-        self.assertEqual(profile.read_text(), '# keep profile\n')
-        self.assertFalse([call for call in self.calls('npm') if 'install' in call])
-
-    def test_agent_combined_entrypoint_reuses_clis_and_reports_real_exit(self):
-        for status in (0, 73):
-            with self.subTest(status=status):
-                self.ai_fixture()
-                self.env['AGENT_EXIT'] = str(status)
-                output, code = self.confirm(self.choose_only({7}))
-                self.assertEqual(code, int(status != 0), output)
-                self.assertIn(['agent-setup', '--agent', '--skill'], self.calls())
-                for label in ['nvm/Node.js', 'Codex CLI', 'Claude Code']:
-                    self.assertIn('安装组件：' + label + '（自动补齐）', output)
-                self.assertIn('fixture: raw agent/skill log', output)
-                self.assertIn(('[成功]' if status == 0 else '[失败]') + ' Agent/Skill 配置', output)
-                self.assertTrue(self.calls('chsh'))
-                self.assertFalse(self.calls('curl'))
-                if status:
-                    self.assertIn('agent-setup.sh --agent --skill', output)
-                    self.assertIn('失败（退出码 73）', output)
-
-    def test_usable_cli_gets_path_even_when_updater_install_fails(self):
-        self.ai_fixture()
-        local_bin = self.home / '.local/bin'
-        local_bin.mkdir(parents=True)
-        shutil.copy2(self.bin / 'codex', local_bin / 'codex')
-        (self.bin / 'codex').unlink()
-        self.stub('install', 'import sys; sys.exit(64)')
-        output, code = self.confirm(self.choose_only({5}))
-        self.assertEqual(code, 1, output)
-        self.assertIn('[成功] Codex CLI', output)
-        self.assertIn('export PATH="$HOME/.local/bin:$PATH"', self.bashrc.read_text())
-
-    def test_agent_dependency_failures_skip_delegate_and_keep_shell_switch(self):
-        self.ai_fixture()
-        for failure in ['FAIL_CODEX', 'FAIL_CLAUDE', 'NVM_ERROR']:
-            with self.subTest(failure=failure):
-                self.env[failure] = '1'
-                self.log.write_text('')
-                output, code = self.confirm(self.choose_only({7}))
-                self.assertEqual(code, 1, output)
-                self.assertIn('[因依赖失败跳过] Agent/Skill 配置', output)
-                self.assertFalse(self.calls('agent-setup'))
-                self.assertIn('[成功] 默认 shell 切换', output)
-                self.assertIn('手动处理：', output)
-                self.env.pop(failure)
-
-    def test_native_download_failure_continues_independent_cli_and_preserves_config(self):
-        self.ai_fixture()
-        (self.bin / 'codex').unlink()
-        (self.bin / 'claude').unlink()
-        self.env['FAIL_CODEX_DOWNLOAD'] = '1'
-        self.bashrc.write_text('# user settings\n')
-        output, code = self.confirm(self.choose_only({5, 6}))
-        self.assertEqual(code, 1, output)
-        self.assertIn('[失败] Codex CLI', output)
-        self.assertIn('[成功] Claude Code', output)
-        self.assertIn('[成功] 默认 shell 切换', output)
-        self.assertIn('# user settings', self.bashrc.read_text())
-        self.assertEqual(self.zshrc.read_text(), '# untouched zsh\n')
-
-    def test_failed_system_dependency_skips_missing_clis_and_delegate(self):
-        self.ai_fixture()
-        for name in ['curl', 'codex', 'claude']:
-            (self.bin / name).unlink()
-        self.env['FAIL_UPDATE'] = '1'
-        output, code = self.confirm(self.choose_only({7}))
-        self.assertEqual(code, 1, output)
-        for label in ['Codex CLI', 'Claude Code', 'Agent/Skill 配置']:
-            self.assertIn('[因依赖失败跳过] ' + label, output)
-        self.assertIn('[成功] nvm/Node.js', output)
-        self.assertFalse(self.calls('curl'))
-        self.assertFalse(self.calls('agent-setup'))
-        self.assertTrue(self.calls('chsh'))
-
-    def test_agent_uses_requested_node_and_defaults_reuse_all_components(self):
-        self.stub('fzf', STUB)
-        self.ai_fixture()
-        self.env['NODE_VERSION'] = '22'
-        term = self.terminal()
-        output, code = self.confirm(term)
-        self.assertEqual(code, 0, output)
-        self.assertIn('fixture: active node 22', output)
-        self.assertIn('[成功] Agent/Skill 配置', output)
-        self.assertFalse(self.calls('curl'))
-
-    def test_agent_deselection_retains_explicit_shared_dependencies(self):
-        self.ai_fixture()
-        term = self.choose_only({4, 5, 7})
-        term.send(b'\x1b[B' * 7 + b' ')
-        term.send(b'\r')
-        term.expect('确认执行')
-        plan = re.sub(r'\x1b\[[0-9;?]*[a-zA-Z]', '', term.output.decode()).split('安装计划')[-1]
-        self.assertIn('安装组件：nvm/Node.js（手动选择）', plan)
-        self.assertIn('安装组件：Codex CLI（手动选择）', plan)
-        self.assertNotIn('安装组件：Claude Code', plan)
-        self.assertNotIn('安装组件：Agent/Skill', plan)
-        term.send(b'n\r')
-        self.assertEqual(term.finish(), 0)
-
     def choose_only(self, chosen, shell="bash", plugins=()):
         term = self.terminal(shell)
         # Reset in dependency order, then express only the requested selections.
-        term.send(b'\x1b[B' * 9)
-        for row in range(9, 0, -1):
+        term.send(b'\x1b[B' * 6)
+        for row in range(6, 0, -1):
             term.send(b' \x1b[A')
         term.send(b' ')
         focus = 0
@@ -1129,31 +968,6 @@ class WslSetupTests(unittest.TestCase):
         term.expect('安装结果')
         code = term.finish()
         return re.sub(r'\x1b\[[0-9;?]*[a-zA-Z]', '', term.output.decode()), code
-
-    def test_ai_components_default_selected(self):
-        term = self.terminal()
-        term.expect('[x] Codex CLI')
-        term.expect('[x] Claude Code')
-        term.expect('[x] Agent/Skill 配置')
-        term.send(b'q')
-        self.assertEqual(term.finish(), 0)
-
-    def test_agent_selection_pulls_clis_node_and_cascades_on_dependency_cancel(self):
-        self.dev_fixture()
-        term = self.choose_only(set())
-        term.send(b'\x1b[B' * 7 + b' ')
-        term.expect('[x] nvm/Node.js')
-        term.expect('自动补齐')
-        term.expect('[x] Codex CLI')
-        term.expect('[x] Claude Code')
-        term.send(b'\x1b[A' * 2 + b' ')
-        term.expect('连带取消 Agent/Skill 配置')
-        term.send(b'\r')
-        term.expect('确认执行')
-        plan = term.output.decode().split('安装计划')[-1]
-        self.assertNotIn('安装组件：', plan)
-        term.send(b'n\r')
-        self.assertEqual(term.finish(), 0)
 
     def test_requested_versions_installed_and_activated_with_profiles_untouched(self):
         self.dev_fixture()
@@ -1465,9 +1279,11 @@ class WslSetupTests(unittest.TestCase):
         self.assertEqual(target.read_bytes(), generated)
         self.assertTrue(self.bashrc.is_symlink())
         self.assertEqual(target.stat().st_mode & 0o777, 0o640)
-        backups = list(self.home.glob('custom startup.env-setup-wsl.backup.*'))
-        self.assertEqual(len(backups), 1)
-        self.assertEqual(backups[0].read_text(), original)
+        pristine = self.home / 'custom startup.pre-env-setup-wsl.bak'
+        self.assertEqual(pristine.read_text(), original)
+        increments = sorted(self.home.glob('custom startup.env-setup-wsl.bak-*'))
+        self.assertEqual(len(increments), 1)
+        self.assertEqual(increments[0].read_text(), original)
         # Execute the printed recovery command; quoted paths include spaces and apostrophes.
         output = re.sub(r'\x1b\[[0-9;]*m', '', first.output.decode())
         command = re.search(r'恢复命令：(.*)', output).group(1).strip()
@@ -1475,6 +1291,68 @@ class WslSetupTests(unittest.TestCase):
         self.assertEqual(target.read_text(), original)
         self.assertFalse(self.calls('apt'))
         self.assertIn('用户未选择', second.output.decode())
+
+    def test_changed_rerun_keeps_pristine_backup_and_stacks_timestamped_increments(self):
+        self.dev_fixture()
+        # 固定时间，确保覆盖同一秒内的备份重名分支。
+        self.stub('date', "print('20261104T000000Z')\n")
+        original = '# original settings\n'
+        self.bashrc.write_text(original)
+        first, code = self.install(selected=False)
+        self.assertEqual(code, 0, first.output.decode())
+        generated = self.bashrc.read_text()
+        self.assertIn('原始配置备份：', first.output.decode())
+        pristine = self.home / '.bashrc.pre-env-setup-wsl.bak'
+        self.assertEqual(pristine.read_text(), original)
+        # 第二次改动必须另存一份，且不覆盖安装前原件。
+        second, code = self.confirm(self.choose_only({1}))
+        self.assertEqual(code, 0, second)
+        self.assertNotEqual(self.bashrc.read_text(), generated)
+        self.assertEqual(pristine.read_text(), original)
+        increments = sorted(self.home.glob('.bashrc.env-setup-wsl.bak-*'))
+        for path in increments:
+            self.assertRegex(path.name, r'^\.bashrc\.env-setup-wsl\.bak-\d{8}T\d{6}Z(?:-\d+)?$')
+        self.assertEqual([path.read_text() for path in increments], [original, generated])
+
+    def test_partial_pristine_backup_failure_can_retry(self):
+        original = '# original settings\n'
+        self.bashrc.write_text(original)
+        self.stub('cp', """import os, sys
+from pathlib import Path
+if 'pre-env-setup-wsl.bak' in sys.argv[-1]:
+    Path(sys.argv[-1]).write_text('partial')
+    sys.exit(46)
+os.execv(""" + repr(shutil.which('cp')) + """, ['cp'] + sys.argv[1:])
+""")
+        term, code = self.install(selected=False)
+        self.assertEqual(code, 1, term.output.decode())
+        self.assertEqual(self.bashrc.read_text(), original)
+        self.assertFalse((self.home / '.bashrc.pre-env-setup-wsl.bak').exists())
+        self.assertFalse(list(self.home.glob('*.tmp.*')))
+        self.assertFalse(self.calls('chsh'))
+        (self.bin / 'cp').unlink()
+        (self.bin / 'cp').symlink_to(shutil.which('cp'))
+        term, code = self.install(selected=False)
+        self.assertEqual(code, 0, term.output.decode())
+        self.assertEqual((self.home / '.bashrc.pre-env-setup-wsl.bak').read_text(), original)
+
+    def test_timestamp_failure_preserves_config_and_skips_switch(self):
+        original = '# original settings\n'
+        self.bashrc.write_text(original)
+        self.stub('date', 'import sys\nsys.exit(47)\n')
+        term, code = self.install(selected=False)
+        self.assertEqual(code, 1, term.output.decode())
+        self.assertEqual(self.bashrc.read_text(), original)
+        self.assertFalse(list(self.home.glob('.bashrc.env-setup-wsl.bak-*')))
+        self.assertFalse(self.calls('chsh'))
+        (self.bin / 'date').unlink()
+        (self.bin / 'date').symlink_to(shutil.which('date'))
+        term, code = self.install(selected=False)
+        self.assertEqual(code, 0, term.output.decode())
+        backups = list(self.home.glob('.bashrc.env-setup-wsl.bak-*'))
+        self.assertEqual(len(backups), 1)
+        self.assertRegex(backups[0].name, r'^\.bashrc\.env-setup-wsl\.bak-\d{8}T\d{6}Z$')
+        self.assertEqual(backups[0].read_text(), original)
 
     def test_failed_update_stops_package_step_but_still_prepares_and_switches(self):
         self.env['FAIL_UPDATE'] = '1'
