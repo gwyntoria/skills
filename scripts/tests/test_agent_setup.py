@@ -659,7 +659,7 @@ target.chmod(0o755)
         self.assertNotIn('waza-english:start', old.read_text())
         self.assertFalse((self.home / '.claude/rules/waza-english.md').exists())
 
-    def test_waza_engine_accepts_h2_and_keeps_body(self):
+    def test_waza_engine_formats_claude_h2_and_keeps_codex_project_body(self):
         fixture = self.root / 'waza-h2'
         fixture.mkdir()
         content = '## English Coaching\n\nOriginal body.\n'
@@ -668,10 +668,11 @@ target.chmod(0o755)
             f'rule_engine waza-english project both install {shlex.quote(str(fixture))} waza',
             cwd=self.root)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual((self.root / '.claude/rules/waza-english.md').read_text(), content)
+        self.assertEqual((self.root / '.claude/rules/waza-english.md').read_text(),
+                         content.replace('## English Coaching', '# English Coaching'))
         self.assertIn(content, (self.root / 'AGENTS.md').read_text())
 
-    def test_waza_api_pins_commit_and_installs_selected_h2_verbatim(self):
+    def test_waza_api_pins_commit_and_formats_selected_h2(self):
         self.waza_bundle(('chinese', 'english'))
         chinese = Path(self.env['WAZA_FILES']) / 'chinese.md'
         content = '## Chinese Anti-AI Patterns\n\nUpstream body.\n'
@@ -682,13 +683,69 @@ target.chmod(0o755)
             'apply_rule waza-chinese project both install waza', cwd=self.root)
         self.assertEqual(result.returncode, 0, result.stderr)
         installed = self.root / '.claude/rules/waza-chinese.md'
-        self.assertEqual(installed.read_bytes(), chinese.read_bytes())
+        self.assertEqual(installed.read_text(), content.replace('## Chinese', '# Chinese'))
         self.assertIn(content, (self.root / 'AGENTS.md').read_text())
         fetches = (self.root / 'fetch.log').read_text()
         self.assertIn('/contents/rules?ref=' + 'a' * 40, fetches)
         self.assertIn('/' + 'a' * 40 + '/rules/chinese.md', fetches)
         self.assertNotIn('/' + 'b' * 40, fetches)
         self.assertNotIn('/rules/english.md', fetches)
+
+    def test_global_rule_headings_preserve_fences_unselected_blocks_and_user_content(self):
+        fixture = self.root / 'headings'
+        fixture.mkdir()
+        for level in (1, 2):
+            with self.subTest(source_level=level):
+                title = '#' * level
+                child = '#' * (level + 1)
+                body = (f'{title} Example\n\n{child} Details\nText # stays.\n'
+                        '```md\n# In code\n~~~\n```\n'
+                        '   ~~~~ markdown\n## Also code\n~~~\n~~~~\n'
+                        '    # Indented code\n')
+                source = fixture / 'waza-example.md'
+                source.write_text(body)
+                destination = self.home / '.codex/AGENTS.md'
+                destination.parent.mkdir(exist_ok=True)
+                personal = ('# Personal\nKeep me.\n'
+                            '<!-- gwyn-space-skills: unselected:start -->\n'
+                            '# Old rule\n<!-- gwyn-space-skills: unselected:end -->\n')
+                destination.write_bytes(personal.replace('\n', '\r\n').encode())
+                command = f'rule_engine waza-example global both install {shlex.quote(str(fixture))} waza'
+                result = self.source(command)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                text = destination.read_text()
+                self.assertTrue(text.startswith('# Global Rules\n\n' + personal))
+                self.assertEqual(text.count('# Global Rules\n'), 1)
+                self.assertIn('\n## Example\n\n### Details\n', text)
+                unchanged = body[body.index('Text # stays.'):]
+                self.assertIn(unchanged, text)
+                self.assertNotIn(b'\n', destination.read_bytes().replace(b'\r\n', b''))
+                claude = self.home / '.claude/rules/waza-example.md'
+                self.assertEqual(claude.read_text(), '# Example\n\n## Details\n' + unchanged)
+                before = destination.read_bytes()
+                result = self.source(command)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(destination.read_bytes(), before)
+                self.assertIn('already current (claude, global)', result.stdout)
+                result = self.source('rule_engine waza-example global codex remove')
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(destination.read_text(), '# Global Rules\n\n' + personal)
+
+    def test_global_local_rule_keeps_title_and_project_behavior(self):
+        result = self.source('apply_rule c-project global both install project', cwd=self.root)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        source = (SCRIPT.parents[1] / 'rules/project/c-project.md').read_text()
+        codex = (self.home / '.codex/AGENTS.md').read_text()
+        self.assertTrue(codex.startswith('# Global Rules\n'))
+        self.assertIn('## C Projects Agent Instructions\n', codex)
+        self.assertIn('### Coding Style & Naming Conventions\n', codex)
+        self.assertEqual((self.home / '.claude/rules/c-project.md').read_text(), source)
+        result = self.source('apply_rule c-project project codex', cwd=self.root)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        project = (self.root / 'AGENTS.md').read_text()
+        self.assertNotIn('# Global Rules', project)
+        self.assertNotIn('C Projects Agent Instructions', project)
+        self.assertIn(source.split('\n', 1)[1], project)
 
     def test_waza_snapshot_dynamic_names_collision_and_additive_update(self):
         self.waza_bundle(('c-project', 'new-rule'))

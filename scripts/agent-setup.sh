@@ -837,9 +837,59 @@ assert_markers_balanced() {
     return 1
 }
 
-# Build the managed block: markers, a provenance line, then the rule body.
-# Project-classified rules omit their H1 in Codex AGENTS.md files. agent-behavior.md
-# keeps its title, and every Claude destination keeps the source verbatim.
+# Shift ATX headings relative to the rule title, leaving fenced/indented code alone.
+format_rule_headings() {
+    local body="$1"
+    local level="$2"
+    awk -v target="$level" '
+        NR == 1 {
+            title = $0
+            sub(/[^#].*$/, "", title)
+            shift = target - length(title)
+        }
+        {
+            line = $0
+            sub(/\r$/, "", line)
+            # Markdown fences and headings allow at most three leading spaces.
+            sub(/^ ? ? ?/, "", line)
+            if (fence != "") {
+                run = line
+                sub(fence == "`" ? "[^`].*$" : "[^~].*$", "", run)
+                tail = substr(line, length(run) + 1)
+                if (substr(line, 1, 1) == fence && length(run) >= width && tail ~ /^[ \t]*$/)
+                    fence = ""
+                print
+                next
+            }
+            if (line ~ /^```/ || line ~ /^~~~/) {
+                fence = substr(line, 1, 1)
+                run = line
+                sub(fence == "`" ? "[^`].*$" : "[^~].*$", "", run)
+                width = length(run)
+                print
+                next
+            }
+            if (line ~ /^#+([ \t]|$)/) {
+                hashes = line
+                sub(/[^#].*$/, "", hashes)
+                if (length(hashes) <= 6) {
+                    level = length(hashes) + shift
+                    if (level > 6) level = 6
+                    prefix = ""
+                    for (i = 0; i < level; i++) prefix = prefix "#"
+                    indent = length($0) - length(line)
+                    # line has no CR; use the original line to preserve its ending.
+                    if ($0 ~ /\r$/) indent--
+                    $0 = substr($0, 1, indent) prefix substr($0, indent + length(hashes) + 1)
+                }
+            }
+            print
+        }
+    ' "$body"
+}
+
+# Build the managed block: markers, a provenance line, then the rendered body.
+# Only Codex project installations retain the legacy omit-title behavior.
 write_block() {
     local output="$1"
     local body="$2"
@@ -1019,6 +1069,11 @@ install_claude() {
     local destination
     local resolved
     local backup
+    local body="$SCRATCH_DIR/claude-body"
+    local title
+
+    format_rule_headings "$RULE_SOURCE" 1 >"$body"
+    IFS= read -r title <"$body" || true
 
     if [ "$RULE" = "agent-behavior" ] && [ "$scope" = "global" ]; then
         install_managed_file claude "$scope"
@@ -1043,8 +1098,9 @@ install_claude() {
         printf '  %s is a symlink; writing through to %s\n' "$destination" "$resolved"
     fi
 
-    if [ -e "$resolved" ] && ! cmp -s "$resolved" "$RULE_SOURCE"; then
-        if ! head -n 1 "$resolved" | grep -qF -- "$RULE_TITLE"; then
+    if [ -e "$resolved" ] && ! cmp -s "$resolved" "$body"; then
+        if ! head -n 1 "$resolved" | grep -qF -- "$RULE_TITLE" &&
+           ! head -n 1 "$resolved" | grep -qF -- "$title"; then
             # Not ours. Keep the bytes, but never leave a .md backup behind:
             # Claude Code would load it as another rule.
             backup="$resolved.bak-$(timestamp)"
@@ -1056,12 +1112,12 @@ install_claude() {
         fi
     fi
 
-    if [ -e "$resolved" ] && cmp -s "$resolved" "$RULE_SOURCE"; then
+    if [ -e "$resolved" ] && cmp -s "$resolved" "$body"; then
         success "already current (claude, $scope): $resolved"
         return 0
     fi
 
-    if ! atomic_write "$resolved" "$RULE_SOURCE"; then
+    if ! atomic_write "$resolved" "$body"; then
         error "could not write $resolved"
         return 1
     fi
@@ -1132,6 +1188,7 @@ write_managed_block() {
     local merged_file
     local eol=""
     local omit_h1=0
+    local body="$RULE_SOURCE"
 
     case "$target" in
     claude) destination="$(claude_rule_path "$scope")" ;;
@@ -1161,17 +1218,26 @@ write_managed_block() {
         eol=$'\r'
     fi
 
-    if [ "$target" = "codex" ] && [ "$RULE_CLASSIFICATION" = "project" ]; then
+    if [ "$target" = "codex" ] && [ "$scope" = "global" ]; then
+        body="$SCRATCH_DIR/codex-body"
+        format_rule_headings "$RULE_SOURCE" 2 >"$body"
+    elif [ "$target" = "codex" ] && [ "$RULE_CLASSIFICATION" = "project" ]; then
         omit_h1=1
     fi
 
-    write_block "$block_file" "$RULE_SOURCE" "$eol" "$omit_h1"
+    write_block "$block_file" "$body" "$eol" "$omit_h1"
 
     if [ "$discard_existing" -eq 1 ] && [ -f "$resolved" ]; then
         : >"$merged_file"
         cat "$block_file" >>"$merged_file"
     else
         merge_block "$resolved" "$block_file" "$merged_file"
+    fi
+
+    if [ "$target" = "codex" ] && [ "$scope" = "global" ] &&
+       [ "$(head -n 1 "$merged_file" | tr -d '\r')" != '# Global Rules' ]; then
+        { printf '# Global Rules%s\n%s\n' "$eol" "$eol"; cat "$merged_file"; } >"$SCRATCH_DIR/titled"
+        mv "$SCRATCH_DIR/titled" "$merged_file"
     fi
 
     if [ -f "$resolved" ] && cmp -s "$resolved" "$merged_file"; then

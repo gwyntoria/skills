@@ -93,7 +93,9 @@ Project 规则安装到启动命令时的当前目录，包括 Git 子目录和�
 
 `Install / Update this command` 将命令安装到 `~/.local/bin/agent-setup`。实际脚本位于 `scripts/agent-setup.sh` 且仓库根目录存在 `rules/` 时，安装当前版本；从独立位置运行时，下载 GitHub `main` 最新脚本。安装文件通过 `bash -n` 后原子替换，下载或检查失败保留旧命令，下次启动生效。PATH 缺少 `~/.local/bin` 时仅打印配置方法，不修改 shell 配置。需要 Bash；远端获取需要 cURL，本仓库归档资源还需要 tar，Waza 目录解析需要 Node.js（可复用现有 nvm 引导）；保留原有 CLI 和 skills 安装任务所需的 Node.js、npx 等依赖。
 
-Waza 规则每次启动后首次进入规则页时，通过 GitHub API 固定 `main` 的提交并读取目录；确认安装后仅从 raw 下载所选规则，始终使用该提交，退出清理临时文件。默认不勾选；安装标识使用 `waza-<规则名>`，正文保留上游内容，支持上游的 H1 和 H2 标题。获取失败可重试、返回或跳过 Waza。再次安装只更新所选项，不卸载未选规则；旧 `agent-behavior` 不再提供，也不会自动清理已安装内容。
+Waza 规则每次启动后首次进入规则页时，通过 GitHub API 固定 `main` 的提交并读取目录；确认安装后仅从 raw 下载所选规则，始终使用该提交，退出清理临时文件。默认不勾选；安装标识使用 `waza-<规则名>`，支持上游的 H1 和 H2 标题。获取失败可重试、返回或跳过 Waza。再次安装只更新所选项，不卸载未选规则；旧 `agent-behavior` 不再提供，也不会自动清理已安装内容。
+
+安装时按目标格式化所选规则的标题：Codex 全局 `~/.codex/AGENTS.md` 顶部使用 `# Global Rules`，各规则标题统一为二级标题；Claude 独立规则文件的标题统一为一级标题。子标题随规则标题调整层级，最深为六级，代码块和其他正文保持原样。Codex 项目范围保留现有标题行为。重复安装不重复添加总标题，卸载规则后保留总标题；未选中的已有规则及用户自有内容保持原样，统一已有规则需要重新选择安装。
 
 `--agent` 在有终端时进入 Agent 多选和安装确认；无终端时安装全部三个 CLI 及其附带组件。Agent 默认全选 Codex、Claude Code、Pi；Claude Code 附带 statusline，Pi 附带 `npm:pi-web-access`、`npm:pi-subagents`、`npm:pi-powerline-footer`。交互安装的任务页按 Skills、Rules、Agent 分组，Rules 和 Skills 保持独立选择。与 `--skill` 同用时，有终端进入技能选择，无终端保持安装全部已配置技能的行为。
 
