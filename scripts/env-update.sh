@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 
 PROGRAM_NAME="${0##*/}"
+START_COLOR=
+COLOR_RESET=
 
 PROGRESS_ENABLED=0
 PROGRESS_ROWS=0
@@ -127,8 +129,8 @@ run_update() {
 
     printf '\n'
     printf '%s\n' "=================================================="
-    printf '[%s] [%s/%s] Starting: %s\n' \
-        "$(date '+%H:%M:%S')" "$TASK_CURRENT" "$TASK_TOTAL" "$name"
+    printf '%s[%s] [%s/%s] Starting: %s%s\n' \
+        "$START_COLOR" "$(date '+%H:%M:%S')" "$TASK_CURRENT" "$TASK_TOTAL" "$name" "$COLOR_RESET"
     printf 'Command:'
     printf ' %s' "$@"
     printf '\n'
@@ -260,7 +262,7 @@ run_agents() {
     local success=0 failed=0 group_status group_detail
     AGENT_RESULTS=()
     TASK_CURRENT=$((TASK_CURRENT + 1))
-    printf '\n[%s/%s] Starting: Agents\n' "$TASK_CURRENT" "$TASK_TOTAL"
+    printf '\n%s[%s/%s] Starting: Agents%s\n' "$START_COLOR" "$TASK_CURRENT" "$TASK_TOTAL" "$COLOR_RESET"
     draw_progress "$TASK_CURRENT" "$TASK_TOTAL" Agents Running
     printf '\nAgent detection (current PATH):\n'
 
@@ -432,6 +434,11 @@ main() {
     1) return 0 ;;
     *) return 2 ;;
     esac
+
+    if [ -t 1 ] && [ "${TERM:-dumb}" != dumb ] && [ -z "${NO_COLOR:-}" ]; then
+        START_COLOR=$'\033[1;36m'
+        COLOR_RESET=$'\033[0m'
+    fi
 
     trap restore_terminal EXIT
     trap 'exit 130' INT
