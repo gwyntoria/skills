@@ -1829,6 +1829,8 @@ choose_skill_repositories() {
 choose_skill_repositories_page() {
     local page="$1" title="$2" color="$3" cursor=0 child=-1 i j group found start end total chosen mark row key_page
     local groups=() item_groups=() selected=() children=()
+    local group_word=repository group_list=repositories group_heading=Repository
+    if [ "$page" -eq 9 ]; then group_word=source; group_list=sources; group_heading=Source; fi
     local dependency_mode="${4:-0}" notice='' reasons explicit=() requirements=() missing=() before=() touched=()
     for ((i=0; i<${#REPO_ITEM_LABELS[@]}; i++)); do
         group="${REPO_ITEM_GROUPS[i]}"; found=-1
@@ -1850,10 +1852,10 @@ choose_skill_repositories_page() {
         printf '\033[H\033[2J%s\n' "$title"
         [ -z "$notice" ] || printf '%s\n' "$notice"
         if [ "$child" -lt 0 ]; then
-            printf 'Up/Down: move | Space: select repository | Enter: open / Continue | a: all | n: none | b: back | q: exit\n\n'
+            printf 'Up/Down: move | Space: select %s | Enter: open / Continue | a: all | n: none | b: back | q: exit\n\n' "$group_word"
             total=$((${#groups[@]} + 1)); MENU_CURSORS[page]="$cursor"
         else
-            printf 'Repository: %s\nUp/Down: move | Space: select | a: all | n: none | Enter/b: repositories | q: exit\n\n' "${groups[child]}"
+            printf '%s: %s\nUp/Down: move | Space: select | a: all | n: none | Enter/b: %s | q: exit\n\n' "$group_heading" "${groups[child]}" "$group_list"
             children=()
             for ((i=0; i<${#selected[@]}; i++)); do [ "${item_groups[i]}" -ne "$child" ] || children+=("$i"); done
             total="${#children[@]}"; key_page=$((100 + page * 100 + child)); MENU_CURSORS[key_page]="$cursor"
@@ -2025,6 +2027,21 @@ function repository(record) {
     const match = source.replace(/^https?:\/\/github.com\//, '').replace(/^git@github.com:/, '').match(/^([\w.-]+)\/([\w.-]+)(?:\/|$)/);
     return match ? `${match[1]}/${match[2].replace(/\.git$/, '')}`.toLowerCase() : 'Unknown / local';
 }
+function ruleTitle(text) {
+    return text.match(/^#{1,6}[ \t]+(.+?)[ \t]*\r?$/m)?.[1] || null;
+}
+function ruleGroups(entries) {
+    const groups = new Map();
+    for (const e of entries.filter(e => e.kind === 'rules')) {
+        const key = e.ruleName ? `rule:${e.ruleName}` : `entry:${e.id}`;
+        if (!groups.has(key)) groups.set(key, {name: e.ruleName || e.name, entries: []});
+        groups.get(key).entries.push(e);
+    }
+    return [...groups.values()];
+}
+const agentName = agent => ({codex: 'Codex', claude: 'Claude', pi: 'Pi'}[agent]);
+const ruleLabel = group => `${display(group.name)} ${group.entries.map(e => `[${agentName(e.agent)}:${e.type}]`).join(' ')}`;
+const targetLabel = e => display(full(e.relative)) + (e.type === 'block' ? ` # ${display(e.name)}` : '');
 function scan(codex, claude, rules, skills, pi = false) {
     const piRelative = pi && rules && scope === 'global' ? path.relative(root, path.resolve(piRulePath)) : null;
     if (piRelative !== null) full(piRelative); // Preserve the HOME boundary for custom Pi paths.
@@ -2044,8 +2061,10 @@ function scan(codex, claude, rules, skills, pi = false) {
             if (info?.isSymbolicLink()) add({kind: 'rules', type: 'link', agent, relative, name: path.basename(relative)});
             else if (info?.isFile()) {
                 parents(relative);
-                for (const block of markers(fs.readFileSync(full(relative), 'latin1'))) {
-                    add({kind: 'rules', type: 'block', agent, relative, name: block.name});
+                const text = fs.readFileSync(full(relative), 'latin1');
+                for (const block of markers(text)) {
+                    add({kind: 'rules', type: 'block', agent, relative, name: block.name,
+                        ruleTitle: ruleTitle(text.slice(block.start, block.end))});
                 }
             }
             if (agent === 'claude') {
@@ -2081,6 +2100,15 @@ function scan(codex, claude, rules, skills, pi = false) {
                 }
             }
         }
+    }
+    const blocks = entries.filter(e => e.kind === 'rules' && e.type === 'block');
+    for (const e of blocks) e.ruleName = e.name;
+    for (const e of entries.filter(e => e.kind === 'rules' && e.type === 'file')) {
+        // Claude files have no managed marker. Require both the installer's exact
+        // top-level filename and a matching heading before linking to a block.
+        const title = ruleTitle(fs.readFileSync(full(e.relative), 'latin1'));
+        const block = blocks.find(b => e.name === `rules/${b.name}.md` && title && title === b.ruleTitle);
+        if (block) e.ruleName = block.name;
     }
     if (skills && !lock.valid) console.error(yellow('Skill lock is unreadable; skills are grouped under Unknown / local. Codex deletion requires a valid lock.'));
     return {scope, root: path.resolve(root), rootIdentity: [rootInfo.dev, rootInfo.ino],
@@ -2143,9 +2171,10 @@ if (action === 'scan') {
     }
     if (data.piRulePath && data.piRulePath !== path.resolve(piRulePath)) throw Error('Pi rule path changed; rescan and select again');
     if (action === 'rows') {
-        for (const e of data.entries) console.log([e.id, e.kind, display(e.group || '-'), `${{codex: 'Codex', claude: 'Claude', pi: 'Pi'}[e.agent]} / ${display(e.name)} [${e.type}]`].join('\t'));
+        for (const group of ruleGroups(data.entries)) console.log([group.entries.map(e => e.id).join(','), 'rules', '-', ruleLabel(group)].join('\t'));
+        for (const e of data.entries.filter(e => e.kind === 'skills')) console.log([e.id, e.kind, display(e.group || '-'), `${agentName(e.agent)} / ${display(e.name)} [${e.type}]`].join('\t'));
     } else if (action === 'select') {
-        data.selected = [...new Set(args.map(Number))];
+        data.selected = [...new Set(args.flatMap(value => value.split(',').map(Number)))];
         if (data.selected.some(id => !data.entries.some(e => e.id === id))) throw Error('Invalid removal selection');
         fs.writeFileSync(manifest, JSON.stringify(data));
     } else {
@@ -2155,7 +2184,11 @@ if (action === 'scan') {
         if (action === 'preview') {
             console.log(`Removal scope: ${scope} (${display(root)})`);
             console.log('Removal targets:');
-            for (const e of items) console.log(`  ${e.agent} / ${display(e.name)} [${e.type}]: ${red(display(full(e.relative)) + (e.type === 'block' ? ` # ${e.name}` : ''))}`);
+            for (const group of ruleGroups(items)) {
+                console.log(`  ${ruleLabel(group)}`);
+                for (const e of group.entries) console.log(`    [${agentName(e.agent)}:${e.type}] ${red(targetLabel(e))}`);
+            }
+            for (const e of items.filter(e => e.kind === 'skills')) console.log(`  ${e.agent} / ${display(e.name)} [${e.type}]: ${red(targetLabel(e))}`);
             const lock = readLock();
             const names = items.filter(e => e.kind === 'skills' && e.agent === 'codex' && lock.valid && Object.hasOwn(lock.data.skills || {}, e.name)).map(e => e.name);
             if (names.length) console.log(`  Remove lock entries (${names.map(display).join(', ')}): ${red(display(full(lockPath)))}`);
@@ -2181,7 +2214,7 @@ if (action === 'scan') {
             } else console.log('No backup will be created.');
             verify(data, items);
             let succeeded = 0, failed = 0;
-            const removedSkills = [], handled = new Set();
+            const removedSkills = [], handled = new Set(), outcomes = new Map();
             for (const item of items) {
                 if (handled.has(item.id)) continue;
                 const batch = item.type === 'block' ? items.filter(e => e.type === 'block' && e.relative === item.relative) : [item];
@@ -2196,13 +2229,34 @@ if (action === 'scan') {
                     } else fs.rmSync(full(item.relative), {recursive: true});
                     for (const e of batch) {
                         succeeded++;
-                        console.log(`  OK removed ${e.agent} / ${display(e.name)}: ${red(display(full(e.relative)) + (e.type === 'block' ? ` # ${e.name}` : ''))}`);
+                        outcomes.set(e.id, null);
+                        if (e.kind === 'skills') console.log(`  OK removed ${e.agent} / ${display(e.name)}: ${red(targetLabel(e))}`);
                         if (e.kind === 'skills' && e.agent === 'codex') removedSkills.push(e.name);
                     }
                 } catch (error) {
                     failed += batch.length;
-                    for (const e of batch) console.error(red(`  FAIL ${e.agent} / ${display(e.name)}: ${display(full(e.relative))}: ${error.message}`));
+                    for (const e of batch) {
+                        outcomes.set(e.id, error.message);
+                        if (e.kind === 'skills') console.error(red(`  FAIL ${e.agent} / ${display(e.name)}: ${display(full(e.relative))}: ${error.message}`));
+                    }
                 }
+            }
+            const groups = ruleGroups(items);
+            for (const group of groups) {
+                const errors = group.entries.filter(e => outcomes.get(e.id) !== null);
+                const status = errors.length === 0 ? 'OK removed' : errors.length === group.entries.length ? 'FAIL' : 'PARTIAL';
+                console.log(`  ${status} ${ruleLabel(group)}`);
+                for (const e of group.entries) {
+                    const error = outcomes.get(e.id);
+                    const detail = `    ${error === null ? 'OK' : 'FAIL'} [${agentName(e.agent)}:${e.type}] ${targetLabel(e)}`;
+                    if (error === null) console.log(red(detail));
+                    else console.error(red(`${detail}: ${display(error)}`));
+                }
+            }
+            if (groups.length) {
+                const complete = groups.filter(g => g.entries.every(e => outcomes.get(e.id) === null)).length;
+                const partial = groups.filter(g => g.entries.some(e => outcomes.get(e.id) === null) && g.entries.some(e => outcomes.get(e.id) !== null)).length;
+                console.log(`Rules: ${complete} removed, ${partial} partial, ${groups.length - complete - partial} failed`);
             }
             if (updatesLock && removedSkills.length) {
                 try {
@@ -2212,7 +2266,7 @@ if (action === 'scan') {
                     console.log(`Updated lock: ${red(display(full(lockPath)))}`);
                 } catch (error) { failed++; console.error(red(`  FAIL lock update: ${error.message}`)); }
             }
-            console.log(`\nResults: ${succeeded} succeeded, ${failed} failed`);
+            console.log(`\nResults: ${succeeded} succeeded, ${failed} failed${groups.length ? ' (installation targets' + (updatesLock ? ' / lock update' : '') + ')' : ''}`);
             if (items.some(e => e.kind === 'skills')) console.log('Remove skills for the selected agents; preserve .system entries.');
             process.exitCode = failed ? 1 : 0;
         } else throw Error('Unknown removal action');
@@ -2440,8 +2494,8 @@ interactive_setup() {
     local page="${1:-main}" i task answer menu_status removal_scanned=0 removal_signature="" signature command_action removal_backup=0
     local session_status=0 INTERACTIVE_RESULT=0 show_summary=0
     local repo_labels=() repo_group repo_url
-    local rule_labels=() rule_names=() rule_sources=() source_scope
-    local task_labels=('Skills' 'Rules' 'Agent')
+    local rule_labels=() rule_names=() rule_sources=() source_scope selected_rule
+    local task_labels=('Rules' 'Skills' 'Agent')
     local tasks=() agent_requested=0
     [ "$page" != agent_choices ] || agent_requested=1
     while :; do
@@ -2580,8 +2634,8 @@ interactive_setup() {
                 AGENT_ITEMS=(); INSTALL_SKILLS=0; agent_requested=0
                 for task in "${tasks[@]}"; do
                     case "$task" in
-                    0) INSTALL_SKILLS=1 ;;
-                    1) AGENT_ITEMS+=(2) ;;
+                    0) AGENT_ITEMS+=(2) ;;
+                    1) INSTALL_SKILLS=1 ;;
                     2) agent_requested=1 ;;
                     esac
                 done
@@ -2628,23 +2682,34 @@ interactive_setup() {
                 fi
                 rule_labels=(); rule_names=(); rule_sources=()
                 for i in "${RULE_NAMES_WAZA[@]+"${RULE_NAMES_WAZA[@]}"}"; do
-                    rule_labels+=("Waza / ${i#waza-}"); rule_names+=("$i"); rule_sources+=(waza)
+                    rule_labels+=("${i#waza-}"); rule_names+=("$i"); rule_sources+=(waza)
                 done
                 for i in "${RULE_NAMES_GLOBAL[@]+"${RULE_NAMES_GLOBAL[@]}"}"; do
-                    rule_labels+=("global / $i"); rule_names+=("$i"); rule_sources+=(global)
+                    rule_labels+=("$i"); rule_names+=("$i"); rule_sources+=(global)
                 done
                 for i in "${RULE_NAMES_PROJECT[@]+"${RULE_NAMES_PROJECT[@]}"}"; do
-                    rule_labels+=("project / $i"); rule_names+=("$i"); rule_sources+=(project)
+                    rule_labels+=("$i"); rule_names+=("$i"); rule_sources+=(project)
                 done
                 if [ "${#rule_labels[@]}" -eq 0 ]; then FAILED+=('No rules available'); show_summary=1; page=complete; continue; fi
-                choose_items 9 'Choose rules' 1 0 "${rule_labels[@]}" || {
-                    [ "$?" -eq 2 ] || return "$session_status"
-                    page=tasks; continue
-                }
+                REPO_ITEM_LABELS=("${rule_labels[@]}"); REPO_ITEM_GROUPS=(); REPO_SELECTED=()
+                for ((i=0; i<${#rule_names[@]}; i++)); do
+                    source_scope="${rule_sources[i]}"
+                    if [ "$source_scope" = waza ]; then REPO_ITEM_GROUPS+=(Waza); else REPO_ITEM_GROUPS+=("$source_scope"); fi
+                    for ((selected_rule=0; selected_rule<${#SELECTED_RULES[@]}; selected_rule++)); do
+                        if [ "${SELECTED_RULES[selected_rule]}" = "${rule_names[i]}" ] &&
+                           [ "${SELECTED_RULE_SOURCES[selected_rule]}" = "$source_scope" ]; then REPO_SELECTED+=("$i"); break; fi
+                    done
+                done
+                menu_status=0
+                choose_skill_repositories 9 'Choose rules' 32 || menu_status=$?
                 SELECTED_RULES=(); SELECTED_RULE_SOURCES=()
-                for i in "${MENU_SELECTED[@]+"${MENU_SELECTED[@]}"}"; do
+                for i in "${REPO_SELECTED[@]+"${REPO_SELECTED[@]}"}"; do
                     SELECTED_RULES+=("${rule_names[i]}"); SELECTED_RULE_SOURCES+=("${rule_sources[i]}")
                 done
+                if [ "$menu_status" -ne 0 ]; then
+                    [ "$menu_status" -eq 2 ] || return "$session_status"
+                    page=tasks; continue
+                fi
                 if [ "${#SELECTED_RULES[@]}" -gt 0 ]; then page=rule_scope; else page=after_rules; fi ;;
             rule_scope)
                 choose_items 7 'Rules: choose scope' 0 0 Global Project || {
