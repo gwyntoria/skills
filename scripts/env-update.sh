@@ -82,7 +82,6 @@ usage() {
     printf 'Usage: %s [options]\n' "$PROGRAM_NAME"
     printf '\n'
     printf 'Options:\n'
-    printf '  -c, --clean  Run brew cleanup after updates\n'
     printf '  -h, --help   Show this help message\n'
 }
 
@@ -92,10 +91,6 @@ usage() {
 parse_args() {
     while [ "$#" -gt 0 ]; do
         case "$1" in
-        -c | --clean)
-            # 有意不用 local：main 要读这个值，再传给 run_tasks。
-            clean_homebrew=1
-            ;;
         -h | --help)
             usage
             return 1
@@ -106,8 +101,6 @@ parse_args() {
             return 2
             ;;
         esac
-
-        shift
     done
 
     return 0
@@ -116,7 +109,7 @@ parse_args() {
 # 执行一个更新任务，把结果追加到 RESULTS。
 #
 # RESULTS 的每条记录是 tab 分隔的三段：<status>\t<name>\t<detail>
-# status 取 ok / fail / skip；detail 在 fail 时是退出码，skip 时是缺失的命令名。
+# status 取 ok / fail / skip；detail 在 fail 时是退出码，skip 时是原因。
 #
 # 前置命令不存在算跳过，不算失败，所以这里始终返回 0。
 run_update() {
@@ -128,7 +121,9 @@ run_update() {
     local rc
 
     shift 2
-    TASK_CURRENT=$((TASK_CURRENT + 1))
+    if [ "${IN_AGENTS:-0}" -eq 0 ]; then
+        TASK_CURRENT=$((TASK_CURRENT + 1))
+    fi
 
     printf '\n'
     printf '%s\n' "=================================================="
@@ -142,7 +137,7 @@ run_update() {
     if ! command -v "$executable" >/dev/null 2>&1; then
         printf '⚠️  Skipped: command '\''%s'\'' not found\n' "$executable"
         status=skip
-        detail="$executable"
+        detail="command '$executable' unavailable in current PATH"
     else
         SECONDS=0
         draw_progress "$TASK_CURRENT" "$TASK_TOTAL" "$name" "Running"
@@ -166,55 +161,187 @@ run_update() {
 
     draw_progress "$TASK_CURRENT" "$TASK_TOTAL" "$name" "$status"
 
-    RESULTS+=("$status"$'\t'"$name"$'\t'"$detail")
+    if [ "${IN_AGENTS:-0}" -eq 1 ]; then
+        AGENT_RESULTS+=("$status"$'\t'"$name"$'\t'"$detail")
+    else
+        RESULTS+=("$status"$'\t'"$name"$'\t'"$detail")
+    fi
 
     # 单个任务失败后继续跑剩下的，让一次运行拿到全部结果。
     return 0
 }
 
-# 按固定顺序跑更新任务。clean_homebrew 为 1 时，在 Homebrew 之后加一步 cleanup。
+# 插件/扩展独立于本体更新；旧版本缺少能力时仅跳过相应项目。
+run_pi_extensions() {
+    local executable="$1" help
+    if [ -n "$executable" ]; then
+        help=$("$executable" update --help 2>/dev/null) || help=
+        if [[ "$help" = *--extensions* ]]; then
+            run_update 'Pi Extensions' "$executable" "$executable" update --extensions
+            return
+        fi
+    fi
+    AGENT_RESULTS+=("skip"$'\t'"Pi Extensions"$'\t'"Pi unavailable or lacks update --extensions")
+}
+
+run_claude_plugins() {
+    local executable="$1" help plugins entries plugin scope rc
+    if [ -z "$executable" ]; then
+        AGENT_RESULTS+=("skip"$'\t'"Claude Plugin Marketplace"$'\t'"Claude unavailable in current PATH")
+        AGENT_RESULTS+=("skip"$'\t'"Claude Plugins"$'\t'"Claude unavailable in current PATH")
+        return
+    fi
+    help=$("$executable" plugin marketplace update --help 2>/dev/null) || help=
+    if [[ "$help" = *'marketplace update'* ]]; then
+        run_update 'Claude Plugin Marketplace' "$executable" "$executable" plugin marketplace update
+    else
+        AGENT_RESULTS+=("skip"$'\t'"Claude Plugin Marketplace"$'\t'"installed Claude lacks marketplace update")
+    fi
+    help=$("$executable" plugin list --help 2>/dev/null) || help=
+    if [[ "$help" != *--json* ]] || ! command -v python3 >/dev/null 2>&1; then
+        AGENT_RESULTS+=("skip"$'\t'"Claude Plugins"$'\t'"requires plugin list --json and Python 3")
+        return
+    fi
+    plugins=$("$executable" plugin list --json)
+    rc=$?
+    if [ "$rc" -ne 0 ]; then
+        AGENT_RESULTS+=("fail"$'\t'"Claude Plugins (list)"$'\t'"$rc")
+        return
+    fi
+    # 只解析官方 JSON，不读取 Claude 私有安装文件；忽略其他项目及非安装型插件。
+    entries=$(python3 -c '
+import json, os, sys
+plugins = json.load(sys.stdin)
+if not isinstance(plugins, list):
+    raise ValueError("expected an array from claude plugin list --json")
+entries = []
+for plugin in plugins:
+    if not isinstance(plugin, dict):
+        raise ValueError("invalid Claude plugin record")
+    scope = plugin.get("scope")
+    if scope not in ("user", "project", "local", "managed"):
+        continue
+    project = plugin.get("projectPath")
+    if scope in ("project", "local"):
+        if not isinstance(project, str) or os.path.realpath(project) != os.path.realpath(os.getcwd()):
+            continue
+    name = plugin.get("id")
+    if not isinstance(name, str) or not name or name.startswith("-") or any(c in name for c in "\t\r\n"):
+        raise ValueError("invalid Claude plugin id")
+    if name.endswith(("@inline", "@skills-dir", "@synced", "@builtin")):
+        continue
+    entry = (name, scope)
+    if entry not in entries:
+        entries.append(entry)
+for name, scope in entries:
+    print(name + "\t" + scope)
+' <<<"$plugins")
+    rc=$?
+    if [ "$rc" -ne 0 ]; then
+        AGENT_RESULTS+=("fail"$'\t'"Claude Plugins (parse list)"$'\t'"$rc")
+        return
+    fi
+    if [ -z "$entries" ]; then
+        AGENT_RESULTS+=("skip"$'\t'"Claude Plugins"$'\t'"no installed plugins in current context")
+        return
+    fi
+    while IFS=$'\t' read -r plugin scope; do
+        run_update "Claude Plugin $plugin [$scope]" "$executable" \
+            "$executable" plugin update "$plugin" --scope "$scope" <&3
+    done 3<&0 <<<"$entries"
+}
+
+run_agents() {
+    local IN_AGENTS=1
+    local -a names=('Codex' 'Claude Code' 'Pi' 'Hermes Agent')
+    local -a commands=(codex claude pi hermes)
+    local -a paths=() reasons=()
+    local i executable help record status name detail
+    local success=0 failed=0 group_status group_detail
+    AGENT_RESULTS=()
+    TASK_CURRENT=$((TASK_CURRENT + 1))
+    printf '\n[%s/%s] Starting: Agents\n' "$TASK_CURRENT" "$TASK_TOTAL"
+    draw_progress "$TASK_CURRENT" "$TASK_TOTAL" Agents Running
+    printf '\nAgent detection (current PATH):\n'
+
+    # 完成全部检测后再开始更新；帮助探针不执行更新。
+    for i in "${!commands[@]}"; do
+        executable=$(command -v "${commands[$i]}")
+        paths[i]="$executable"
+        reasons[i]=
+        if [ -z "$executable" ]; then
+            reasons[i]="command '${commands[$i]}' unavailable in current PATH"
+        else
+            help=$("$executable" --help 2>/dev/null) || help=
+            if ! [[ "$help" =~ (^|$'\n')[[:space:]]*(${commands[$i]}[[:space:]]+)?update([[:space:]|]|$) ]]; then
+                reasons[i]="installed CLI does not advertise 'update'; update manually"
+            elif [ "${commands[$i]}" = pi ]; then
+                help=$("$executable" update --help 2>/dev/null) || help=
+                if [[ "$help" != *--self* ]]; then
+                    reasons[i]='installed Pi lacks update --self; update manually'
+                fi
+            fi
+        fi
+        if [ -n "${reasons[$i]}" ]; then
+            printf '  %s: skipped (%s)\n' "${names[$i]}" "${reasons[$i]}"
+        else
+            printf '  %s: %s\n' "${names[$i]}" "$executable"
+        fi
+    done
+
+    for i in "${!commands[@]}"; do
+        if [ -n "${reasons[$i]}" ]; then
+            AGENT_RESULTS+=("skip"$'\t'"${names[$i]}"$'\t'"${reasons[$i]}")
+            case "${commands[$i]}" in
+            codex) AGENT_RESULTS+=("skip"$'\t'"Codex Plugin Marketplace"$'\t'"${reasons[$i]}") ;;
+            claude) run_claude_plugins "${paths[$i]}" ;;
+            pi) run_pi_extensions "${paths[$i]}" ;;
+            esac
+            continue
+        fi
+        executable="${paths[$i]}"
+        case "${commands[$i]}" in
+        codex)
+            run_update Codex "$executable" "$executable" update
+            run_update 'Codex Plugin Marketplace' "$executable" "$executable" plugin marketplace upgrade ;;
+        claude)
+            run_update 'Claude Code' "$executable" "$executable" update
+            run_claude_plugins "$executable" ;;
+        pi)
+            run_update Pi "$executable" "$executable" update --self
+            run_pi_extensions "$executable" ;;
+        *) run_update "${names[$i]}" "$executable" "$executable" update ;;
+        esac
+    done
+
+    for record in "${AGENT_RESULTS[@]}"; do
+        IFS=$'\t' read -r status name detail <<<"$record"
+        case "$status" in
+        ok) success=$((success + 1)) ;;
+        fail) failed=$((failed + 1)) ;;
+        esac
+    done
+    group_detail=
+    if [ "$failed" -gt 0 ]; then
+        group_status=fail
+        group_detail=1
+    elif [ "$success" -gt 0 ]; then
+        group_status=ok
+    else
+        group_status=skip
+        group_detail='no Agent has a confirmed update method in current PATH'
+    fi
+    RESULTS+=("$group_status"$'\t'"Agents"$'\t'"$group_detail")
+    draw_progress "$TASK_CURRENT" "$TASK_TOTAL" Agents "$group_status"
+}
+
+# 外层固定三个任务；Agent 明细独立于外层计数。
 run_tasks() {
-    local clean_homebrew="$1"
-
     TASK_CURRENT=0
-    TASK_TOTAL=5
-
-    if [ "$clean_homebrew" -eq 1 ]; then
-        TASK_TOTAL=$((TASK_TOTAL + 1))
-    fi
-
-    run_update \
-        "Skills" \
-        "npx" \
-        npx skills update -g -y
-
-    run_update \
-        "Codex" \
-        "codex" \
-        codex update
-
-    run_update \
-        "Codex Plugin Marketplace" \
-        "codex" \
-        codex plugin marketplace upgrade
-
-    run_update \
-        "Claude Code" \
-        "claude" \
-        claude update
-
-    run_update \
-        "Homebrew Packages" \
-        "brew" \
-        brew upgrade
-
-    # cleanup 必须排在 upgrade 之后，所以跟着 Homebrew 一起放在这里。
-    if [ "$clean_homebrew" -eq 1 ]; then
-        run_update \
-            "Homebrew Cleanup" \
-            "brew" \
-            brew cleanup
-    fi
+    TASK_TOTAL=3
+    run_update Skills npx npx skills update -g -y
+    run_agents
+    run_update 'Homebrew Packages' brew brew upgrade
 }
 
 # 把 RESULTS 渲染成尾部汇总。
@@ -245,7 +372,7 @@ report_results() {
             ;;
         skip)
             skipped_count=$((skipped_count + 1))
-            skipped_items+=("  ⚠️  $name: missing $detail")
+            skipped_items+=("  ⚠️  $name: $detail")
             ;;
         esac
     done
@@ -273,6 +400,13 @@ report_results() {
         printf '%s\n' "${skipped_items[@]}"
     fi
 
+    if [ "${#AGENT_RESULTS[@]}" -gt 0 ]; then
+        printf '\nAgent results:\n'
+        for record in "${AGENT_RESULTS[@]}"; do
+            IFS=$'\t' read -r status name detail <<<"$record"
+            printf '  %s: %s%s\n' "$name" "$status" "${detail:+ ($detail)}"
+        done
+    fi
     printf '\n'
 
     if [ "$failed_count" -gt 0 ]; then
@@ -287,7 +421,7 @@ main() {
 
     # RESULTS 是 run_update 和 report_results 之间唯一的交接面。
     RESULTS=()
-    clean_homebrew=0
+    AGENT_RESULTS=()
 
     parse_args "$@"
     parse_rc=$?
@@ -310,7 +444,7 @@ main() {
     printf 'Update started: %s\n' "$(date '+%Y-%m-%d %H:%M:%S')"
     printf '%s\n' "##################################################"
 
-    run_tasks "$clean_homebrew"
+    run_tasks
 
     restore_terminal
     # report_results 的返回值就是脚本的退出码。
