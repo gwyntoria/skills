@@ -76,27 +76,6 @@
 
 规则通过 [`scripts/agent-setup.sh`](scripts/agent-setup.sh) 的交互菜单安装：选择 `Install / Update` → `Rules`，依次多选规则、选择 Global 或 Project 范围。Global 再选择目标 Agent（Codex、Claude Code、Pi 默认全选）；Project 跳过 Agent 选择，直接写入启动目录的 `AGENTS.md`，最后确认安装。规则默认不选；选择页支持 `b` 返回、`q` 退出，并保留勾选与光标。确认页展示资源来源和完整安装路径。规则页按 Waza 和本仓库来源分组列出规则，允许跨范围安装；所选规则统一安装到最后选择的范围，确认页保留原始来源。
 
-```bash
-# 在仓库中打开菜单，可安装规则或安装本地命令
-bash scripts/agent-setup.sh
-
-# 在菜单选择 Install / Update this command 后，在任意项目运行
-cd /path/to/project
-agent-setup
-```
-
-- **技能依赖**：Matt skills 默认全选，勾选时递归补齐依赖，取消依赖会连带取消上层技能；缺少必要依赖的技能不可选。卸载时独立选择。
-- **项目规则**：写入启动命令时当前目录的 `AGENTS.md`，供 Codex、Pi 等 Agent 加载，不另写 `.claude/rules/`，不自动寻找 Git 根目录。
-- **资源来源**：按脚本真实位置优先读取本地资源，缺失时从 GitHub `main` 下载；同一次运行复用，退出清理。远端获取失败不覆盖配置。
-- **命令更新**：`Install / Update this command` 安装到 `~/.local/bin/agent-setup`；仓库内使用当前脚本，独立运行时下载最新版，通过 `bash -n` 后替换，失败保留旧版。
-- **运行依赖**：Bash、cURL；归档解压需要 tar，Waza 目录解析需要 Node.js，clone 兜底需要 Git，skills 安装需要 npx。Node.js 可复用现有 nvm 引导。
-- **Waza 获取**：API 固定提交并读取目录，raw 下载所选正文；失败时自动尝试浅 clone，保持同一提交。复制规则到临时缓存后立即删除 clone 目录，失败或中断也会清理；缓存退出时删除。获取失败可重试、返回或跳过。
-- **规则更新**：Waza 默认不选，标识为 `waza-<规则名>`，支持 H1/H2 标题；重新安装仅更新所选规则，保留未选规则和用户内容，不自动清理旧 `agent-behavior`。
-- **全局标题**：Codex、Pi 的全局 `AGENTS.md` 使用 `# Global Rules` 和二级规则标题，Claude 独立规则文件使用一级标题；子标题同步调整，正文和代码块保留。项目标题行为不变。
-- **Pi 路径**：默认 `~/.pi/agent/AGENTS.md`，可通过 `PI_CODING_AGENT_DIR` 修改，无需登记到 `settings.json`。
-- **全局卸载**：默认选中 Codex、Claude Code、Pi；Pi 仅删除选中的托管规则块。删除前预览并输入 `DELETE`，可选备份，备份失败则停止删除，成功后提供恢复命令。Pi 路径须在 HOME 内，父目录不得经过软链接；规则文件为软链接时仅删除链接。
-- **Agent 安装**：`--agent` 有终端时进入选择与确认，无终端时安装全部三个 CLI。默认全选 Codex、Claude Code、Pi；Claude 附带 statusline，Pi 附带 `npm:pi-web-access`、`npm:pi-subagents`、`npm:pi-powerline-footer`。与 `--skill` 同用时，有终端选择技能，无终端安装全部已配置技能；Skills、Rules、Agent 独立选择。
-
 ## Scripts
 
 [`scripts/`](scripts/) 下是个人环境安装、WSL 配置和仓库维护三类辅助脚本。
