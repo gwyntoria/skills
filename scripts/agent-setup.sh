@@ -2297,9 +2297,9 @@ confirm_backup_removal() {
         printf '  \033[31m%s/%s\033[0m\n' "$HOME" "$name"
     done <<<"$names"
     printf 'This permanently deletes these backups and their restore data. No new backup is created.\n'
-    printf 'Type DELETE to confirm, or press Enter to cancel: '
+    printf 'Confirm removal? [y/N]: '
     IFS= read -r answer || return 0
-    [ "$answer" = DELETE ] || return 0
+    case "$answer" in y | Y) ;; *) return 0 ;; esac
     run_item 'Remove all backups' remove_setup_backups "${backups[@]}"
     print_summary
 }
@@ -2561,10 +2561,10 @@ interactive_setup() {
                 else
                     printf 'No backup will be created.\n'
                 fi
-                printf 'Type DELETE to confirm, or press Enter to cancel (b: back | q: exit): '
+                printf 'Confirm removal? [y/N] (b: back | q: exit): '
                 IFS= read -r answer || return "$session_status"
                 case "$answer" in
-                    DELETE) run_interactive_task removal_inventory remove "$removal_backup" ;;
+                    y | Y) run_interactive_task removal_inventory remove "$removal_backup" ;;
                     q | Q) return "$session_status" ;;
                     b | B) page=remove_backup; continue ;;
                     *) printf 'Cancelled.\n' ;;
