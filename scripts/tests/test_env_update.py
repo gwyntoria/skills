@@ -102,7 +102,7 @@ class EnvUpdateTests(unittest.TestCase):
         self.install('brew')
         result = self.run_script()
         self.assertEqual(result.returncode, 0, self.output)
-        self.assertEqual(self.updates(), [['npx', 'skills', 'update', '-g', '-y'], ['brew', 'upgrade']])
+        self.assertEqual(self.updates(), [['npx', 'skills', 'update', '-g', '-y'], ['brew', 'upgrade', '--no-ask']])
         self.assertIn('Succeeded: 2\nFailed: 0\nSkipped: 1', self.output)
         self.assertIn('Agents: no Agent has a confirmed update method', self.output)
         for name in ('Codex', 'Claude Code', 'Pi', 'Hermes Agent', 'Codex Plugin Marketplace', 'Claude Plugin Marketplace', 'Claude Plugins', 'Pi Extensions'):
@@ -118,7 +118,7 @@ class EnvUpdateTests(unittest.TestCase):
             ['npx', 'skills', 'update', '-g', '-y'], ['codex', 'update'],
             ['codex', 'plugin', 'marketplace', 'upgrade'], ['claude', 'update'],
             ['claude', 'plugin', 'marketplace', 'update'],
-            ['pi', 'update', '--self'], ['pi', 'update', '--extensions'], ['hermes', 'update'], ['brew', 'upgrade'],
+            ['pi', 'update', '--self'], ['pi', 'update', '--extensions'], ['hermes', 'update'], ['brew', 'upgrade', '--no-ask'],
         ])
         self.assertIn('[2/3] Starting: Agents', self.output)
         self.assertIn('[3/3] Starting: Homebrew Packages', self.output)
@@ -134,7 +134,7 @@ class EnvUpdateTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1, self.output)
         self.assertEqual(self.updates(), [
             ['codex', 'update'], ['codex', 'plugin', 'marketplace', 'upgrade'],
-            ['claude', 'update'], ['claude', 'plugin', 'marketplace', 'update'], ['brew', 'upgrade'],
+            ['claude', 'update'], ['claude', 'plugin', 'marketplace', 'update'], ['brew', 'upgrade', '--no-ask'],
         ])
         self.assertIn('Codex: fail (42)', self.output)
         self.assertIn('Failed: 1', self.output)
@@ -145,7 +145,7 @@ class EnvUpdateTests(unittest.TestCase):
         self.env['FAIL_CALL'] = json.dumps(['npx', 'skills', 'update', '-g', '-y'])
         self.assertEqual(self.run_script().returncode, 1, self.output)
         self.assertEqual(self.updates(), [
-            ['npx', 'skills', 'update', '-g', '-y'], ['hermes', 'update'], ['brew', 'upgrade'],
+            ['npx', 'skills', 'update', '-g', '-y'], ['hermes', 'update'], ['brew', 'upgrade', '--no-ask'],
         ])
         self.assertIn('Succeeded: 2\nFailed: 1\nSkipped: 0', self.output)
 
@@ -211,7 +211,7 @@ class EnvUpdateTests(unittest.TestCase):
         self.assertIn('Claude Plugin one@tools [user]: fail (42)', self.output)
         self.assertIn('Claude Plugin two@tools [user]: ok', self.output)
         self.assertIn(['pi', 'update', '--extensions'], self.updates())
-        self.assertEqual(self.updates()[-1], ['brew', 'upgrade'])
+        self.assertEqual(self.updates()[-1], ['brew', 'upgrade', '--no-ask'])
 
     def test_claude_list_errors_are_failures(self):
         self.install('claude')
@@ -242,7 +242,7 @@ class EnvUpdateTests(unittest.TestCase):
         self.assertEqual(self.run_script().returncode, 1, self.output)
         self.assertIn('Pi: ok', self.output)
         self.assertIn('Pi Extensions: fail (42)', self.output)
-        self.assertIn(['brew', 'upgrade'], self.updates())
+        self.assertIn(['brew', 'upgrade', '--no-ask'], self.updates())
 
     def test_pi_extensions_run_when_self_update_unavailable_or_failed(self):
         self.install('pi')

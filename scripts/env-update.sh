@@ -341,7 +341,7 @@ run_tasks() {
     TASK_TOTAL=3
     run_update Skills npx npx skills update -g -y
     run_agents
-    run_update 'Homebrew Packages' brew brew upgrade
+    run_update 'Homebrew Packages' brew brew upgrade --no-ask
 }
 
 # 把 RESULTS 渲染成尾部汇总。
