@@ -1039,6 +1039,20 @@ merge_block() {
         eol=$'\r'
     fi
 
+    # Replacing an existing block in place keeps other blocks and separators
+    # stable, so repeated batch installations compare equal to the current file.
+    if [ -s "$block_file" ] && [ -f "$destination" ] &&
+       grep -qFx -e "$start" -e "$start"$'\r' -- "$destination"; then
+        awk -v start="$start" -v end="$end" '
+            NR == FNR { replacement = replacement $0 "\n"; next }
+            { line = $0; sub(/\r$/, "", line) }
+            line == start { printf "%s", replacement; replacing = 1; next }
+            replacing && line == end { replacing = 0; next }
+            !replacing { print }
+        ' "$block_file" "$destination" >"$output"
+        return $?
+    fi
+
     if [ -f "$destination" ]; then
         awk -v start="$start" -v end="$end" '
             { line = $0; sub(/\r$/, "", line) }
@@ -1209,7 +1223,7 @@ install_claude() {
     fi
 
     if [ -e "$resolved" ] && cmp -s "$resolved" "$body"; then
-        success "already current (claude, $scope): $resolved"
+        success "already installed (claude, $scope): $resolved"
         return 0
     fi
 
@@ -1218,7 +1232,7 @@ install_claude() {
         return 1
     fi
 
-    success "installed (claude, $scope): $resolved"
+    success "installation complete (claude, $scope): $resolved"
     return 0
 }
 
@@ -1334,7 +1348,7 @@ write_managed_block() {
     fi
 
     if [ -f "$resolved" ] && cmp -s "$resolved" "$merged_file"; then
-        success "already current ($target, $scope): $resolved"
+        success "already installed ($target, $scope): $resolved"
         return 0
     fi
 
@@ -1343,7 +1357,7 @@ write_managed_block() {
         return 1
     fi
 
-    success "installed ($target, $scope): $resolved"
+    success "installation complete ($target, $scope): $resolved"
 
     return 0
 }

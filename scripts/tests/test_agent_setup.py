@@ -884,10 +884,68 @@ target.chmod(0o755)
                 result = self.source(command)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(destination.read_bytes(), before)
-                self.assertIn('already current (claude, global)', result.stdout)
+                self.assertIn('already installed (claude, global)', result.stdout)
                 result = self.source('rule_engine waza-example global codex remove')
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(destination.read_text(), '# Global Rules\n\n' + personal)
+
+    def test_repeated_rule_batch_is_already_installed_without_rewriting_shared_files(self):
+        self.waza_bundle(('chinese', 'clarity', 'english'))
+        command = '\n'.join(f'apply_rule waza-{name} global "codex claude pi" install waza'
+                            for name in ('chinese', 'clarity', 'english'))
+        for eol in ('\n', '\r\n'):
+            with self.subTest(eol=repr(eol)):
+                for folder in ('.codex', '.claude', '.pi'):
+                    shutil.rmtree(self.home / folder, ignore_errors=True)
+                shared = [self.home / '.codex/AGENTS.md', self.home / '.pi/agent/AGENTS.md']
+                for target in shared:
+                    target.parent.mkdir(parents=True)
+                    target.write_bytes(('# Global Rules\n\nPersonal notes.\n').replace('\n', eol).encode())
+                first = self.source(command)
+                self.assertEqual(first.returncode, 0, first.stderr)
+                self.assertEqual(first.stdout.count('installation complete ('), 9)
+                targets = shared + list((self.home / '.claude/rules').glob('*.md'))
+                before = {target: (target.read_bytes(), target.stat().st_ino, target.stat().st_mtime_ns)
+                          for target in targets}
+                second = self.source(command)
+                self.assertEqual(second.returncode, 0, second.stderr)
+                self.assertEqual(second.stdout.count('already installed ('), 9, second.stdout)
+                for target, state in before.items():
+                    self.assertEqual((target.read_bytes(), target.stat().st_ino, target.stat().st_mtime_ns), state)
+
+    def test_updating_middle_rule_preserves_order_separators_and_personal_text(self):
+        for eol in (b'\n', b'\r\n'):
+            with self.subTest(eol=eol):
+                self.waza_bundle(('chinese', 'clarity', 'english'))
+                for folder in ('.codex', '.claude', '.pi'):
+                    shutil.rmtree(self.home / folder, ignore_errors=True)
+                targets = [self.home / '.codex/AGENTS.md', self.home / '.pi/agent/AGENTS.md']
+                for target in targets:
+                    target.parent.mkdir(parents=True)
+                    target.write_bytes(b'# Global Rules' + eol + eol + b'Personal notes.' + eol)
+                command = '\n'.join(f'apply_rule waza-{name} global "codex claude pi" install waza'
+                                    for name in ('chinese', 'clarity', 'english'))
+                result = self.source(command)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                before = {}
+                for target in targets:
+                    content = target.read_bytes().replace(
+                        b'<!-- gwyn-space-skills: waza-clarity:end -->' + eol,
+                        b'<!-- gwyn-space-skills: waza-clarity:end -->' + eol + eol
+                        + b'Personal text between rules.' + eol + eol)
+                    content += eol + eol
+                    target.write_bytes(content)
+                    before[target] = content
+                source = Path(self.env['WAZA_FILES']) / 'clarity.md'
+                source.write_text('# clarity\nUpdated clarity body.\n')
+                result = self.source('apply_rule waza-clarity global "codex claude pi" install waza')
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout.count('installation complete ('), 3)
+                for target, content in before.items():
+                    self.assertEqual(target.read_bytes(), content.replace(b'Upstream clarity body.', b'Updated clarity body.'))
+                repeated = self.source(command)
+                self.assertEqual(repeated.returncode, 0, repeated.stderr)
+                self.assertEqual(repeated.stdout.count('already installed ('), 9, repeated.stdout)
 
     def test_global_local_rule_keeps_title_and_project_behavior(self):
         result = self.source('apply_rule c-project global both install project', cwd=self.root)
@@ -1153,7 +1211,7 @@ target.chmod(0o755)
         result = self.source(command)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(destination.read_text(), text)
-        self.assertIn('already current (pi, global)', result.stdout)
+        self.assertIn('already installed (pi, global)', result.stdout)
         destination.write_text(personal + '<!-- gwyn-space-skills: c-project:start -->\n')
         before = destination.read_bytes()
         result = self.source(command)
