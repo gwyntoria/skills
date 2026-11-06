@@ -37,7 +37,21 @@ elif name == 'dpkg-query':
     packages = installed.read_text().splitlines() if installed.exists() else []
     if args[-1] in packages: print('install ok installed')
     else: sys.exit(1)
+elif name == 'gpg':
+    Path(args[args.index('-o') + 1]).write_text('fixture-key')
 elif name == 'apt-cache':
+    if args[:1] == ['madison']:
+        major = os.environ.get('NODE_VERSION', '24')
+        if not os.environ.get('NO_NODE_CANDIDATE'):
+            print('nodejs | ' + major + '.1.0-1nodesource1 | https://deb.nodesource.com/node_' + major + '.x nodistro/main amd64 Packages')
+        if os.environ.get('MADISON_LARGE'):
+            import signal
+            signal.signal(signal.SIGPIPE, signal.SIG_DFL)
+            sys.stdout.flush()
+            row = ('nodejs | ' + major + '.0.0-1nodesource1 | https://deb.nodesource.com/node_' + major + '.x nodistro/main amd64 Packages\n').encode()
+            for _ in range(256): os.write(1, row * 1024)
+        if os.environ.get('MADISON_ERROR'): sys.exit(54)
+        sys.exit(0)
     if args[-1] == '7zip' and os.environ.get('NO_7ZIP'): sys.exit(100)
     if args[-1] == 'lazygit' and os.environ.get('NO_LAZY_APT'): sys.exit(100)
     print('Package: ' + args[-1])
@@ -46,7 +60,19 @@ elif name == 'sudo':
 elif name == 'apt':
     print('fixture: apt ' + ' '.join(args), flush=True)
     if args[0] == 'update' and os.environ.get('FAIL_UPDATE'): sys.exit(41)
+    if args[:2] == ['-s', 'install']:
+        if os.environ.get('APT_REMOVES') or (os.environ.get('APT_REMOVES_NODE') and any(a.startswith('nodejs=') for a in args)):
+            print('Remv libnode-dev [18.0]')
+        sys.exit(0)
     if args[0] == 'install':
+        if any(a.startswith('nodejs=') for a in args):
+            if os.environ.get('FAIL_NODE'): sys.exit(55)
+            directory = Path(os.environ['SYSTEM_NODE_FIXTURE'])
+            for tool in ['node', 'npm']:
+                target = directory / tool
+                target.write_bytes((Path(os.environ['FIXTURE_BIN']) / (tool + '-fixture')).read_bytes())
+                target.chmod(0o755)
+
         if 'zsh' in args:
             if os.environ.get('FAIL_SHELL'): sys.exit(42)
             target = Path(os.environ['FIXTURE_BIN']) / 'zsh'
@@ -94,8 +120,25 @@ elif name in ('7zz', '7z'):
     if os.environ.get('FAIL_7ZIP'): sys.exit(45)
     print('7-Zip fixture')
 elif name == 'node':
-    print('v' + os.environ.get('FIXTURE_NODE_VERSION', '24'))
-elif name in ('brew', 'eza', 'lazygit', 'uv', 'npm', 'git'):
+    if args[:1] == ['-e']:
+        for package, info in json.load(sys.stdin).get('dependencies', {}).items(): print(package + '@' + info['version'])
+        sys.exit(0)
+    print('v' + os.environ.get('NODE_VERSION', '24') + '.1.0')
+elif name == 'npm':
+    config = Path(os.environ['HOME']) / '.npmrc'
+    if args[:3] == ['config', 'get', 'prefix']:
+        prefix = os.environ.get('NPM_CONFIG_PREFIX', '/usr')
+        if config.exists():
+            for line in config.read_text().splitlines():
+                if line.startswith('prefix='): prefix = line[7:]
+        print(prefix)
+    elif args[:3] == ['config', 'set', 'prefix']:
+        if os.environ.get('FAIL_NPM_CONFIG'): sys.exit(61)
+        lines = config.read_text().splitlines() if config.exists() else []
+        config.write_text('\n'.join(l for l in lines if not l.startswith('prefix=')) + '\nprefix=' + args[3] + '\n')
+    elif args[:1] == ['ls']: print(json.dumps({'dependencies': {'old-tool': {'version': '1.2.3'}}}))
+    else: print('9.2.0')
+elif name in ('brew', 'eza', 'lazygit', 'uv', 'git'):
     if name == 'git' and args[:1] == ['clone']:
         if os.environ.get('FAIL_OMZ'): sys.exit(71)
         if os.environ.get('FAIL_PLUGIN') == Path(args[-1]).name: sys.exit(72)
@@ -148,9 +191,11 @@ elif name == 'zsh':
     if args == ['--version']: print('zsh fixture version')
     else: os.execv(os.environ['REAL_ZSH'], [os.environ['REAL_ZSH']] + args)
 elif name == 'curl':
-    url = args[-1]
+    url = next(a for a in args if a.startswith('https://'))
     if os.environ.get('FAIL_DOWNLOAD'): sys.exit(51)
-    if 'starship.rs' in url:
+    if 'nodesource.com' in url:
+        Path(args[args.index('-o') + 1]).write_text('fixture-key')
+    elif 'starship.rs' in url:
         print('mkdir -p "$HOME/.local/bin"')
         print('cp "$FIXTURE_BIN/starship-fixture" "$HOME/.local/bin/starship"')
     elif 'astral.sh' in url:
@@ -234,7 +279,7 @@ class WslSetupTests(unittest.TestCase):
                      'date', 'mktemp', 'mv', 'readlink', 'rm', 'basename', 'bash', 'mkdir', 'install', 'touch', 'head', 'sh', 'env']:
             (self.bin / name).symlink_to(shutil.which(name))
         for name in ['apt', 'apt-cache', 'sudo', 'getent', 'dpkg-query', 'chsh', 'tput',
-                     '7zz', 'curl', 'wget', 'brew', 'git', 'nvm', 'uv']:
+                     '7zz', 'curl', 'wget', 'brew', 'git', 'nvm', 'uv', 'gpg']:
             self.stub(name, STUB)
         self.log = self.root / 'calls.jsonl'
         self.packages = self.root / 'packages'
@@ -249,10 +294,19 @@ class WslSetupTests(unittest.TestCase):
         self.assertEqual(source.count(external_path), 1, 'Refresh the external-path fixture before running installers')
         isolated_script.write_text(source.replace(
             external_path, 'HOMEBREW_BIN=' + shlex.quote(str(self.bin / 'brew'))))
+        self.system_bin = self.root / 'system-bin'
+        self.system_bin.mkdir()
+        source = isolated_script.read_text().replace('SYSTEM_NODE_DIR="/usr/bin"', 'SYSTEM_NODE_DIR=' + shlex.quote(str(self.system_bin)))
+        for variable, basename in [('NODESOURCE_LIST', 'nodesource.list'), ('NODESOURCE_KEY', 'nodesource.gpg'), ('NODESOURCE_PIN', 'nodesource.pin')]:
+            source = re.sub(r'^' + variable + r'=.*$', variable + '=' + shlex.quote(str(self.root / basename)), source, flags=re.M)
+        isolated_script.write_text(source)
+        self.env['SYSTEM_NODE_FIXTURE'] = str(self.system_bin)
+        for tool in ['node', 'npm']:
+            self.stub(tool + '-fixture', STUB)
         shutil.copyfile(SCRIPT.with_name('env-update.sh'), self.root / 'env-update.sh')
         self.env['WIZARD_SCRIPT'] = str(isolated_script)
         self.env.pop('NO_COLOR', None)
-        for key in ['ZSH', 'ZSH_CUSTOM', 'ZDOTDIR']:
+        for key in ['ZSH', 'ZSH_CUSTOM', 'ZDOTDIR', 'NODE_VERSION', 'NPM_CONFIG_PREFIX', 'npm_config_prefix', 'NPM_CONFIG_USERCONFIG', 'npm_config_userconfig']:
             self.env.pop(key, None)
         self.bashrc = self.home / '.bashrc'
         self.zshrc = self.home / '.zshrc'
@@ -488,11 +542,11 @@ class WslSetupTests(unittest.TestCase):
         self.stub('zsh', STUB)
         self.stub('fzf-fixture', STUB)
         self.zshrc.unlink()
-        names = ['git', 'copypath', 'z', 'fzf', 'nvm', 'zsh-autosuggestions',
+        names = ['git', 'copypath', 'z', 'fzf', 'zsh-autosuggestions',
                  'zsh-syntax-highlighting', 'extract']
         output, code = self.confirm(self.choose_only(set(), shell='zsh', plugins=names))
         self.assertEqual(code, 0, output)
-        self.assertIn('安装组件：nvm/Node.js（自动补齐）', output)
+        self.assertNotIn('安装组件：Node.js/npm（apt）', output)
         self.assertIn('fzf 程序（自动补齐）', output)
         self.assertIn(['apt', 'install', '-y', 'fzf'], self.calls())
         for name in names: self.assertIn('[成功] Zsh 插件 ' + name, output)
@@ -505,9 +559,9 @@ class WslSetupTests(unittest.TestCase):
         result = subprocess.run([ZSH_BINARY, '-dfc', 'source "$HOME/.zshrc"; print -l -- $plugins'],
                                 env=self.env, text=True, capture_output=True)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual((self.home / 'nvm-loads').read_text(), 'plugin\n')
+        self.assertFalse((self.home / 'nvm-loads').exists())
         self.assertEqual((self.home / 'plugin-loads').read_text().splitlines(),
-                         ['git', 'copypath', 'z', 'fzf', 'nvm', 'zsh-autosuggestions', 'extract', 'zsh-syntax-highlighting'])
+                         ['git', 'copypath', 'z', 'fzf', 'zsh-autosuggestions', 'extract', 'zsh-syntax-highlighting'])
         before = self.zshrc.read_bytes()
         output, code = self.confirm(self.choose_only(set(), shell='zsh', plugins=names))
         self.assertEqual(code, 0, output)
@@ -543,41 +597,16 @@ class WslSetupTests(unittest.TestCase):
         self.assertEqual((self.home / 'plugin-loads').read_text(), 'custom\nzsh-autosuggestions\n')
         self.assertIn('ZSH_THEME="agnoster"', self.zshrc.read_text())
 
-    def test_zsh_nvm_plugin_and_standalone_startup_each_initialize_once(self):
-        self.dev_fixture()
-        self.stub('zsh', STUB)
-        output, code = self.confirm(self.choose_only(set(), shell='zsh'))
-        self.assertEqual(code, 0, output)
-        nvm = self.home / '.nvm/nvm.sh'
-        nvm.write_text('echo "${FIXTURE_NVM_LOADER:-standalone}" >> "$HOME/nvm-loads"\n' + nvm.read_text())
-        self.zshrc.write_text('export NVM_DIR="$HOME/.nvm"\n'
-                             '[ -s "$NVM_DIR/nvm.sh" ] && \\. "$NVM_DIR/nvm.sh"\n'
-                             'export ZSH="$HOME/.oh-my-zsh"\nplugins=(nvm custom)\n'
-                             'source "$ZSH/oh-my-zsh.sh"\n'
-                             'source "$NVM_DIR/nvm.sh"; export MY_SETTING=preserved\n')
-        for enabled in [True, False]:
-            with self.subTest(plugin=enabled):
-                output, code = self.confirm(self.choose_only({4}, shell='zsh', plugins=['nvm'] if enabled else []))
-                self.assertEqual(code, 0, output)
-                (self.home / 'nvm-loads').unlink(missing_ok=True)
-                result = subprocess.run([ZSH_BINARY, '-dfc', 'source "$HOME/.zshrc"; nvm --version; print -r -- ${MY_SETTING:-MISSING}'],
-                                        env=self.env, text=True, capture_output=True)
-                self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertEqual((self.home / 'nvm-loads').read_text(), ('plugin' if enabled else 'standalone') + '\n')
-                self.assertIn('preserved', result.stdout)
-
     def test_zsh_plugin_failures_skip_dependents_and_continue_independent_plugins(self):
         self.dev_fixture()
         self.stub('zsh', STUB)
         self.stub('fzf-fixture', STUB)
-        self.env.update(FAIL_PLUGIN='zsh-autosuggestions', FAIL_FZF='1', NVM_ERROR='1')
+        self.env.update(FAIL_PLUGIN='zsh-autosuggestions', FAIL_FZF='1')
         output, code = self.confirm(self.choose_only(set(), shell='zsh',
-                                      plugins=['fzf', 'nvm', 'zsh-autosuggestions', 'extract']))
+                                      plugins=['fzf', 'zsh-autosuggestions', 'extract']))
         self.assertEqual(code, 1, output)
         self.assertIn('[失败] fzf', output)
-        self.assertIn('[失败] nvm/Node.js', output)
         self.assertIn('[因依赖失败跳过] Zsh 插件 fzf', output)
-        self.assertIn('[因依赖失败跳过] Zsh 插件 nvm', output)
         self.assertIn('[失败] Zsh 插件 zsh-autosuggestions', output)
         self.assertIn('[成功] Zsh 插件 extract', output)
         self.assertIn('[成功] 默认 shell 切换', output)
@@ -589,7 +618,6 @@ class WslSetupTests(unittest.TestCase):
         self.assertEqual((self.home / 'plugin-loads').read_text(), 'extract\n')
         # Previously configured selected plugins survive a failed retry.
         self.env.pop('FAIL_PLUGIN')
-        self.env.pop('NVM_ERROR')
         output, code = self.confirm(self.choose_only(set(), shell='zsh', plugins=['zsh-autosuggestions']))
         self.assertEqual(code, 0, output)
         plugin = self.home / '.oh-my-zsh/custom/plugins/zsh-autosuggestions/zsh-autosuggestions.plugin.zsh'
@@ -599,38 +627,6 @@ class WslSetupTests(unittest.TestCase):
         output, code = self.confirm(self.choose_only(set(), shell='zsh', plugins=['zsh-autosuggestions']))
         self.assertEqual(code, 1, output)
         self.assertIn('plugins+=(zsh-autosuggestions)', self.zshrc.read_text())
-
-    def test_zsh_plugin_node_dependency_cascades_and_retains_explicit_components(self):
-        self.dev_fixture()
-        self.stub('zsh', STUB)
-        term = self.choose_only({3}, shell='zsh', plugins=['nvm'])
-        term.send(b'b')
-        term.expect('选择安装组件')
-        term.expect('[x] uv/Python')
-        term.expect('[x] nvm/Node.js')
-        term.expect('自动补齐')
-        term.send(b'\x1b[B' * 4 + b' ')
-        term.expect('连带取消 nvm 插件')
-        term.send(b'\r')
-        term.expect('选择 Zsh 插件')
-        term.expect('[ ] nvm')
-        term.send(b'\r')
-        term.expect('确认执行')
-        plan = re.sub(r'\x1b\[[0-9;?]*[a-zA-Z]', '', term.output.decode()).split('安装计划')[-1]
-        self.assertIn('安装组件：uv/Python（手动选择）', plan)
-        self.assertNotIn('安装组件：nvm/Node.js', plan)
-        self.assertNotIn('启用插件：nvm', plan)
-        term.send(b'n\r')
-        self.assertEqual(term.finish(), 0)
-        self.assertFalse(self.calls('chsh'))
-        # Explicit Node survives cancellation of the plugin that also requires it.
-        term = self.choose_only({4}, shell='zsh', plugins=[])
-        term.send(b'\r')
-        term.expect('确认执行')
-        plan = re.sub(r'\x1b\[[0-9;?]*[a-zA-Z]', '', term.output.decode()).split('安装计划')[-1]
-        self.assertIn('安装组件：nvm/Node.js（手动选择）', plan)
-        term.send(b'n\r')
-        self.assertEqual(term.finish(), 0)
 
     def test_zsh_missing_bundled_plugin_is_recovered_without_replacing_framework(self):
         self.stub('zsh', STUB)
@@ -694,7 +690,7 @@ class WslSetupTests(unittest.TestCase):
         screen = re.sub(r'\x1b\[[0-9;?]*[a-zA-Z]', '', term.output.decode()).split('选择 Zsh 插件')[-1]
         rows = re.findall(r'\[x\] ([^ ]+) (已安装|未安装)', screen)
         self.assertEqual(rows, [('git', '已安装'), ('copypath', '已安装'), ('z', '未安装'),
-                               ('fzf', '未安装'), ('nvm', '未安装'),
+                               ('fzf', '未安装'),
                                ('zsh-autosuggestions', '未安装'), ('zsh-syntax-highlighting', '未安装'),
                                ('extract', '未安装')])
         term.send(b'q')
@@ -853,27 +849,6 @@ class WslSetupTests(unittest.TestCase):
         self.assertEqual(term.finish(), 0)
         self.assertFalse(self.calls('apt'))
 
-    def test_fish_adapter_failure_preserves_existing_functions_without_partial_install(self):
-        directory = self.home / '.config/fish/functions'
-        directory.mkdir(parents=True)
-        (directory / 'bass.fish').write_text('function bass; return 1; end\n')
-        (directory / '__bass.py').write_text('# existing helper\n')
-        original = {p.name: p.read_bytes() for p in directory.iterdir()}
-        env = dict(self.env, PATH=os.environ['PATH'])
-        result = subprocess.run(['/bin/bash', '-c',
-                                 'source "$1"; SHELL_PATH="$2"; install_fish_nvm_adapter',
-                                 'fixture', str(SCRIPT), FISH_BINARY], env=env, capture_output=True, text=True)
-        self.assertNotEqual(result.returncode, 0, result.stdout)
-        self.assertEqual({p.name: p.read_bytes() for p in directory.iterdir()}, original)
-        (directory / 'nvm.fish').write_text('# user implementation\n')
-        original['nvm.fish'] = b'# user implementation\n'
-        result = subprocess.run(['/bin/bash', '-c',
-                                 'source "$1"; SHELL_PATH="$2"; install_fish_nvm_adapter',
-                                 'fixture', str(SCRIPT), FISH_BINARY], env=env, capture_output=True, text=True)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn('已有 nvm.fish', result.stderr)
-        self.assertEqual({p.name: p.read_bytes() for p in directory.iterdir()}, original)
-
     def test_missing_fish_is_installed_and_its_config_directory_is_created(self):
         self.stub('fish-fixture', STUB)
         output, code = self.confirm(self.choose_only(set(), shell='fish'))
@@ -969,6 +944,196 @@ class WslSetupTests(unittest.TestCase):
         code = term.finish()
         return re.sub(r'\x1b\[[0-9;?]*[a-zA-Z]', '', term.output.decode()), code
 
+    def test_node_migrates_all_shells_preserving_tools_commands_and_backups(self):
+        self.dev_fixture()
+        self.stub('zsh', STUB)
+        self.stub('fish', STUB)
+        old_nvm = self.home / '.nvm/nvm.sh'
+        old_nvm.write_text('echo loaded >> "$HOME/nvm-loads"\n')
+        self.bashrc.write_text('export NVM_DIR="$HOME/.nvm"\n'
+                              '[ -s "$NVM_DIR/nvm.sh" ] && \\. "$NVM_DIR/nvm.sh"\n'
+                              'source "$NVM_DIR/nvm.sh"; export KEEP_BASH=yes\n')
+        self.zshrc.write_text('plugins=(nvm custom)\n'
+                             '{ if [[ ${_ENV_SETUP_WSL_NVM_PLUGIN:-0} != 1 ]] && (( ! $+functions[nvm] )); then source "$NVM_DIR/nvm.sh"; fi; }; export KEEP_ZSH=yes\n')
+        fishrc = self.home / '.config/fish/config.fish'
+        fishrc.parent.mkdir(parents=True)
+        fishrc.write_text('# >>> env-setup-wsl.sh nvm >>>\n'
+                          'if status is-interactive\n    nvm use --silent default\nend\n'
+                          '# <<< env-setup-wsl.sh nvm <<<\nset -gx KEEP_FISH yes\n')
+        functions = fishrc.parent / 'functions'
+        functions.mkdir()
+        (functions / 'bass.fish').write_text('# user bass\n')
+        self.zshrc.chmod(0o640)
+        originals = {p: p.read_bytes() for p in [self.bashrc, self.zshrc, fishrc]}
+        output, code = self.confirm(self.choose_only({4}))
+        self.assertEqual(code, 0, output)
+        self.assertFalse(self.calls('nvm'))
+        for path, original in originals.items():
+            self.assertEqual(path.with_name(path.name + '.pre-env-setup-wsl.bak').read_bytes(), original)
+        for binary, script in [(str(self.bin / 'bash'), 'source "$HOME/.bashrc"; echo "$KEEP_BASH"'),
+                               (ZSH_BINARY, 'source "$HOME/.zshrc"; echo "$KEEP_ZSH"'),
+                               (FISH_BINARY, 'source "$HOME/.config/fish/config.fish"; echo "$KEEP_FISH"')]:
+            result = subprocess.run([binary, '-c', script], env=self.env, text=True, capture_output=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn('yes', result.stdout)
+        self.assertFalse((self.home / 'nvm-loads').exists())
+        self.assertEqual(old_nvm.read_text(), 'echo loaded >> "$HOME/nvm-loads"\n')
+        self.assertEqual((functions / 'bass.fish').read_text(), '# user bass\n')
+        self.assertEqual(self.zshrc.stat().st_mode & 0o777, 0o640)
+        current = {p: p.read_bytes() for p in originals}
+        output, code = self.confirm(self.choose_only({4}))
+        self.assertEqual(code, 0, output)
+        self.assertEqual({p: p.read_bytes() for p in originals}, current)
+        self.assertIn('prefix=' + str(self.home / '.local'), (self.home / '.npmrc').read_text())
+
+    def test_old_global_tool_inventory_prints_commands_without_reinstall(self):
+        directory = self.home / '.nvm/versions/node/v22.1.0/bin'
+        directory.mkdir(parents=True)
+        for name in ['node', 'npm']:
+            self.stub(name + '-old', STUB)
+            (self.bin / (name + '-old')).rename(directory / name)
+        # The external runtime is simulated here; assert inventory and shell orchestration.
+        for name in ['node', 'npm']:
+            target = directory / name
+            target.write_text('#!' + sys.executable + '\n' + STUB)
+            target.chmod(0o755)
+        output, code = self.confirm(self.choose_only({4}))
+        self.assertEqual(code, 0, output)
+        self.assertIn('npm install -g old-tool@1.2.3', output)
+        self.assertIn(['npm', 'ls', '--global', '--depth=0', '--json'], self.calls())
+        self.assertFalse(any(c[:3] == ['npm', 'install', '-g'] for c in self.calls()))
+        self.assertTrue((directory / 'npm').exists())
+
+    def test_node_migrates_multiline_zsh_plugins_and_retains_lazy_settings(self):
+        self.dev_fixture()
+        self.stub('zsh', STUB)
+        self.stub('fish', STUB)
+        settings = ("zstyle ':omz:plugins:nvm' lazy yes\n"
+                    "zstyle ':omz:plugins:nvm' lazy-cmd pi textlint\n")
+        self.zshrc.write_text('plugins=(\n    git\n    # user comment\n    nvm # old Node loader\n    custom\n)\n' + settings)
+        output, code = self.confirm(self.choose_only({4}, shell='fish'))
+        self.assertEqual(code, 0, output)
+        self.assertIn(settings, self.zshrc.read_text())
+        self.assertIn('# old Node loader', self.zshrc.read_text())
+        loaded = subprocess.run([ZSH_BINARY, '-dfc', 'source "$HOME/.zshrc"; print -l -- $plugins'],
+                                env=self.env, text=True, capture_output=True)
+        self.assertEqual(loaded.returncode, 0, loaded.stderr)
+        self.assertEqual(loaded.stdout.splitlines(), ['git', 'custom'])
+        original = self.zshrc.read_bytes()
+        output, code = self.confirm(self.choose_only({4}, shell='fish'))
+        self.assertEqual(code, 0, output)
+        self.assertEqual(self.zshrc.read_bytes(), original)
+
+    def test_node_custom_multiline_zsh_plugin_logic_still_blocks_migration(self):
+        self.stub('zsh', STUB)
+        self.zshrc.write_text('plugins=(\n    nvm\n    "$CUSTOM_PLUGIN"\n)\n')
+        original = self.zshrc.read_bytes()
+        output, code = self.confirm(self.choose_only({4}))
+        self.assertEqual(code, 1, output)
+        self.assertEqual(self.zshrc.read_bytes(), original)
+        self.assertIn('先修复 npm 目录 / nvm 启动迁移', output)
+        self.assertFalse(self.calls('chsh'))
+
+    def test_node_invalid_version_rejected_before_any_installation(self):
+        for value in ['lts/*', '24.1.0', '0', '24;touch /tmp/unwanted']:
+            with self.subTest(value=value):
+                result = subprocess.run(['/bin/bash', self.env['WIZARD_SCRIPT']],
+                                        env=dict(self.env, NODE_VERSION=value), text=True, capture_output=True)
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertIn('仅接受主版本号', result.stderr)
+                self.assertFalse(self.calls())
+
+    def test_node_prefix_conflict_preserves_configuration_and_skips_install(self):
+        self.dev_fixture()
+        config = self.home / '.npmrc'
+        config.write_text('prefix=/custom/npm\nregistry=https://example.invalid\n')
+        output, code = self.confirm(self.choose_only({4}))
+        self.assertEqual(code, 1, output)
+        self.assertIn('已有自定义 npm prefix', output)
+        self.assertEqual(config.read_text(), 'prefix=/custom/npm\nregistry=https://example.invalid\n')
+        self.assertFalse(self.calls('apt'))
+        self.assertFalse(self.calls('curl'))
+
+    def test_node_source_conflict_preserves_existing_source(self):
+        source = self.root / 'nodesource.sources'
+        source.write_text('Types: deb\nURIs: https://deb.nodesource.com/node_22.x\n')
+        output, code = self.confirm(self.choose_only({4}))
+        self.assertEqual(code, 1, output)
+        self.assertIn('已有其他 NodeSource 源', output)
+        self.assertIn('node_22.x', source.read_text())
+        self.assertFalse(self.calls('apt'))
+
+    def test_node_apt_removal_stops_and_rolls_back_new_source(self):
+        self.dev_fixture()
+        self.env['APT_REMOVES_NODE'] = '1'
+        self.bashrc.write_text('source "$NVM_DIR/nvm.sh"\n')
+        output, code = self.confirm(self.choose_only({4}))
+        self.assertEqual(code, 1, output)
+        self.assertIn('apt 需要移除现有软件包', output)
+        self.assertFalse(any(c[:4] == ['apt', 'install', '--no-remove', '-y'] and any(a.startswith('nodejs=') for a in c) for c in self.calls('apt')))
+        self.assertFalse((self.root / 'nodesource.list').exists())
+        self.assertFalse((self.root / 'nodesource.gpg').exists())
+        self.assertFalse((self.root / 'nodesource.pin').exists())
+        self.assertIn('source "$NVM_DIR/nvm.sh"', self.bashrc.read_text())
+        self.assertFalse((self.home / '.npmrc').exists())
+
+    def test_node_large_madison_output_preserves_first_candidate_without_sigpipe(self):
+        self.env['MADISON_LARGE'] = '1'
+        output, code = self.confirm(self.choose_only({4}))
+        self.assertEqual(code, 0, output)
+        self.assertIn(['apt', 'install', '--no-remove', '-y', 'nodejs=24.1.0-1nodesource1'], self.calls())
+        self.assertIn('[成功] Node.js/npm（apt）', output)
+
+    def test_node_madison_error_propagates_after_printing_candidate(self):
+        self.env['MADISON_ERROR'] = '1'
+        output, code = self.confirm(self.choose_only({4}))
+        self.assertEqual(code, 1, output)
+        self.assertIn('失败（退出码 54）', output)
+        self.assertIn('[失败] Node.js/npm（apt）', output)
+        self.assertFalse(any(any(a.startswith('nodejs=') for a in c) for c in self.calls('apt')))
+        self.assertFalse((self.root / 'nodesource.list').exists())
+
+    def test_node_missing_candidate_does_not_fall_back_or_change_nvm(self):
+        self.env['NO_NODE_CANDIDATE'] = '1'
+        self.bashrc.write_text('source "$NVM_DIR/nvm.sh"\n')
+        output, code = self.confirm(self.choose_only({4}))
+        self.assertEqual(code, 1, output)
+        self.assertIn('无 Node.js 24 候选版本', output)
+        self.assertFalse((self.root / 'nodesource.list').exists())
+        self.assertFalse((self.root / 'nodesource.gpg').exists())
+        self.assertFalse((self.root / 'nodesource.pin').exists())
+        self.assertIn('source "$NVM_DIR/nvm.sh"', self.bashrc.read_text())
+
+    def test_node_unknown_nvm_loader_blocks_migration_before_prefix_change(self):
+        self.zshrc.write_text('if [[ -n "$CUSTOM" ]]; then source "$NVM_DIR/nvm.sh"; fi\n')
+        original = self.zshrc.read_bytes()
+        output, code = self.confirm(self.choose_only({4}))
+        self.assertEqual(code, 1, output)
+        self.assertIn('请手动检查 nvm 自定义加载', output)
+        self.assertEqual(self.zshrc.read_bytes(), original)
+        self.assertFalse((self.home / '.npmrc').exists())
+        self.assertFalse(self.calls('chsh'))
+        self.assertTrue((self.root / 'nodesource.list').exists())
+        self.assertFalse(list(self.home.glob('.node-migration.*')))
+        self.assertFalse(list(self.home.glob('.node-migration.*.nvm.*')))
+
+    def test_node_npm_config_failure_preserves_nvm_startup(self):
+        self.env['FAIL_NPM_CONFIG'] = '1'
+        self.bashrc.write_text('source "$NVM_DIR/nvm.sh"; export KEEP=yes\n')
+        output, code = self.confirm(self.choose_only({4}))
+        self.assertEqual(code, 1, output)
+        self.assertIn('[失败] npm 目录 / nvm 启动迁移', output)
+        self.assertIn('source "$NVM_DIR/nvm.sh"; export KEEP=yes', self.bashrc.read_text())
+        self.assertFalse(self.calls('chsh'))
+
+    def test_unselected_node_keeps_existing_nvm(self):
+        self.bashrc.write_text('source "$NVM_DIR/nvm.sh"\n')
+        output, code = self.confirm(self.choose_only(set()))
+        self.assertEqual(code, 0, output)
+        self.assertIn('source "$NVM_DIR/nvm.sh"', self.bashrc.read_text())
+        self.assertFalse(self.calls('apt'))
+        self.assertFalse((self.home / '.npmrc').exists())
+
     def test_requested_versions_installed_and_activated_with_profiles_untouched(self):
         self.dev_fixture()
         (self.bin / 'uv').unlink()
@@ -979,12 +1144,13 @@ class WslSetupTests(unittest.TestCase):
         output, code = self.confirm(self.choose_only({3, 4}))
         self.assertEqual(code, 0, output)
         self.assertIn(['uv', 'python', 'install', '3.13'], self.calls())
-        self.assertIn(['nvm', 'install', '22'], self.calls())
-        self.assertIn(['nvm', 'alias', 'default', '22'], self.calls())
-        self.assertIn(['nvm', 'use', '22'], self.calls())
+        self.assertIn(['apt', 'install', '--no-remove', '-y', 'nodejs=22.1.0-1nodesource1'], self.calls())
+        self.assertFalse(self.calls('nvm'))
+        self.assertIn('node_22.x', (self.root / 'nodesource.list').read_text())
+        self.assertIn('Pin-Priority: 600', (self.root / 'nodesource.pin').read_text())
         self.assertEqual(profile.read_text(), '# keep profile\n')
         self.assertEqual(self.zshrc.read_text(), '# untouched zsh\n')
-        self.assertIn('NVM_DIR', self.bashrc.read_text())
+        self.assertNotIn('NVM_DIR', self.bashrc.read_text())
 
     def test_existing_brew_shellenv_exposes_installed_eza_without_reinstall(self):
         self.dev_fixture()
@@ -1047,7 +1213,7 @@ class WslSetupTests(unittest.TestCase):
         output, code = self.confirm(term)
         self.assertEqual(code, 1, output)
         self.assertIn('[因依赖失败跳过] uv/Python', output)
-        self.assertIn('[成功] nvm/Node.js', output)
+        self.assertIn('[失败] Node.js/npm（apt）', output)
         self.assertFalse(self.calls('curl'))
         self.assertTrue(self.calls('chsh'))
 
@@ -1075,7 +1241,7 @@ class WslSetupTests(unittest.TestCase):
         output, code = self.confirm(self.choose_only({3, 4}))
         self.assertEqual(code, 1, output)
         self.assertIn('[失败] uv/Python', output)
-        self.assertIn('[失败] nvm/Node.js', output)
+        self.assertIn('[失败] Node.js/npm（apt）', output)
         self.assertNotIn('NVM_DIR', self.bashrc.read_text())
         self.assertNotIn(['nvm', 'use', 'lts/*'], self.calls())
         original = self.bashrc.read_text().replace('# 目标 shell', 'export KEEP_INIT=1\n# 目标 shell')
@@ -1085,27 +1251,6 @@ class WslSetupTests(unittest.TestCase):
         self.assertIn('export KEEP_INIT=1', self.bashrc.read_text())
         self.assertNotIn('NVM_DIR', self.bashrc.read_text())
         self.assertTrue(self.calls('chsh'))
-
-    def test_installed_node_request_is_activated_and_other_nvm_errors_propagate(self):
-        self.dev_fixture()
-        self.env['NODE_VERSION'] = '20'
-        output, code = self.confirm(self.choose_only({4}))
-        self.assertEqual(code, 0, output)
-        self.assertIn(['nvm', 'version', '20'], self.calls())
-        self.assertIn(['nvm', 'use', '20'], self.calls())
-        self.assertIn(['nvm', 'alias', 'default', '20'], self.calls())
-        self.assertIn('node: v20', output.split('可用工具版本')[-1])
-        reopened = subprocess.run(['/bin/bash', '--noprofile', '--rcfile', str(self.bashrc),
-                                   '-ic', 'node --version'], env=self.env,
-                                  capture_output=True, text=True, timeout=5)
-        self.assertEqual(reopened.returncode, 0, reopened.stderr)
-        self.assertIn('v20', reopened.stdout)
-        self.assertFalse(any(c[:2] == ['nvm', 'install'] for c in self.calls()))
-        self.env['NVM_ERROR'] = '1'
-        before = len(self.calls())
-        output, code = self.confirm(self.choose_only({4}))
-        self.assertEqual(code, 1, output)
-        self.assertFalse(any(c[:2] == ['nvm', 'install'] for c in self.calls()[before:]))
 
     def test_successful_development_configuration_is_idempotent(self):
         self.dev_fixture()
@@ -1118,7 +1263,7 @@ class WslSetupTests(unittest.TestCase):
         self.assertEqual(self.bashrc.read_bytes(), original)
         self.assertEqual(self.bashrc.stat().st_mode & 0o777, 0o640)
         self.assertEqual(self.bashrc.read_text().count('alias ls='), 1)
-        self.assertEqual(self.bashrc.read_text().count('. "$NVM_DIR/nvm.sh"'), 1)
+        self.assertEqual(self.bashrc.read_text().count('. "$NVM_DIR/nvm.sh"'), 0)
 
     def test_apt_lazygit_does_not_enable_unselected_homebrew(self):
         self.dev_fixture()
@@ -1133,7 +1278,7 @@ class WslSetupTests(unittest.TestCase):
         self.bashrc.write_text('export NVM_DIR="$HOME/.nvm"\n[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" # user init\n')
         output, code = self.confirm(self.choose_only({4}))
         self.assertEqual(code, 0, output)
-        self.assertEqual(self.bashrc.read_text().count('. "$NVM_DIR/nvm.sh"'), 1)
+        self.assertEqual(self.bashrc.read_text().count('. "$NVM_DIR/nvm.sh"'), 0)
         self.assertIn('# user init', self.bashrc.read_text())
 
     def test_existing_local_uv_is_reused_when_not_on_inherited_path(self):
@@ -1157,9 +1302,9 @@ class WslSetupTests(unittest.TestCase):
         term.send(b'\x1b[B' * 4 + b' ')
         output, code = self.confirm(term)
         self.assertEqual(code, 0, output)
-        self.assertIn('自动补齐', output)
+        self.assertNotIn('安装组件：系统基础包', output)
         self.assertTrue(self.calls('apt'))
-        self.assertIn(['nvm', 'install', 'lts/*'], self.calls())
+        self.assertIn(['apt', 'install', '--no-remove', '-y', 'nodejs=24.1.0-1nodesource1'], self.calls())
 
     def test_successful_brew_reconfiguration_replaces_previous_managed_path(self):
         self.dev_fixture()
@@ -1207,7 +1352,7 @@ class WslSetupTests(unittest.TestCase):
         term.expect('[x] Homebrew/eza')
         term.expect('[x] lazygit')
         term.expect('[x] uv/Python')
-        term.expect('[x] nvm/Node.js')
+        term.expect('[x] Node.js/npm（apt）')
         term.send(b'\x1b[B' * 8 + b' \x1b[A \x1b[A \x1b[A ')
         term.send(b'\r')
         term.expect('确认执行')
@@ -1215,12 +1360,15 @@ class WslSetupTests(unittest.TestCase):
         term.expect('安装结果')
         self.assertEqual(term.finish(), 0, term.output.decode())
         config = self.bashrc.read_text()
-        for expected in ['brew shellenv', 'alias ls=', 'alias la=', '.local/bin', 'NVM_DIR', 'bash_completion']:
+        for expected in ['brew shellenv', 'alias ls=', 'alias la=', '.local/bin']:
             self.assertIn(expected, config)
         self.assertTrue((self.home / '.local/bin/toria-update').is_file())
         self.assertIn('set completion-ignore-case on', (self.home / '.inputrc').read_text())
         self.assertEqual(self.zshrc.read_text(), '# untouched zsh\n')
-        self.assertFalse(self.calls('curl'))
+        self.assertTrue(self.calls('curl'))
+        self.assertTrue(all('nodesource.com' in ' '.join(c) for c in self.calls('curl')))
+        self.assertNotIn('NVM_DIR', config)
+        self.assertNotIn('bash_completion', config)
 
     def test_cancel_confirmation_does_not_modify_environment(self):
         term = self.terminal()

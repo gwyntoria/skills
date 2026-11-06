@@ -19,7 +19,11 @@ PROGRAM_NAME="${0##*/}"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
 PYTHON_VERSION="${PYTHON_VERSION:-3.14}"
-NODE_VERSION="${NODE_VERSION:-lts/*}"
+NODE_VERSION="${NODE_VERSION:-24}"
+SYSTEM_NODE_DIR="/usr/bin"
+NODESOURCE_LIST="/etc/apt/sources.list.d/nodesource.list"
+NODESOURCE_KEY="/usr/share/keyrings/nodesource.gpg"
+NODESOURCE_PIN="/etc/apt/preferences.d/nodesource"
 
 HOMEBREW_BIN="/home/linuxbrew/.linuxbrew/bin/brew"
 
@@ -66,7 +70,7 @@ ORIGINAL_SHELL=""
 STEP_LABELS=() STEP_STATES=() STEP_REMEDIES=() STEP_CODES=()
 readonly STEP_BREW=4 STEP_LAZYGIT=5 STEP_UV=6 STEP_NODE=7
 readonly STEP_USER_BIN=8 STEP_COMPLETION=9 STEP_LAZY_BREW=10
-readonly STEP_OMZ=14 STEP_FZF=15 STEP_PLUGIN_BASE=16 STEP_STARSHIP=24 STEP_FISH_NVM=25
+readonly STEP_OMZ=14 STEP_FZF=15 STEP_PLUGIN_BASE=16 STEP_STARSHIP=24 STEP_NODE_MIGRATION=25
 
 # ------------------------------------------------------------
 # Output helpers
@@ -307,12 +311,12 @@ backup_shell_config() (
 usage() {
     printf '用法：%s [选项]\n' "$PROGRAM_NAME"
     printf '\n交互式 Fish/Zsh/Bash 环境配置：选择 shell 和组件，确认后安装并设置默认 shell。\n'
-    printf '可选：系统基础包、Homebrew/eza、lazygit、uv/Python、nvm/Node.js、Starship、fzf。\n'
+    printf '可选：系统基础包、Homebrew/eza、lazygit、uv/Python、Node.js/npm（apt）、Starship、fzf。\n'
     printf '\n选项：\n  -h, --help       显示帮助（无需交互终端）\n'
     printf '\n配置备份：写入前先在配置文件同目录留下 <配置名>.pre-env-setup-wsl.bak（安装前原件，仅一份）\n'
     printf '和 <配置名>.env-setup-wsl.bak-<UTC 时间戳>（每次改动各一份），并打印对应的恢复命令。\n'
     printf '\n安装需要交互终端；NO_COLOR 可禁用颜色，不提供无人值守安装参数。\n'
-    printf '保留版本环境变量：PYTHON_VERSION=3.14、NODE_VERSION=lts/*。\n'
+    printf '保留版本环境变量：PYTHON_VERSION=3.14、NODE_VERSION=24（仅主版本号）。\n'
 }
 
 # 解析命令行选项。
@@ -480,47 +484,271 @@ install_python() {
     uv python list --only-installed
 }
 
-install_nvm() {
-    export NVM_DIR
-    if [ ! -s "$NVM_DIR/nvm.sh" ]; then
-        curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.6/install.sh |
-            PROFILE=/dev/null NODE_VERSION='' bash
+# --no-remove also protects against changes between simulation and installation.
+apt_install_without_removal() {
+    local simulation
+    simulation=$(LC_ALL=C sudo apt -s install "$@") || return "$?"
+    printf '%s\n' "$simulation"
+    if [[ "$simulation" == *$'\nRemv '* || "$simulation" == Remv\ * ]]; then
+        printf '错误：apt 需要移除现有软件包，请手动处理冲突。\n' >&2
+        return 1
     fi
-    [ -s "$NVM_DIR/nvm.sh" ]
-    # shellcheck disable=SC1090
-    source "$NVM_DIR/nvm.sh"
-    nvm --version
-    install_node
+    sudo apt install --no-remove -y "$@"
 }
 
-install_node() {
-    local installed_version
-    local version_status
-
-    printf '检查 Node.js %s\n' "$NODE_VERSION"
-
-    # nvm 用 N/A 和退出码 3 表示未安装；其他错误仍向调用者传播。
-    if installed_version="$(nvm version "$NODE_VERSION")"; then
-        :
-    else
-        version_status="$?"
-        if [ "$version_status" -ne 3 ] || [ "$installed_version" != "N/A" ]; then
-            return "$version_status"
+check_npm_prefix() {
+    local prefix
+    if [ "${NPM_CONFIG_USERCONFIG:-${npm_config_userconfig:-$HOME/.npmrc}}" != "$HOME/.npmrc" ]; then
+        printf '错误：npm 使用自定义 userconfig，保留配置，请手动处理。\n' >&2
+        return 1
+    fi
+    if [ -n "${NPM_CONFIG_PREFIX:-${npm_config_prefix:-}}" ]; then
+        prefix="${NPM_CONFIG_PREFIX:-$npm_config_prefix}"
+        if [ "$prefix" != "$HOME/.local" ]; then
+            printf '错误：npm prefix 环境变量为 %s，保留原值，请手动处理。\n' "$prefix" >&2
+            return 1
         fi
     fi
-
-    if [ "$installed_version" != "N/A" ]; then
-        printf 'Node.js 已安装：%s\n' "$installed_version"
-    else
-        nvm install "$NODE_VERSION" || return "$?"
+    if command_exists npm; then
+        prefix=$(npm config get prefix) || return "$?"
+        case "$prefix" in
+        "$HOME/.local"|/usr|/usr/local|"$NVM_DIR"/*) ;;
+        *) printf '错误：已有自定义 npm prefix：%s，保留配置，请手动处理。\n' "$prefix" >&2; return 1 ;;
+        esac
     fi
-
-    nvm use "$NODE_VERSION" || return "$?"
-    node --version
-    npm --version
-    # Persist the verified request: run_step's active version dies with its subshell.
-    nvm alias default "$NODE_VERSION"
 }
+
+install_node() (
+    local staging version source_line existing_source created_list=0 created_key=0 created_pin=0 committed=0
+    check_npm_prefix
+    staging=$(mktemp -d)
+    trap 'if [ "$committed" -eq 0 ]; then
+        [ "$created_list" -eq 0 ] || sudo rm -f -- "$NODESOURCE_LIST"
+        [ "$created_key" -eq 0 ] || sudo rm -f -- "$NODESOURCE_KEY"
+        [ "$created_pin" -eq 0 ] || sudo rm -f -- "$NODESOURCE_PIN"
+    fi
+    rm -rf -- "$staging"' EXIT
+    printf -v source_line 'deb [signed-by=%s] https://deb.nodesource.com/node_%s.x nodistro main' "$NODESOURCE_KEY" "$NODE_VERSION"
+    printf '%s\n' "$source_line" >"$staging/nodesource.list"
+    printf 'Package: nodejs\nPin: origin deb.nodesource.com\nPin-Priority: 600\n' >"$staging/nodesource.pin"
+    if [ -e "$NODESOURCE_PIN" ] && ! cmp -s "$NODESOURCE_PIN" "$staging/nodesource.pin"; then
+        printf '错误：已有不同的 NodeSource 优先级配置，保留文件：%s\n' "$NODESOURCE_PIN" >&2
+        return 1
+    fi
+    if [ -e "$NODESOURCE_LIST" ] && ! cmp -s "$NODESOURCE_LIST" "$staging/nodesource.list"; then
+        printf '错误：已有不同的 NodeSource 源配置，保留文件：%s\n' "$NODESOURCE_LIST" >&2
+        return 1
+    fi
+    for existing_source in "${NODESOURCE_LIST%/*}"/*.list "${NODESOURCE_LIST%/*}"/*.sources; do
+        [ -f "$existing_source" ] || continue
+        [ "$existing_source" != "$NODESOURCE_LIST" ] || continue
+        if grep -Ev '^[[:space:]]*#' "$existing_source" | grep -q 'deb.nodesource.com'; then
+            printf '错误：已有其他 NodeSource 源，保留配置：%s\n' "$existing_source" >&2
+            return 1
+        fi
+    done
+    sudo apt update
+    apt_install_without_removal curl gnupg ca-certificates
+    curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key -o "$staging/key.asc"
+    gpg --batch --yes --dearmor -o "$staging/nodesource.gpg" "$staging/key.asc"
+    if [ -e "$NODESOURCE_KEY" ]; then
+        if ! cmp -s "$NODESOURCE_KEY" "$staging/nodesource.gpg"; then
+            printf '错误：已有不同的 NodeSource 密钥，保留文件：%s\n' "$NODESOURCE_KEY" >&2
+            return 1
+        fi
+    else
+        created_key=1
+        sudo install -m 644 "$staging/nodesource.gpg" "$NODESOURCE_KEY"
+    fi
+    if [ ! -e "$NODESOURCE_LIST" ]; then
+        created_list=1
+        sudo install -m 644 "$staging/nodesource.list" "$NODESOURCE_LIST"
+    fi
+    if [ ! -e "$NODESOURCE_PIN" ]; then
+        created_pin=1
+        sudo install -m 644 "$staging/nodesource.pin" "$NODESOURCE_PIN"
+    fi
+    sudo apt update
+    # Drain all output: an early awk exit can SIGPIPE apt-cache under pipefail.
+    # Select the first exact package version from NodeSource, never a distro fallback.
+    version=$(apt-cache madison nodejs | awk -F '|' -v major="$NODE_VERSION" '
+        $3 ~ /https:\/\/deb[.]nodesource[.]com\/node_/ {
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2)
+            if (!selected && index($2, major ".") == 1) { print $2; selected=1 }
+        }')
+    if [ -z "$version" ]; then
+        printf '错误：NodeSource 中无 Node.js %s 候选版本。\n' "$NODE_VERSION" >&2
+        return 1
+    fi
+    apt_install_without_removal "nodejs=$version"
+    [[ "$("$SYSTEM_NODE_DIR/node" --version)" == "v$NODE_VERSION."* ]]
+    PATH="$SYSTEM_NODE_DIR:$PATH" "$SYSTEM_NODE_DIR/npm" --version
+    # Installation succeeded; retain its source even if later user configuration fails.
+    committed=1
+    printf 'Node.js/npm 已安装；apt 源：%s；密钥：%s；优先级：%s\n' "$NODESOURCE_LIST" "$NODESOURCE_KEY" "$NODESOURCE_PIN"
+)
+
+report_old_node_tools() (
+    local executable directory inventory specifications specification
+    for executable in "$NVM_DIR"/versions/node/*/bin/npm; do
+        [ -x "$executable" ] || continue
+        directory=${executable%/*}
+        printf '\n旧 nvm 全局工具（%s，保留，不自动重装）：\n' "$directory"
+        if ! inventory=$(PATH="$directory:$PATH" "$executable" ls --global --depth=0 --json); then
+            printf '清单读取失败，请手动核对。\n'; continue
+        fi
+        if ! specifications=$(printf '%s' "$inventory" | "$directory/node" -e '
+            let input = "";
+            process.stdin.on("data", chunk => input += chunk);
+            process.stdin.on("end", () => {
+                const packages = JSON.parse(input).dependencies || {};
+                for (const [name, info] of Object.entries(packages)) {
+                    if (info.version) console.log(name + "@" + info.version);
+                }
+            });'); then
+            printf '清单解析失败，请手动核对。\n'; continue
+        fi
+        while IFS= read -r specification; do
+            [ -n "$specification" ] || continue
+            printf '重装命令（迁移后按需执行）：npm install -g %q\n' "$specification"
+        done <<<"$specifications"
+    done
+)
+
+# Edit staged copies only; keep unknown shell logic for manual inspection.
+disable_nvm_startup() {
+    local file="$1" language="$2" staging
+    remove_managed_block '# >>> env-setup-wsl.sh nvm >>>' '# <<< env-setup-wsl.sh nvm <<<' "$file"
+    remove_managed_block '# >>> env-setup-wsl.sh plugin-nvm >>>' '# <<< env-setup-wsl.sh plugin-nvm <<<' "$file"
+    remove_managed_block '# >>> env-setup-wsl.sh nvm-owner >>>' '# <<< env-setup-wsl.sh nvm-owner <<<' "$file"
+    staging=$(mktemp "${file}.nvm.XXXXXX")
+    local result=0
+    awk -v language="$language" -v original="${3:-$file}" '
+        function without_nvm(text, token) {
+            while (match(text, /(^|[[:space:](])nvm([[:space:])]|$)/)) {
+                token=substr(text,RSTART,RLENGTH)
+                sub(/nvm/, "", token)
+                text=substr(text,1,RSTART-1) token substr(text,RSTART+RLENGTH)
+            }
+            return text
+        }
+        /^[[:space:]]*#/ { print; next }
+        language == "zsh" && in_plugins {
+            if ($0 ~ /^[[:space:]]*\)[[:space:]]*(#.*)?$/) {
+                in_plugins=0; print; next
+            }
+            if ($0 ~ /^[[:space:]]*$/ || $0 ~ /^[[:space:]]*([a-zA-Z0-9_-]+[[:space:]]+)*[a-zA-Z0-9_-]+([[:space:]]+#.*)?[[:space:]]*$/) {
+                comment=""; code=$0
+                if (match(code, /[[:space:]]+#/)) {
+                    comment=substr(code,RSTART); code=substr(code,1,RSTART-1)
+                }
+                print without_nvm(code) comment; next
+            }
+            print "请手动检查 Zsh 插件列表：" original ":" FNR ": " $0 > "/dev/stderr"
+            unresolved=1; print; next
+        }
+        language == "zsh" && /^[[:space:]]*plugins=\([[:space:]]*(#.*)?$/ {
+            in_plugins=1; print; next
+        }
+        # These static settings do not load nvm once its plugin is removed.
+        language == "zsh" && /^[[:space:]]*zstyle ["\047]:omz:plugins:nvm["\047] lazy(-cmd)? [a-zA-Z0-9_ .\/-]+([[:space:]]+#.*)?[[:space:]]*$/ {
+            print; next
+        }
+        # Exact wrapper emitted by the previous installer; retain trailing user commands.
+        /^[[:space:]]*(\[ -[rs] "\$NVM_DIR\/nvm.sh" \] && )?\{ if/ && index($0, "{ if [[ ${_ENV_SETUP_WSL_NVM_PLUGIN:-0} != 1 ]] && (( ! $+functions[nvm] )); then ") {
+            gsub(/if \[\[ \$\{_ENV_SETUP_WSL_NVM_PLUGIN:-0\} != 1 \]\] && \(\( ! \$\+functions\[nvm\] \)\)/, "if false")
+            print; next
+        }
+        /^[[:space:]]*(\[ -[rs] "\$NVM_DIR\/nvm.sh" \] && )?\{ if false; then / { print; next }
+        language == "zsh" && /^[[:space:]]*plugins=\([a-zA-Z0-9_ -]*\)[[:space:]]*$/ {
+            print without_nvm($0); next
+        }
+        language == "fish" && /^[[:space:]]*nvm use (--silent )?default[[:space:]]*$/ {
+            print "# env-setup-wsl.sh disabled: " $0; next
+        }
+        language != "fish" {
+            if ($0 ~ /^[[:space:]]*(\[ [!-]*[[:space:]]*-[rs] "\$NVM_DIR\/(nvm.sh|bash_completion)" \] (&&|\|\|) )?(source|[.]|\\[.]) "\$NVM_DIR\/(nvm.sh|bash_completion)"([[:space:]]*;|[[:space:]]*(#.*)?$)/) {
+                sub(/^[[:space:]]*(\[ [!-]*[[:space:]]*-[rs] "\$NVM_DIR\/(nvm.sh|bash_completion)" \] (&&|\|\|) )?(source|[.]|\\[.]) "\$NVM_DIR\/(nvm.sh|bash_completion)"/, ":")
+                if ($0 ~ /(source|[.]|\\[.]) "\$NVM_DIR\/(nvm.sh|bash_completion)"/) {
+                    print "请手动检查同一行的多个 nvm 加载：" original ":" FNR > "/dev/stderr"
+                    unresolved=1
+                }
+                print "# env-setup-wsl.sh disabled nvm invocation"
+                print; next
+            }
+
+        }
+        /nvm[.]sh|nvm use|plugins.*nvm|NVM_DIR.*bash_completion|[.]nvm\/versions|NVM_DIR.*versions/ {
+            print "请手动检查 nvm 自定义加载：" original ":" FNR ": " $0 > "/dev/stderr"
+            unresolved=1
+        }
+        { print }
+        END {
+            if (in_plugins) {
+                print "请手动检查未闭合的 Zsh 插件列表：" original > "/dev/stderr"
+                unresolved=1
+            }
+            if (unresolved) exit 1
+        }
+    ' "$file" >"$staging" || result=$?
+    if [ "$result" -eq 0 ]; then cat "$staging" >"$file" || result=$?; fi
+    rm -f -- "$staging"
+    return "$result"
+}
+
+migrate_node_environment() (
+    local language file target staging directory command failed=0
+    check_npm_prefix
+    # Validate all three configurations before writing any of them.
+    local -a targets=() staged=()
+    trap 'for staging in "${staged[@]}"; do rm -f -- "$staging"; done' EXIT
+    for language in bash zsh fish; do
+        file="$HOME/.${language}rc"
+        if [ "$language" = fish ]; then file="${XDG_CONFIG_HOME:-$HOME/.config}/fish/config.fish"; fi
+        [ -e "$file" ] || [ -L "$file" ] || continue
+        target=$(readlink -f -- "$file") || return 1
+        [ -f "$target" ] || return 1
+        for file in "${targets[@]}"; do
+            if [ "$file" = "$target" ]; then
+                printf '错误：多个 shell 共用配置，保留原文件：%s\n' "$target" >&2
+                return 1
+            fi
+        done
+        directory=${target%/*}
+        staging=$(mktemp "$directory/.node-migration.XXXXXX")
+        staged+=("$staging") targets+=("$target")
+        cp -p -- "$target" "$staging"
+        # Invoke outside a conditional to retain errexit for staged-file operations.
+        disable_nvm_startup "$staging" "$language" "$target"
+        if ! cmp -s "$target" "$staging"; then
+            command=$(type -P "$language") || { printf '错误：需要 %s 检查迁移配置，请安装后重试。\n' "$language" >&2; return 1; }
+            "$command" -n "$staging"
+        fi
+    done
+    # Back up every changed file before committing any shell configuration.
+    local id
+    for id in "${!targets[@]}"; do
+        target=${targets[id]} staging=${staged[id]}
+        if ! cmp -s "$target" "$staging"; then
+            backup_shell_config "$target" "${target%/*}" "${target##*/}" || return 1
+        fi
+    done
+    if [ "$(PATH="$SYSTEM_NODE_DIR:$PATH" "$SYSTEM_NODE_DIR/npm" config get prefix)" != "$HOME/.local" ]; then
+        if [ -f "$HOME/.npmrc" ]; then
+            backup_shell_config "$HOME/.npmrc" "$HOME" .npmrc || return 1
+        fi
+        PATH="$SYSTEM_NODE_DIR:$PATH" "$SYSTEM_NODE_DIR/npm" config set prefix "$HOME/.local" --location=user
+        [ "$(PATH="$SYSTEM_NODE_DIR:$PATH" "$SYSTEM_NODE_DIR/npm" config get prefix)" = "$HOME/.local" ]
+        printf '回退 npm prefix：先恢复已有 .npmrc 的备份；若此前没有配置，运行 npm config delete prefix --location=user。\n'
+    fi
+    for id in "${!targets[@]}"; do
+        target=${targets[id]} staging=${staged[id]}
+        if ! cmp -s "$target" "$staging"; then
+            if ! mv -- "$staging" "$target"; then failed=1; fi
+        fi
+    done
+    return "$failed"
+)
 
 report_installed_versions() (
     printf '\n可用工具版本\n'
@@ -528,12 +756,7 @@ report_installed_versions() (
     if [ "${STEP_STATES[STEP_BREW]:-}" = '成功' ] || [ "${STEP_STATES[STEP_LAZY_BREW]:-}" = '成功' ]; then
         if shell_environment=$(brew shellenv bash); then eval "$shell_environment"; fi
     fi
-    if [ "${STEP_STATES[STEP_NODE]:-}" = '成功' ]; then
-        # Report the verified request, rather than an unrelated inherited Node.
-        # shellcheck disable=SC1090
-        source "$NVM_DIR/nvm.sh" --no-use || return 1
-        nvm use "$NODE_VERSION" || return 1
-    fi
+    if [ "${STEP_STATES[STEP_NODE]:-}" = '成功' ]; then export PATH="$SYSTEM_NODE_DIR:$PATH"; fi
     for command in git brew eza lazygit starship uv node npm; do
         if command_exists "$command"; then
             printf '%s%s%s: ' "$CYAN" "$command" "$RESET"
@@ -648,8 +871,7 @@ install_plugins() {
         if [ "${PLUGIN_SELECTED[id]}" -eq 0 ]; then
             skip_step "$step" "$label" '用户未选择'
         elif [ "${STEP_STATES[STEP_OMZ]}" != '成功' ] ||
-            { [ "$id" -eq "$PLUGIN_FZF" ] && [ "${STEP_STATES[STEP_FZF]}" != '成功' ]; } ||
-            { [ "$id" -eq "$PLUGIN_NVM" ] && [ "${STEP_STATES[STEP_NODE]}" != '成功' ]; }; then
+            { [ "$id" -eq "$PLUGIN_FZF" ] && [ "${STEP_STATES[STEP_FZF]}" != '成功' ]; }; then
             skip_step "$step" "$label" '因依赖失败跳过' "$runtime_command"
         else
             run_step "$step" "$label" "$rerun_command" install_plugin "${PLUGIN_NAMES[id]}"
@@ -691,9 +913,9 @@ discover_zsh_path() {
     printf -v "$variable" '%s' "$result"
 }
 
-readonly PLUGIN_FZF=3 PLUGIN_NVM=4 PLUGIN_HIGHLIGHT=6
-PLUGIN_NAMES=(git copypath z fzf nvm zsh-autosuggestions zsh-syntax-highlighting extract)
-PLUGIN_SELECTED=(1 1 1 1 1 1 1 1)
+readonly PLUGIN_FZF=3 PLUGIN_HIGHLIGHT=5
+PLUGIN_NAMES=(git copypath z fzf zsh-autosuggestions zsh-syntax-highlighting extract)
+PLUGIN_SELECTED=(1 1 1 1 1 1 1)
 
 plugin_file() {
     local name="$1" directory
@@ -719,14 +941,14 @@ choose_plugins() {
             if [ "$focus" -eq "$id" ]; then printf '%s> ' "$FOCUS"; else printf '  '; fi
             printf '[%s] %s%s%s %s%s%s\n' "$mark" "$CYAN" "${PLUGIN_NAMES[id]}" "$RESET" "$color" "$state" "$RESET"
         done
-        if [ "$focus" -eq 8 ]; then printf '%s> ' "$FOCUS"; else printf '  '; fi
+        if [ "$focus" -eq 7 ]; then printf '%s> ' "$FOCUS"; else printf '  '; fi
         printf '继续%s\n方向键移动 · 空格勾选 · 回车继续 · b 返回组件 · q 取消\n' "$RESET"
         IFS= read -rsn1 key || return 1
         case "$key" in
         $'\e')
             IFS= read -rsn2 -t 0.2 key || :
-            case "$key" in '[A') focus=$(((focus + 8) % 9)) ;; '[B') focus=$(((focus + 1) % 9)) ;; esac ;;
-        ' ') if [ "$focus" -lt 8 ]; then PLUGIN_SELECTED[focus]=$((1 - PLUGIN_SELECTED[focus])); fi ;;
+            case "$key" in '[A') focus=$(((focus + 7) % 8)) ;; '[B') focus=$(((focus + 1) % 8)) ;; esac ;;
+        ' ') if [ "$focus" -lt 7 ]; then PLUGIN_SELECTED[focus]=$((1 - PLUGIN_SELECTED[focus])); fi ;;
         '') resolve_components; return 0 ;;
         b|B) return 2 ;;
         q|Q) return 1 ;;
@@ -800,13 +1022,12 @@ prepare_plugin_config() {
     cat "$block" >>"$staging"
     cat "$staging" >"$block"
     # Zsh syntax highlighting must load after the other selected plugins.
-    for id in 0 1 2 "$PLUGIN_FZF" "$PLUGIN_NVM" 5 7 "$PLUGIN_HIGHLIGHT"; do
+    for id in 0 1 2 "$PLUGIN_FZF" 4 6 "$PLUGIN_HIGHLIGHT"; do
         name=${PLUGIN_NAMES[id]} step=$((STEP_PLUGIN_BASE + id))
         if [ "${PLUGIN_SELECTED[id]}" -eq 0 ] || [ "${STEP_STATES[step]}" = '成功' ]; then
             begin_component_config "plugin-$name" "$block"
             printf 'plugins=("${(@)plugins:#%s}")\n' "$name" >>"$block"
             if [ "${PLUGIN_SELECTED[id]}" -eq 1 ]; then
-                if [ "$id" -eq "$PLUGIN_NVM" ]; then printf 'export NVM_DIR="$HOME/.nvm"\n' >>"$block"; fi
                 printf 'plugins+=(%s)\n' "$name" >>"$block"
             fi
             end_component_config "plugin-$name" "$block"
@@ -824,57 +1045,6 @@ prepare_plugin_config() {
         { print }
         END { if (!inserted) exit 1 }
     ' "$file" >"$staging"
-    cat "$staging" >"$file"
-    # Keep original user initialization lines, guarding them instead of deleting them.
-    # The plugin owns initialization when enabled; otherwise the first source owns it.
-    if [ "${PLUGIN_SELECTED[PLUGIN_NVM]}" -eq 0 ] || [ "${STEP_STATES[STEP_PLUGIN_BASE+PLUGIN_NVM]}" = '成功' ]; then
-        remove_managed_block '# >>> env-setup-wsl.sh nvm-owner >>>' '# <<< env-setup-wsl.sh nvm-owner <<<' "$file"
-        printf '# >>> env-setup-wsl.sh nvm-owner >>>\n_ENV_SETUP_WSL_NVM_PLUGIN=%s\n# <<< env-setup-wsl.sh nvm-owner <<<\n' "${PLUGIN_SELECTED[PLUGIN_NVM]}" >"$staging"
-    else
-        : >"$staging"
-    fi
-    awk '
-        function quoted_prefix(text, quote, i, c) {
-            quote=""
-            for (i=1; i<=length(text); i++) {
-                c=substr(text,i,1)
-                if (c == "\\" && quote != sprintf("%c",39)) { i++; continue }
-                if (quote == "" && (c == "\"" || c == sprintf("%c",39))) quote=c
-                else if (c == quote) quote=""
-            }
-            return quote != ""
-        }
-        function guard_sources(line, result, prefix, command, suffix) {
-            result=""
-            while (match(line, /(^|[;&|[:space:]])(source|[.]|\\[.])[[:space:]]+("[^"]*nvm[.]sh"|\047[^\047]*nvm[.]sh\047|[^[:space:];|&"]*nvm[.]sh)([[:space:]]+--no-use)?/)) {
-                prefix=substr(line,1,RSTART-1)
-                command=substr(line,RSTART,RLENGTH)
-                suffix=substr(line,RSTART+RLENGTH)
-                if (command ~ /^[;&|[:space:]]/) {
-                    prefix=prefix substr(command,1,1)
-                    command=substr(command,2)
-                }
-                if (quoted_prefix(prefix)) return result line
-                result=result prefix "{ if [[ ${_ENV_SETUP_WSL_NVM_PLUGIN:-0} != 1 ]] && (( ! $+functions[nvm] )); then " command "; fi; }"
-                line=suffix
-                changed=1
-            }
-            return result line
-        }
-        $0 == "# >>> env-setup-wsl.sh nvm-source >>>" { guarded=1 }
-        !guarded && $0 !~ /^[[:space:]]*#/ {
-            changed=0
-            replacement=guard_sources($0)
-            if (changed) {
-                print "# >>> env-setup-wsl.sh nvm-source >>>"
-                print replacement
-                print "# <<< env-setup-wsl.sh nvm-source <<<"
-                next
-            }
-        }
-        { print }
-        $0 == "# <<< env-setup-wsl.sh nvm-source <<<" { guarded=0 }
-    ' "$file" >>"$staging"
     cat "$staging" >"$file"
 }
 
@@ -950,55 +1120,6 @@ HOOK
     end_component_config cwd "$file"
 )
 
-install_fish_nvm_adapter() (
-    local directory="${XDG_CONFIG_HOME:-$HOME/.config}/fish/functions" staging name
-    local revision=79b62958ecf4e87334f24d6743e5766475bcf4d0
-    command_exists python3 || { sudo apt update; sudo apt install -y python3; }
-    command_exists curl || { sudo apt update; sudo apt install -y curl; }
-    mkdir -p -- "$directory"
-    staging=$(mktemp -d)
-    trap 'rm -rf -- "$staging"' EXIT
-    for name in bass.fish __bass.py; do
-        if [ -e "$directory/$name" ] || [ -L "$directory/$name" ]; then
-            [ -f "$directory/$name" ] && [ -r "$directory/$name" ] || return 1
-        else
-            curl -fsSL "https://raw.githubusercontent.com/edc/bass/$revision/functions/$name" -o "$staging/$name"
-        fi
-    done
-    cat >"$staging/nvm.fish" <<'FISH'
-# Requires bass (edc/bass), Bash and Python 3.
-function nvm --description 'Use the existing Bash nvm from fish'
-    bass source (string escape -- "$NVM_DIR/nvm.sh") --no-use ';' nvm (string escape -- $argv)
-end
-FISH
-    if [ -e "$directory/nvm.fish" ] || [ -L "$directory/nvm.fish" ]; then
-        if ! cmp -s "$directory/nvm.fish" "$staging/nvm.fish"; then
-            printf '错误：已有 nvm.fish 与所需适配函数不同，保留原文件，请手动检查。\n' >&2
-            return 1
-        fi
-    fi
-    for name in bass.fish __bass.py; do
-        if [ -f "$directory/$name" ]; then cp -- "$directory/$name" "$staging/$name"; fi
-    done
-    # `fish -n FILE ARG...` treats later paths as $argv, so check one file per call.
-    for name in bass.fish nvm.fish; do
-        "$SHELL_PATH" -n "$staging/$name"
-    done
-    python3 -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' "$staging/__bass.py"
-    # Verify existing bass and its companion together before reusing either.
-    "$SHELL_PATH" --no-config -c 'source "$argv[1]/bass.fish"; bass export ENV_SETUP_BASS_CHECK=ok; and test "$ENV_SETUP_BASS_CHECK" = ok' -- "$staging"
-    NVM_DIR="$NVM_DIR" "$SHELL_PATH" --no-config -c '
-        source "$argv[1]/bass.fish"
-        source "$argv[1]/nvm.fish"
-        nvm use --silent default; or exit $status
-        command -q node; or exit 1
-        node --version
-    ' -- "$staging"
-    for name in bass.fish __bass.py nvm.fish; do
-        if [ ! -e "$directory/$name" ]; then cp -- "$staging/$name" "$directory/$name"; fi
-    done
-)
-
 prepare_fish_config() (
     local target directory temporary_file other_rc
     if [ -L "$SHELL_RC" ] && [ ! -e "$SHELL_RC" ]; then
@@ -1061,11 +1182,6 @@ FISH
         begin_component_config eza "$temporary_file"
         printf '%s\n' 'if status is-interactive' '    alias ls "eza -al --git --group-directories-first --icons=auto"' '    alias la "eza -alG --git --group-directories-first --icons=auto"' end >>"$temporary_file"
         end_component_config eza "$temporary_file"
-    fi
-    if [ "${STEP_STATES[STEP_NODE]:-}" = '成功' ] && [ "${STEP_STATES[STEP_FISH_NVM]:-}" = '成功' ]; then
-        begin_component_config nvm "$temporary_file"
-        printf '%s\n' 'if status is-interactive' '    set -gx NVM_DIR "$HOME/.nvm"' '    if test -s "$NVM_DIR/nvm.sh"' '        nvm use --silent default' '    end' end >>"$temporary_file"
-        end_component_config nvm "$temporary_file"
     fi
     if [ "${STEP_STATES[STEP_FZF]:-}" = '成功' ]; then
         begin_component_config fzf "$temporary_file"
@@ -1176,17 +1292,6 @@ prepare_shell_config() (
         append_once 'alias la="eza -alG --git --group-directories-first --icons=auto"' "$temporary_file"
         end_component_config eza "$temporary_file"
     fi
-    if [ "$SHELL_NAME" = zsh ] && [ "${STEP_STATES[STEP_PLUGIN_BASE+PLUGIN_NVM]:-}" = '成功' ]; then
-        remove_managed_block '# >>> env-setup-wsl.sh nvm >>>' '# <<< env-setup-wsl.sh nvm <<<' "$temporary_file"
-    elif [ "${STEP_STATES[STEP_NODE]:-}" = '成功' ]; then
-        begin_component_config nvm "$temporary_file"
-        append_unless_active_line_contains 'export NVM_DIR=' 'export NVM_DIR="$HOME/.nvm"' "$temporary_file"
-        append_unless_active_line_contains '"$NVM_DIR/nvm.sh"' '[ ! -s "$NVM_DIR/nvm.sh" ] || . "$NVM_DIR/nvm.sh"' "$temporary_file"
-        if [ "$SHELL_NAME" = bash ]; then
-            append_unless_active_line_contains '"$NVM_DIR/bash_completion"' '[ ! -s "$NVM_DIR/bash_completion" ] || . "$NVM_DIR/bash_completion"' "$temporary_file"
-        fi
-        end_component_config nvm "$temporary_file"
-    fi
     if [ "$SHELL_NAME" = bash ] && [ "${STEP_STATES[STEP_FZF]:-}" = '成功' ]; then
         begin_component_config fzf "$temporary_file"
         cat >>"$temporary_file" <<'FZF'
@@ -1281,7 +1386,7 @@ init_colors() {
     fi
 }
 
-COMPONENT_LABELS=('系统基础包' 'Homebrew/eza' 'lazygit' 'uv/Python' 'nvm/Node.js' 'Starship' 'fzf')
+COMPONENT_LABELS=('系统基础包' 'Homebrew/eza' 'lazygit' 'uv/Python' 'Node.js/npm（apt）' 'Starship' 'fzf')
 EXPLICIT=(1 1 1 1 1 1 1)
 SELECTED=(1 1 1 1 1 1 1)
 COMPONENT_STEPS=(1 "$STEP_BREW" "$STEP_LAZYGIT" "$STEP_UV" "$STEP_NODE" "$STEP_STARSHIP" "$STEP_FZF")
@@ -1291,12 +1396,7 @@ needs_system_packages() {
     1) ! command_exists brew && { ! command_exists curl || ! command_exists git || ! command_exists make; } ;;
     2) ! command_exists lazygit && ! command_exists brew && { ! command_exists curl || ! command_exists git || ! command_exists make; } ;;
     3) ! command_exists uv && ! command_exists curl ;;
-    4)
-        if [ ! -s "$NVM_DIR/nvm.sh" ]; then
-            ! command_exists curl || ! command_exists git
-        else
-            [ "$NVM_TARGET_INSTALLED" -eq 0 ] && ! command_exists curl && ! command_exists wget
-        fi ;;
+    4) return 1 ;; # NodeSource prepares its own apt prerequisites without removal.
     5) ! command_exists starship && ! command_exists curl ;;
     6) ! command_exists fzf ;;
     *) return 1 ;;
@@ -1307,7 +1407,6 @@ resolve_components() {
     SELECTED=("${EXPLICIT[@]}")
     if [ "$SHELL_NAME" = zsh ] && [ "${PLUGIN_SELECTED[PLUGIN_FZF]}" -eq 1 ]; then SELECTED[6]=1; fi
     local id
-    if [ "$SHELL_NAME" = zsh ] && [ "${PLUGIN_SELECTED[PLUGIN_NVM]}" -eq 1 ]; then SELECTED[4]=1; fi
     for id in 1 2 3 4 5 6; do
         if [ "${SELECTED[id]}" -eq 1 ] && needs_system_packages "$id"; then SELECTED[0]=1; fi
     done
@@ -1342,19 +1441,11 @@ choose_components() {
             if [ "$focus" -lt "${#COMPONENT_LABELS[@]}" ]; then
                 if [ "${SELECTED[focus]}" -eq 1 ]; then
                     EXPLICIT[focus]=0
-                    if [ "$SHELL_NAME" = zsh ] && [ "$focus" -eq 4 ] && [ "${PLUGIN_SELECTED[PLUGIN_NVM]}" -eq 1 ]; then
-                        PLUGIN_SELECTED[PLUGIN_NVM]=0
-                        notice+='连带取消 nvm 插件；'
-                    fi
                     if [ "$SHELL_NAME" = zsh ] && [ "$focus" -eq 6 ]; then PLUGIN_SELECTED[PLUGIN_FZF]=0; fi
                     if [ "$focus" -eq 0 ]; then
                         for id in 1 2 3 4 5 6; do
                             if [ "${SELECTED[id]}" -eq 1 ] && needs_system_packages "$id"; then
                                 EXPLICIT[id]=0
-                                if [ "$SHELL_NAME" = zsh ] && [ "$id" -eq 4 ] && [ "${PLUGIN_SELECTED[PLUGIN_NVM]}" -eq 1 ]; then
-                                    PLUGIN_SELECTED[PLUGIN_NVM]=0
-                                    notice+='连带取消 nvm 插件；'
-                                fi
                                 if [ "$SHELL_NAME" = zsh ] && [ "$id" -eq 6 ]; then PLUGIN_SELECTED[PLUGIN_FZF]=0; fi
                                 notice+="连带取消 ${COMPONENT_LABELS[id]}；"
                             fi
@@ -1388,13 +1479,6 @@ run_install() {
     if ! command_exists brew && [ -x "$HOMEBREW_BIN" ]; then
         export PATH="${HOMEBREW_BIN%/*}:$PATH"
     fi
-    NVM_TARGET_INSTALLED=0
-    if [ -s "$NVM_DIR/nvm.sh" ] && (
-        # Query without activating the previous default in this planning subprocess.
-        # shellcheck disable=SC1090
-        source "$NVM_DIR/nvm.sh" --no-use || exit "$?"
-        nvm version "$NODE_VERSION"
-    ) >/dev/null 2>&1; then NVM_TARGET_INSTALLED=1; fi
     local picker_status
     while :; do
         if ! choose_components; then
@@ -1416,8 +1500,11 @@ run_install() {
             printf '%sOh My Zsh 依赖 git：缺失时必须安装。%s\n' "$YELLOW" "$RESET"
         fi
     fi
-    if [ "$SHELL_NAME" = fish ] && [ "${SELECTED[4]}" -eq 1 ]; then
-        printf 'Fish Node 适配：安装 bass（需要 Bash/Python 3/curl），启动时加载 nvm 默认 Node；已有不兼容函数保留并报错。\n'
+    if [ "${SELECTED[4]}" -eq 1 ]; then
+        printf 'Node.js：NodeSource apt 源，固定 %s.x；npm 随附，用户 prefix：%s/.local。\n' "$NODE_VERSION" "$HOME"
+        printf '成功后备份并停用 Bash/Zsh/Fish 的可识别 nvm 自动加载；旧文件和工具保留。\n'
+        printf 'apt 需要移除现有包、自定义 prefix 或软件源冲突时停止该步骤。\n'
+        report_old_node_tools
     fi
     local component_id plugin_id
     if [ "$SHELL_NAME" = zsh ]; then
@@ -1512,7 +1599,7 @@ run_install() {
         1) installer=install_homebrew ;;
         2) installer=install_lazygit ;;
         3) installer=install_uv ;;
-        4) installer=install_nvm ;;
+        4) installer=install_node ;;
         5) installer=install_starship ;;
         6) installer=install_fzf ;;
         esac
@@ -1539,8 +1626,9 @@ run_install() {
             fi
         fi
     done
-    if [ "$SHELL_NAME" = fish ] && [ "${STEP_STATES[0]:-}" = '成功' ] && [ "${STEP_STATES[STEP_NODE]:-}" = '成功' ]; then
-        run_step "$STEP_FISH_NVM" 'Fish nvm/bass 适配' "$rerun_command" install_fish_nvm_adapter
+    if [ "${STEP_STATES[STEP_NODE]:-}" = '成功' ]; then
+        export PATH="$SYSTEM_NODE_DIR:$PATH"
+        run_step "$STEP_NODE_MIGRATION" 'npm 目录 / nvm 启动迁移' "$rerun_command" migrate_node_environment
     fi
     if [ "$SHELL_NAME" = zsh ]; then install_plugins "$rerun_command" "$runtime_command"; fi
     # Each step runs in a subshell; rediscover installed command paths in the parent.
@@ -1554,10 +1642,12 @@ run_install() {
         skip_step 2 "$SHELL_LABEL 配置" '因依赖失败跳过' "$shell_install_command"
     fi
     if [ "${STEP_STATES[0]}" = '成功' ] && [ "${STEP_STATES[2]}" = '成功' ] &&
-        { [ "$SHELL_NAME" != fish ] || [ "${SELECTED[4]}" -eq 0 ] || [ "${STEP_STATES[STEP_FISH_NVM]:-}" = '成功' ]; }; then
+        { [ "${STEP_STATES[STEP_NODE]:-}" != '成功' ] || [ "${STEP_STATES[STEP_NODE_MIGRATION]:-}" = '成功' ]; }; then
         local shell_command
         printf -v shell_command 'chsh -s %q %q' "$SHELL_PATH" "$ACCOUNT_NAME"
         run_step 3 '默认 shell 切换' "$shell_command" change_default_shell
+    elif [ "${STEP_STATES[STEP_NODE]:-}" = '成功' ] && [ "${STEP_STATES[STEP_NODE_MIGRATION]:-}" != '成功' ]; then
+        skip_step 3 '默认 shell 切换' '因依赖失败跳过' "先修复 npm 目录 / nvm 启动迁移（见上方具体错误），再运行：$rerun_command"
     else
         skip_step 3 '默认 shell 切换' '因依赖失败跳过' "先修复 $SHELL_LABEL 安装或配置，再运行：$rerun_command"
     fi
@@ -1582,6 +1672,10 @@ main() {
     # 路径全部由 set_paths 赋值，必须先过 require_safe_home。
     require_safe_home
     set_paths
+    if ! [[ "$NODE_VERSION" =~ ^[1-9][0-9]*$ ]]; then
+        printf '错误：NODE_VERSION 仅接受主版本号（如 24），不接受 lts/* 或完整版本号。\n' >&2
+        return 2
+    fi
 
     run_install
 }
