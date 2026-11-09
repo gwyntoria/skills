@@ -2518,7 +2518,7 @@ interactive_setup() {
                 choose_items 0 'Agent setup' 0 0 'Install / Update' 'Remove' 'Remove all backups' 'Install / Update this command' 'Exit' || return "$session_status"
                 case "${MENU_SELECTED[0]}" in
                     0) page=tasks ;;
-                    1) removal_scanned=0; page=remove_scope ;;
+                    1) removal_scanned=0; page=remove_categories ;;
                     2) run_interactive_task confirm_backup_removal; page=complete ;;
                     3) page=command_confirm ;;
                     4) return "$session_status" ;;
@@ -2540,10 +2540,21 @@ interactive_setup() {
                     q | Q) return "$session_status" ;;
                     *) printf 'Cancelled.\n'; page=complete ;;
                 esac ;;
+            remove_categories)
+                choose_items 5 'Remove: choose content' 1 0 Rules Skills || {
+                    [ "$?" -eq 2 ] || return "$session_status"
+                    page=main; continue
+                }
+                [ "${#MENU_SELECTED[@]}" -gt 0 ] || { printf 'No content selected; cancelled.\n'; page=complete; continue; }
+                REMOVE_RULES=0; REMOVE_SKILLS=0
+                for i in "${MENU_SELECTED[@]}"; do
+                    if [ "$i" -eq 0 ]; then REMOVE_RULES=1; else REMOVE_SKILLS=1; fi
+                done
+                page=remove_scope ;;
             remove_scope)
                 choose_items 14 'Remove: choose scope' 0 0 Global Project || {
                     [ "$?" -eq 2 ] || return "$session_status"
-                    page=main; continue
+                    page=remove_categories; continue
                 }
                 if [ "${MENU_SELECTED[0]}" -eq 0 ]; then REMOVE_SCOPE=global; else REMOVE_SCOPE=project; fi
                 page=remove_agents ;;
@@ -2563,17 +2574,6 @@ interactive_setup() {
                 for i in "${MENU_SELECTED[@]}"; do
                     case "$i" in 0) REMOVE_CODEX=1 ;; 1) REMOVE_CLAUDE=1 ;; 2) REMOVE_PI=1 ;; esac
                 done
-                page=remove_categories ;;
-            remove_categories)
-                choose_items 5 'Remove: choose content' 1 0 Rules Skills || {
-                    [ "$?" -eq 2 ] || return "$session_status"
-                    page=remove_agents; continue
-                }
-                [ "${#MENU_SELECTED[@]}" -gt 0 ] || { printf 'No content selected; cancelled.\n'; page=complete; continue; }
-                REMOVE_RULES=0; REMOVE_SKILLS=0
-                for i in "${MENU_SELECTED[@]}"; do
-                    if [ "$i" -eq 0 ]; then REMOVE_RULES=1; else REMOVE_SKILLS=1; fi
-                done
                 signature="$REMOVE_SCOPE/$PROJECT_TARGET/$REMOVE_CODEX/$REMOVE_CLAUDE/$REMOVE_PI/$REMOVE_RULES/$REMOVE_SKILLS/$(pi_rule_path)"
                 if [ "$removal_scanned" -eq 0 ] || [ "$signature" != "$removal_signature" ]; then
                     if ! scan_removal_inventory; then FAILED+=('Installed content scan failed'); show_summary=1; page=complete; continue; fi
@@ -2584,7 +2584,7 @@ interactive_setup() {
                 if [ "$REMOVE_RULES" -eq 1 ] && [ "${#REMOVAL_RULE_IDS[@]}" -gt 0 ]; then
                     choose_items 12 'Choose installed rules to remove' 1 0 "${REMOVAL_RULE_LABELS[@]}" || {
                         [ "$?" -eq 2 ] || return "$session_status"
-                        page=remove_categories; continue
+                        page=remove_agents; continue
                     }
                     REMOVAL_RULE_SELECTION=("${MENU_SELECTED[@]+"${MENU_SELECTED[@]}"}")
                 fi
@@ -2597,7 +2597,7 @@ interactive_setup() {
                         menu_status=$?
                         REMOVAL_SKILL_SELECTION=("${REPO_SELECTED[@]+"${REPO_SELECTED[@]}"}")
                         [ "$menu_status" -eq 2 ] || return "$session_status"
-                        if [ "$REMOVE_RULES" -eq 1 ] && [ "${#REMOVAL_RULE_IDS[@]}" -gt 0 ]; then page=remove_rules; else page=remove_categories; fi
+                        if [ "$REMOVE_RULES" -eq 1 ] && [ "${#REMOVAL_RULE_IDS[@]}" -gt 0 ]; then page=remove_rules; else page=remove_agents; fi
                         continue
                     }
                     REMOVAL_SKILL_SELECTION=("${REPO_SELECTED[@]+"${REPO_SELECTED[@]}"}")
@@ -2619,7 +2619,7 @@ interactive_setup() {
                     b | B)
                         if [ "$REMOVE_SKILLS" -eq 1 ] && [ "${#REMOVAL_SKILL_IDS[@]}" -gt 0 ]; then page=remove_skills;
                         elif [ "$REMOVE_RULES" -eq 1 ] && [ "${#REMOVAL_RULE_IDS[@]}" -gt 0 ]; then page=remove_rules;
-                        else page=remove_categories; fi
+                        else page=remove_agents; fi
                         continue ;;
                     *) printf 'Please enter y or n (b: back | q: exit).\n' ;;
                 esac ;;
