@@ -1223,7 +1223,7 @@ install_claude() {
     fi
 
     if [ -e "$resolved" ] && cmp -s "$resolved" "$body"; then
-        success "already installed (claude, $scope): $resolved"
+        printf '\033[1;33m✓ already installed (claude, %s): %s\033[0m\n' "$scope" "$resolved"
         return 0
     fi
 
@@ -1232,7 +1232,7 @@ install_claude() {
         return 1
     fi
 
-    success "installation complete (claude, $scope): $resolved"
+    printf '\033[1;34m✓ installation complete (claude, %s): %s\033[0m\n' "$scope" "$resolved"
     return 0
 }
 
@@ -1348,7 +1348,7 @@ write_managed_block() {
     fi
 
     if [ -f "$resolved" ] && cmp -s "$resolved" "$merged_file"; then
-        success "already installed ($target, $scope): $resolved"
+        printf '\033[1;33m✓ already installed (%s, %s): %s\033[0m\n' "$target" "$scope" "$resolved"
         return 0
     fi
 
@@ -1357,7 +1357,7 @@ write_managed_block() {
         return 1
     fi
 
-    success "installation complete ($target, $scope): $resolved"
+    printf '\033[1;34m✓ installation complete (%s, %s): %s\033[0m\n' "$target" "$scope" "$resolved"
 
     return 0
 }
