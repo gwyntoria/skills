@@ -800,13 +800,13 @@ target.chmod(0o755)
         old.write_text('Personal notes.\n')
         result = self.source(
             'load_waza_rules\nAGENT_ITEMS=(2)\n'
-            'SELECTED_RULES=(waza-english waza-chinese c-project)\n'
+            'SELECTED_RULES=(waza-english waza-chinese code-comments)\n'
             'SELECTED_RULE_SOURCES=(waza waza project)\nexecute_plan')
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('2 succeeded, 1 failed', result.stdout)
         self.assertIn('Personal notes.', old.read_text())
         self.assertIn('waza-chinese:start', old.read_text())
-        self.assertIn('c-project:start', old.read_text())
+        self.assertIn('code-comments:start', old.read_text())
         self.assertNotIn('waza-english:start', old.read_text())
         self.assertFalse((self.home / '.claude/rules/waza-english.md').exists())
 
@@ -942,23 +942,23 @@ target.chmod(0o755)
                 self.assertEqual(repeated.stdout.count('already installed ('), 9, repeated.stdout)
 
     def test_global_local_rule_keeps_title_and_project_behavior(self):
-        result = self.source('apply_rule c-project global both install project', cwd=self.root)
+        result = self.source('apply_rule code-comments global both install project', cwd=self.root)
         self.assertEqual(result.returncode, 0, result.stderr)
-        source = (SCRIPT.parents[1] / 'rules/project/c-project.md').read_text()
+        source = (SCRIPT.parents[1] / 'rules/project/code-comments.md').read_text()
         codex = (self.home / '.codex/AGENTS.md').read_text()
         self.assertTrue(codex.startswith('# Global Rules\n'))
-        self.assertIn('## C Projects Agent Instructions\n', codex)
-        self.assertIn('### Coding Style & Naming Conventions\n', codex)
-        self.assertEqual((self.home / '.claude/rules/c-project.md').read_text(), source)
-        result = self.source('apply_rule c-project project codex', cwd=self.root)
+        self.assertIn('## Code Comment Guidelines\n', codex)
+        self.assertIn('### Format and Language\n', codex)
+        self.assertEqual((self.home / '.claude/rules/code-comments.md').read_text(), source)
+        result = self.source('apply_rule code-comments project codex', cwd=self.root)
         self.assertEqual(result.returncode, 0, result.stderr)
         project = (self.root / 'AGENTS.md').read_text()
         self.assertNotIn('# Global Rules', project)
-        self.assertNotIn('C Projects Agent Instructions', project)
+        self.assertNotIn('Code Comment Guidelines', project)
         self.assertIn(source.split('\n', 1)[1], project)
 
     def test_waza_snapshot_dynamic_names_collision_and_additive_update(self):
-        self.waza_bundle(('c-project', 'new-rule'))
+        self.waza_bundle(('code-comments', 'new-rule'))
         old = self.home / '.codex/AGENTS.md'
         old.parent.mkdir()
         old.write_text('Personal\n<!-- gwyn-space-skills: agent-behavior:start -->\n'
@@ -968,20 +968,20 @@ target.chmod(0o755)
             # Advance main after discovery: downloads must still use the discovered commit.
             'export WAZA_COMMIT=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n'
             'AGENT_ITEMS=(2)\n'
-            'SELECTED_RULES=(c-project waza-c-project waza-new-rule)\n'
+            'SELECTED_RULES=(code-comments waza-code-comments waza-new-rule)\n'
             'SELECTED_RULE_SOURCES=(project waza waza)\n'
             'execute_plan\n'
-            'SELECTED_RULES=(waza-c-project)\nSELECTED_RULE_SOURCES=(waza)\n'
+            'SELECTED_RULES=(waza-code-comments)\nSELECTED_RULE_SOURCES=(waza)\n'
             'execute_plan')
         self.assertEqual(result.returncode, 0, result.stderr)
         text = old.read_text()
-        for name in ('c-project', 'waza-c-project', 'waza-new-rule', 'agent-behavior'):
+        for name in ('code-comments', 'waza-code-comments', 'waza-new-rule', 'agent-behavior'):
             self.assertEqual(text.count(f'gwyn-space-skills: {name}:start'), 1)
         self.assertIn('Personal', text)
         self.assertIn('Legacy', text)
-        self.assertEqual((self.home / '.claude/rules/waza-c-project.md').read_text(),
-                         '# c-project\nUpstream c-project body.\n')
-        self.assertTrue((self.home / '.claude/rules/c-project.md').exists())
+        self.assertEqual((self.home / '.claude/rules/waza-code-comments.md').read_text(),
+                         '# code-comments\nUpstream code-comments body.\n')
+        self.assertTrue((self.home / '.claude/rules/code-comments.md').exists())
         self.assertEqual(len((self.root / 'fetch.log').read_text().splitlines()), 4)
 
     def test_agent_flag_terminal_opens_agent_selection(self):
@@ -1016,7 +1016,7 @@ target.chmod(0o755)
         self.assertFalse((self.home / '.codex').exists())
 
     def test_rule_tree_group_selection_installs_every_rule_with_correct_source(self):
-        self.waza_bundle(('anti-patterns', 'chinese', 'c-project'))
+        self.waza_bundle(('anti-patterns', 'chinese', 'code-comments'))
         term = self.rule_terminal(cwd=self.root)
         term.send(b' ')
         term.expect('[x] Waza')
@@ -1030,11 +1030,11 @@ target.chmod(0o755)
         term.expect('6 succeeded, 0 failed')
         self.assertEqual(term.finish_action(), 0)
         text = (self.root / 'AGENTS.md').read_text()
-        for name in ('waza-anti-patterns', 'waza-chinese', 'waza-c-project',
-                     'c-project', 'chinese-punctuation', 'writing-repo'):
+        for name in ('waza-anti-patterns', 'waza-chinese', 'waza-code-comments',
+                     'code-comments', 'chinese-punctuation', 'writing-repo'):
             self.assertEqual(text.count(f'gwyn-space-skills: {name}:start'), 1)
-        self.assertIn('Upstream c-project body.', text)
-        self.assertIn('Installed from rules/project/c-project.md', text)
+        self.assertIn('Upstream code-comments body.', text)
+        self.assertIn('Installed from rules/project/code-comments.md', text)
 
     def test_rule_tree_children_partial_state_and_group_toggle(self):
         self.waza_bundle(('anti-patterns', 'chinese', 'clarity'))
@@ -1055,9 +1055,9 @@ target.chmod(0o755)
         term.expect('(0/3)')
         term.send(b'\x1b[B \r')
         term.expect('Source: project')
-        term.expect('[x] c-project')
+        term.expect('[x] code-comments')
         term.send(b'n')
-        term.expect('[ ] c-project')
+        term.expect('[ ] code-comments')
         term.send(b'ab')
         term.expect('[x] project')
         term.expect('(3/3)')
@@ -1083,7 +1083,7 @@ target.chmod(0o755)
         term = self.rule_terminal(cwd=nested)
         self.assertIn('[ ] Waza', re.sub(r'\x1b\[[0-9;]*m', '', term.transcript.decode()))
         self.assertIn('[ ] project', re.sub(r'\x1b\[[0-9;]*m', '', term.transcript.decode()))
-        term.send(b'\x1b[B\r \r\x1b[B\r')
+        term.send(b'\x1b[B\r\x1b[B \r\x1b[B\r')
         self.rule_agents_and_scope(term)
         self.assertIn(str(nested / 'AGENTS.md'), term.transcript.decode())
         self.assertNotIn('Rules: choose agents', term.transcript.decode())
@@ -1091,7 +1091,7 @@ target.chmod(0o755)
         frame = term.transcript.decode().rsplit('\x1b[H\x1b[2J', 1)[-1]
         self.assertIn(str(nested / 'AGENTS.md'), frame)
         self.assertIn('Execution plan:', frame)
-        self.assertIn('project / c-project -> AGENTS.md', frame)
+        self.assertIn('project / code-comments -> AGENTS.md', frame)
         term.send(b'b')
         term.expect('Rules: choose scope')
         term.expect('> Project')
@@ -1110,11 +1110,11 @@ target.chmod(0o755)
         self.assertEqual(term.finish_action(), 0)
         text = (nested / 'AGENTS.md').read_text()
         self.assertIn(personal, text)
-        self.assertEqual(text.count('<!-- gwyn-space-skills: c-project:start -->'), 1)
-        self.assertIn('Installed from rules/project/c-project.md by agent-setup.sh', text)
+        self.assertEqual(text.count('<!-- gwyn-space-skills: code-comments:start -->'), 1)
+        self.assertIn('Installed from rules/project/code-comments.md by agent-setup.sh', text)
         self.assertEqual((project / 'AGENTS.md').read_text(), 'root must stay unchanged\n')
         self.assertFalse((nested / '.claude').exists())
-        result = self.source('apply_rule c-project project codex', cwd=nested)
+        result = self.source('apply_rule code-comments project codex', cwd=nested)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual((nested / 'AGENTS.md').read_text(), text)
 
@@ -1141,7 +1141,7 @@ target.chmod(0o755)
                 self.assertFalse((self.home / '.codex/AGENTS.md').exists())
                 self.assertFalse((self.home / '.pi').exists())
         term = self.rule_terminal(cwd=self.root)
-        term.send(b'an\x1b[B\r \r\x1b[B\r')  # all, none, expand project, select c-project, continue
+        term.send(b'an\x1b[B\r\x1b[B \r\x1b[B\r')  # all, none, expand project, select code-comments, continue
         self.rule_agents_and_scope(term, agents='claude', scope='global')
         term.send(b'b')
         term.expect('Rules: choose agents')
@@ -1194,19 +1194,19 @@ target.chmod(0o755)
         destination.parent.mkdir()
         personal = 'Personal notes.\n'
         destination.write_text(personal)
-        command = 'apply_rule c-project global pi install project'
+        command = 'apply_rule code-comments global pi install project'
         result = self.source(command)
         self.assertEqual(result.returncode, 0, result.stderr)
         text = destination.read_text()
         self.assertTrue(text.startswith('# Global Rules\n\n' + personal))
-        self.assertIn('## C Projects Agent Instructions', text)
-        self.assertIn('### Coding Style & Naming Conventions', text)
+        self.assertIn('## Code Comment Guidelines', text)
+        self.assertIn('### Format and Language', text)
         self.assertFalse((self.home / '.pi').exists())
         result = self.source(command)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(destination.read_text(), text)
         self.assertIn('already installed (pi, global)', result.stdout)
-        destination.write_text(personal + '<!-- gwyn-space-skills: c-project:start -->\n')
+        destination.write_text(personal + '<!-- gwyn-space-skills: code-comments:start -->\n')
         before = destination.read_bytes()
         result = self.source(command)
         self.assertNotEqual(result.returncode, 0)
@@ -1217,11 +1217,11 @@ target.chmod(0o755)
         blocked = self.home / 'not-a-directory'
         blocked.write_text('keep me')
         self.env['PI_CODING_AGENT_DIR'] = str(blocked)
-        result = self.source('apply_rule c-project global "codex claude pi" install project')
+        result = self.source('apply_rule code-comments global "codex claude pi" install project')
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(blocked.read_text(), 'keep me')
         self.assertFalse((self.home / '.codex/AGENTS.md').exists())
-        self.assertFalse((self.home / '.claude/rules/c-project.md').exists())
+        self.assertFalse((self.home / '.claude/rules/code-comments.md').exists())
 
     def test_mixed_rule_sources_install_to_selected_scope(self):
         for scope in ['project', 'global']:
@@ -1229,27 +1229,27 @@ target.chmod(0o755)
                 project = self.root / scope
                 project.mkdir()
                 term = self.rule_terminal(cwd=project)
-                term.send(b' \x1b[B\r \r\x1b[B\r')  # Waza group plus first project rule
+                term.send(b' \x1b[B\r\x1b[B \r\x1b[B\r')  # Waza group plus code-comments
                 self.rule_agents_and_scope(term, scope=scope)
                 frame = term.transcript.decode().rsplit('\x1b[H\x1b[2J', 1)[-1]
                 self.assertIn('tw93/Waza @ main', frame)
-                self.assertIn('rules/project/c-project.md', frame)
+                self.assertIn('rules/project/code-comments.md', frame)
                 term.send(b'\r')
                 term.expect('2 succeeded, 0 failed')
                 self.assertEqual(term.finish_action(), 0)
                 codex = project / 'AGENTS.md' if scope == 'project' else self.home / '.codex/AGENTS.md'
                 text = codex.read_text()
                 self.assertIn('https://github.com/tw93/Waza/blob/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/rules/anti-patterns.md', text)
-                self.assertIn('Installed from rules/project/c-project.md', text)
+                self.assertIn('Installed from rules/project/code-comments.md', text)
                 self.assertEqual(text.count('waza-anti-patterns:start'), 1)
-                self.assertEqual(text.count('c-project:start'), 1)
+                self.assertEqual(text.count('code-comments:start'), 1)
                 if scope == 'project':
                     self.assertNotIn('Rules: choose agents', term.transcript.decode())
                     self.assertFalse((project / '.claude').exists())
                     self.assertFalse((self.home / '.pi').exists())
                 else:
                     claude = self.home / '.claude/rules'
-                    self.assertTrue((claude / 'c-project.md').exists())
+                    self.assertTrue((claude / 'code-comments.md').exists())
                     self.assertTrue((claude / 'waza-anti-patterns.md').exists())
                     pi = self.home / '.pi/agent/AGENTS.md'
                     self.assertEqual(pi.read_text(), codex.read_text())
@@ -1258,18 +1258,18 @@ target.chmod(0o755)
         project = self.root / 'project'
         project.mkdir()
         destination = project / 'AGENTS.md'
-        destination.write_text('Personal\n\n<!-- gwyn-space-skills: c-project:start -->\n'
-                               '<!-- Installed from instructions/project/c-project.md by agent-install-rule.sh. -->\n'
-                               'old body\n<!-- gwyn-space-skills: c-project:end -->\n')
-        result = self.source('apply_rule c-project project codex', cwd=project)
+        destination.write_text('Personal\n\n<!-- gwyn-space-skills: code-comments:start -->\n'
+                               '<!-- Installed from instructions/project/code-comments.md by agent-install-rule.sh. -->\n'
+                               'old body\n<!-- gwyn-space-skills: code-comments:end -->\n')
+        result = self.source('apply_rule code-comments project codex', cwd=project)
         self.assertEqual(result.returncode, 0, result.stderr)
         text = destination.read_text()
         self.assertIn('Personal', text)
         self.assertNotIn('old body', text)
-        self.assertEqual(text.count('c-project:start'), 1)
-        destination.write_text('Personal\n<!-- gwyn-space-skills: c-project:start -->\nkeep\n')
+        self.assertEqual(text.count('code-comments:start'), 1)
+        destination.write_text('Personal\n<!-- gwyn-space-skills: code-comments:start -->\nkeep\n')
         before = destination.read_bytes()
-        result = self.source('apply_rule c-project project codex', cwd=project)
+        result = self.source('apply_rule code-comments project codex', cwd=project)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('unbalanced markers', result.stderr)
         self.assertEqual(destination.read_bytes(), before)
@@ -1315,12 +1315,12 @@ target.chmod(0o755)
         result = self.source('RULE_SCOPE=project\nload_rule_catalog\nprintf "%s\\n" "${RULE_NAMES_PROJECT[@]}"', script)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('local-only', result.stdout)
-        self.assertNotIn('c-project', result.stdout)
+        self.assertNotIn('code-comments', result.stdout)
         self.assertFalse((self.root / 'fetch.log').exists())
         shutil.rmtree(local)
         result = self.source('RULE_SCOPE=project\nload_rule_catalog\nprintf "%s\\n" "${RULE_NAMES_PROJECT[@]}"', script)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn('c-project', result.stdout)
+        self.assertIn('code-comments', result.stdout)
         local.mkdir()
         (local / 'local-only.md').write_text('# Local only\nlocal content\n')
         (local / 'bad.md').write_text('missing heading\n')
@@ -1365,7 +1365,7 @@ target.chmod(0o755)
     def test_script_symlink_uses_real_local_resources(self):
         link = self.root / 'linked-command'
         link.symlink_to(SCRIPT)
-        result = self.source('apply_rule c-project project codex', link, cwd=self.root)
+        result = self.source('apply_rule code-comments project codex', link, cwd=self.root)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue((self.root / 'AGENTS.md').exists())
         self.assertFalse((self.root / 'fetch.log').exists())

@@ -70,7 +70,7 @@
 
 | 文件 | 使用范围 | 说明 |
 | --- | --- | --- |
-| [`c-project.md`](rules/project/c-project.md) | 项目 | C/C++ 项目的格式、命名、注释和提交信息约定 |
+| [`code-comments.md`](rules/project/code-comments.md) | 项目 | 跨语言的接口契约、数据含义、流程与分支注释规则 |
 | [`writing-repo.md`](rules/project/writing-repo.md) | 项目 | Markdown 写作仓库的资源路径、引用方式和格式检查规则 |
 | [`chinese-punctuation.md`](rules/project/chinese-punctuation.md) | 项目 | 终端回复的中文半角标点、空格规则和适用范围 |
 
