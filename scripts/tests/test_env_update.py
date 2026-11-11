@@ -105,14 +105,14 @@ class EnvUpdateTests(unittest.TestCase):
         self.assertEqual(self.updates(), [['npx', 'skills', 'update', '-g', '-y'], ['brew', 'upgrade', '--no-ask']])
         self.assertIn('Succeeded: 2\nFailed: 0\nSkipped: 1', self.output)
         self.assertIn('Agents: no Agent has a confirmed update method', self.output)
-        for name in ('Codex', 'Claude Code', 'Pi', 'Hermes Agent', 'Codex Plugin Marketplace', 'Claude Plugin Marketplace', 'Claude Plugins', 'Pi Extensions'):
+        for name in ('Codex', 'Codex Plugin Marketplace'):
             self.assertIn(name + ': skip', self.output)
         self.assertNotIn('not installed', self.output)
 
     def test_all_agents_share_one_task_and_detection_precedes_updates(self):
         for name in ('npx', 'brew', 'codex', 'claude', 'pi', 'hermes'):
             self.install(name)
-        result = self.run_script()
+        result = self.run_script('--all')
         self.assertEqual(result.returncode, 0, self.output)
         self.assertEqual(self.updates(), [
             ['npx', 'skills', 'update', '-g', '-y'], ['codex', 'update'],
@@ -126,11 +126,42 @@ class EnvUpdateTests(unittest.TestCase):
         self.assertLess(self.calls.index(['hermes', '--help']), self.calls.index(['codex', 'update']))
         self.assertIn('Codex Plugin Marketplace: ok', self.output)
 
+    def test_default_only_calls_codex_even_when_all_agents_are_installed(self):
+        for name in ('npx', 'brew', 'codex', 'claude', 'pi', 'hermes'):
+            self.install(name)
+        result = self.run_script()
+        self.assertEqual(result.returncode, 0, self.output)
+        self.assertEqual(self.calls, [
+            ['npx', 'skills', 'update', '-g', '-y'], ['codex', '--help'],
+            ['codex', 'update'], ['codex', 'plugin', 'marketplace', 'upgrade'],
+            ['brew', 'upgrade', '--no-ask'],
+        ])
+        self.assertIn('Succeeded: 3\nFailed: 0\nSkipped: 0', self.output)
+        for name in ('Claude', 'Pi', 'Hermes'):
+            self.assertNotIn(name, self.output)
+
+    def test_default_does_not_fall_back_to_other_agents_when_codex_is_missing(self):
+        for name in ('claude', 'pi', 'hermes'):
+            self.install(name)
+        self.assertEqual(self.run_script().returncode, 0, self.output)
+        self.assertEqual(self.calls, [])
+        self.assertIn('Codex: skip', self.output)
+
+    def test_all_followed_by_help_does_not_run_updates(self):
+        self.install('codex')
+        self.assertEqual(self.run_script('--all', '--help').returncode, 0, self.output)
+        self.assertEqual(self.calls, [])
+
+    def test_unknown_option_after_all_fails_before_updates(self):
+        self.install('codex')
+        self.assertEqual(self.run_script('--all', '--invalid').returncode, 2, self.output)
+        self.assertEqual(self.calls, [])
+
     def test_agent_failure_continues_marketplace_other_agents_and_brew(self):
         for name in ('codex', 'claude', 'brew'):
             self.install(name)
         self.env['FAIL_CALL'] = json.dumps(['codex', 'update'])
-        result = self.run_script()
+        result = self.run_script('--all')
         self.assertEqual(result.returncode, 1, self.output)
         self.assertEqual(self.updates(), [
             ['codex', 'update'], ['codex', 'plugin', 'marketplace', 'upgrade'],
@@ -143,7 +174,7 @@ class EnvUpdateTests(unittest.TestCase):
         for name in ('npx', 'hermes', 'brew'):
             self.install(name)
         self.env['FAIL_CALL'] = json.dumps(['npx', 'skills', 'update', '-g', '-y'])
-        self.assertEqual(self.run_script().returncode, 1, self.output)
+        self.assertEqual(self.run_script('--all').returncode, 1, self.output)
         self.assertEqual(self.updates(), [
             ['npx', 'skills', 'update', '-g', '-y'], ['hermes', 'update'], ['brew', 'upgrade', '--no-ask'],
         ])
@@ -153,14 +184,14 @@ class EnvUpdateTests(unittest.TestCase):
         self.install('codex')
         self.install('hermes')
         self.env['FAIL_CALL'] = json.dumps(['codex', 'plugin', 'marketplace', 'upgrade'])
-        self.assertEqual(self.run_script().returncode, 1, self.output)
+        self.assertEqual(self.run_script('--all').returncode, 1, self.output)
         self.assertIn('Codex Plugin Marketplace: fail (42)', self.output)
         self.assertIn(['hermes', 'update'], self.updates())
 
     def test_removed_agents_are_not_detected_or_updated(self):
         self.install('opencode')
         self.install('mimo')
-        self.assertEqual(self.run_script().returncode, 0, self.output)
+        self.assertEqual(self.run_script('--all').returncode, 0, self.output)
         self.assertEqual(self.calls, [])
         self.assertNotIn('OpenCode', self.output)
         self.assertNotIn('MiMoCode', self.output)
@@ -169,14 +200,14 @@ class EnvUpdateTests(unittest.TestCase):
         self.install('pi')
         self.env['NO_SELF_FLAG'] = 'pi'
         self.env['NO_EXTENSIONS_FLAG'] = 'pi'
-        self.assertEqual(self.run_script().returncode, 0, self.output)
+        self.assertEqual(self.run_script('--all').returncode, 0, self.output)
         self.assertEqual(self.updates(), [])
         self.assertIn('Pi: skip (installed Pi lacks update --self', self.output)
 
     def test_cli_without_update_command_is_skipped(self):
         self.install('hermes')
         self.env['NO_UPDATE_COMMAND'] = 'hermes'
-        self.assertEqual(self.run_script().returncode, 0, self.output)
+        self.assertEqual(self.run_script('--all').returncode, 0, self.output)
         self.assertEqual(self.updates(), [])
         self.assertIn("does not advertise 'update'", self.output)
 
@@ -190,7 +221,7 @@ class EnvUpdateTests(unittest.TestCase):
             {'id': 'temp@inline', 'scope': 'session'},
             {'id': 'fmt@tools', 'scope': 'user'},
         ])
-        self.assertEqual(self.run_script().returncode, 0, self.output)
+        self.assertEqual(self.run_script('--all').returncode, 0, self.output)
         self.assertEqual(self.updates(), [
             ['claude', 'update'], ['claude', 'plugin', 'marketplace', 'update'],
             ['claude', 'plugin', 'update', 'fmt@tools', '--scope', 'user'],
@@ -207,7 +238,7 @@ class EnvUpdateTests(unittest.TestCase):
             {'id': 'one@tools', 'scope': 'user'}, {'id': 'two@tools', 'scope': 'user'},
         ])
         self.env['FAIL_CALL'] = json.dumps(['claude', 'plugin', 'update', 'one@tools', '--scope', 'user'])
-        self.assertEqual(self.run_script().returncode, 1, self.output)
+        self.assertEqual(self.run_script('--all').returncode, 1, self.output)
         self.assertIn('Claude Plugin one@tools [user]: fail (42)', self.output)
         self.assertIn('Claude Plugin two@tools [user]: ok', self.output)
         self.assertIn(['pi', 'update', '--extensions'], self.updates())
@@ -223,14 +254,14 @@ class EnvUpdateTests(unittest.TestCase):
                     self.env.pop('FAIL_LIST', None)
                 else:
                     self.env['FAIL_LIST'] = '1'
-                self.assertEqual(self.run_script().returncode, 1, self.output)
+                self.assertEqual(self.run_script('--all').returncode, 1, self.output)
                 self.assertIn('Claude Plugins (', self.output)
                 self.assertIn('Hermes Agent: ok', self.output)
 
     def test_missing_python_skips_plugins_but_refreshes_marketplace(self):
         self.install('claude')
         (self.bin / 'python3').unlink()
-        self.assertEqual(self.run_script().returncode, 0, self.output)
+        self.assertEqual(self.run_script('--all').returncode, 0, self.output)
         self.assertIn(['claude', 'plugin', 'marketplace', 'update'], self.updates())
         self.assertNotIn(['claude', 'plugin', 'list', '--json'], self.calls)
         self.assertIn('Claude Plugins: skip (requires plugin list --json and Python 3)', self.output)
@@ -239,7 +270,7 @@ class EnvUpdateTests(unittest.TestCase):
         self.install('pi')
         self.install('brew')
         self.env['FAIL_CALL'] = json.dumps(['pi', 'update', '--extensions'])
-        self.assertEqual(self.run_script().returncode, 1, self.output)
+        self.assertEqual(self.run_script('--all').returncode, 1, self.output)
         self.assertIn('Pi: ok', self.output)
         self.assertIn('Pi Extensions: fail (42)', self.output)
         self.assertIn(['brew', 'upgrade', '--no-ask'], self.updates())
@@ -247,18 +278,18 @@ class EnvUpdateTests(unittest.TestCase):
     def test_pi_extensions_run_when_self_update_unavailable_or_failed(self):
         self.install('pi')
         self.env['NO_SELF_FLAG'] = '1'
-        self.assertEqual(self.run_script().returncode, 0, self.output)
+        self.assertEqual(self.run_script('--all').returncode, 0, self.output)
         self.assertEqual(self.updates(), [['pi', 'update', '--extensions']])
         self.assertIn('Pi Extensions: ok', self.output)
         self.env.pop('NO_SELF_FLAG')
         self.env['FAIL_CALL'] = json.dumps(['pi', 'update', '--self'])
-        self.assertEqual(self.run_script().returncode, 1, self.output)
+        self.assertEqual(self.run_script('--all').returncode, 1, self.output)
         self.assertIn('Pi Extensions: ok', self.output)
 
     def test_missing_extension_flag_skips_only_extensions(self):
         self.install('pi')
         self.env['NO_EXTENSIONS_FLAG'] = '1'
-        self.assertEqual(self.run_script().returncode, 0, self.output)
+        self.assertEqual(self.run_script('--all').returncode, 0, self.output)
         self.assertEqual(self.updates(), [['pi', 'update', '--self']])
         self.assertIn('Pi Extensions: skip', self.output)
 
@@ -272,7 +303,7 @@ class EnvUpdateTests(unittest.TestCase):
         self.addCleanup(os.close, master)
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 24, 100, 0, 0))
         process = subprocess.Popen(
-            ['/bin/bash', str(SCRIPT)], env=self.env, cwd=self.home,
+            ['/bin/bash', str(SCRIPT), '--all'], env=self.env, cwd=self.home,
             stdin=slave, stdout=slave, stderr=slave,
         )
         os.close(slave)
@@ -314,6 +345,8 @@ class EnvUpdateTests(unittest.TestCase):
     def test_help_has_no_clean_option(self):
         self.assertEqual(self.run_script('--help').returncode, 0, self.output)
         self.assertNotIn('--clean', self.output)
+        self.assertIn('--all', self.output)
+        self.assertIn('Default: update Skills, Codex', self.output)
         self.assertEqual(self.calls, [])
 
 

@@ -84,7 +84,7 @@
 | --- | --- | --- |
 | [`agent-setup.sh`](scripts/agent-setup.sh) | macOS / Linux | 统一交互安装全局或项目 rules、Agent 配置和第三方 skills；支持安装本地命令、非交互安装及 `--list` 候选清单 |
 | [`env-setup-wsl.sh`](scripts/env-setup-wsl.sh) | WSL Ubuntu | 通过中文 TUI 选择基础包、开发环境与 AI 工具，选择 Fish/Zsh/Bash（默认 Fish）、准备启动配置并切换默认 shell |
-| [`env-update.sh`](scripts/env-update.sh) | macOS / Linux | 依次更新 Skills、Agents 和 Homebrew（使用 `brew upgrade --no-ask` 自动确认）；检测可用 Agent，末尾汇总每个任务和各 Agent 的结果 |
+| [`env-update.sh`](scripts/env-update.sh) | macOS / Linux | 依次更新 Skills、Agents 和 Homebrew（使用 `brew upgrade --no-ask` 自动确认）；Agents 默认仅更新 Codex 及其插件市场，传入 `--all` 才加入 Claude（含插件市场和插件）、Pi（含扩展）及 Hermes；末尾汇总结果 |
 | [`statusline.sh`](scripts/statusline.sh) | Claude Code | 状态栏脚本，显示模型与思考等级、目录与 Git 分支、上下文余量、输入输出 token、速率限制和版本 |
 | [`list-skills.sh`](scripts/list-skills.sh) | 仓库维护 | 列出仓库内全部 skill 路径，并检查是否有重名 |
 

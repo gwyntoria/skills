@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 
 PROGRAM_NAME="${0##*/}"
+UPDATE_ALL=0
 START_COLOR=
 COLOR_RESET=
 
@@ -84,7 +85,9 @@ usage() {
     printf 'Usage: %s [options]\n' "$PROGRAM_NAME"
     printf '\n'
     printf 'Options:\n'
+    printf '  --all        Include Claude, Pi and Hermes with their plugins/extensions\n'
     printf '  -h, --help   Show this help message\n'
+    printf '\nDefault: update Skills, Codex (including Plugin Marketplace) and Homebrew.\n'
 }
 
 # 解析命令行选项。
@@ -93,6 +96,10 @@ usage() {
 parse_args() {
     while [ "$#" -gt 0 ]; do
         case "$1" in
+        --all)
+            UPDATE_ALL=1
+            shift
+            ;;
         -h | --help)
             usage
             return 1
@@ -255,8 +262,12 @@ for name, scope in entries:
 
 run_agents() {
     local IN_AGENTS=1
-    local -a names=('Codex' 'Claude Code' 'Pi' 'Hermes Agent')
-    local -a commands=(codex claude pi hermes)
+    local -a names=('Codex')
+    local -a commands=(codex)
+    if [ "$UPDATE_ALL" -eq 1 ]; then
+        names+=('Claude Code' 'Pi' 'Hermes Agent')
+        commands+=(claude pi hermes)
+    fi
     local -a paths=() reasons=()
     local i executable help record status name detail
     local success=0 failed=0 group_status group_detail
