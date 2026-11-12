@@ -36,8 +36,8 @@ IS_WSL=0
 UBUNTU_NAME=""
 CPU_ARCH=""
 
-WT_HOOK_START='# >>> env-setup-wsl.sh Windows Terminal CWD hook >>>'
-WT_HOOK_END='# <<< env-setup-wsl.sh Windows Terminal CWD hook <<<'
+WT_HOOK_START='# >>> setup-ubuntu.sh Windows Terminal CWD hook >>>'
+WT_HOOK_END='# <<< setup-ubuntu.sh Windows Terminal CWD hook <<<'
 
 # 安装时按清单补装缺失的系统包。
 SYSTEM_PACKAGES=(
@@ -67,8 +67,8 @@ LOCAL_BIN=""
 SHELL_RC=""
 INPUTRC=""
 NVM_DIR=""
-SHELL_BLOCK_START='# >>> env-setup-wsl.sh shell >>>'
-SHELL_BLOCK_END='# <<< env-setup-wsl.sh shell <<<'
+SHELL_BLOCK_START='# >>> setup-ubuntu.sh shell >>>'
+SHELL_BLOCK_END='# <<< setup-ubuntu.sh shell <<<'
 SHELL_NAME=fish
 SHELL_LABEL=Fish
 OMZ_DIR=""
@@ -298,6 +298,33 @@ remove_managed_block() {
     fi
 }
 
+# 将已配对的新旧托管标记输出为新名称；只读输入，不改动块内正文。
+# 同名块跨新旧名称重复、嵌套不匹配或未闭合时返回失败，由调用方丢弃暂存输出。
+normalize_managed_markers() {
+    if ! awk '
+        /^# (>>>|<<<) (env-setup-wsl[.]sh|setup-ubuntu[.]sh) .+ (>>>|<<<)$/ {
+            owner=$3; name=$0
+            sub(/^# (>>>|<<<) [^ ]+ /, "", name)
+            sub(/ (>>>|<<<)$/, "", name)
+            if ($2 == ">>>" && $NF == ">>>") {
+                if (active[name] || (seen[name] && seen[name] != owner)) exit 1
+                seen[name]=owner; active[name]=1
+                names[++depth]=name; owners[depth]=owner
+            } else if ($2 == "<<<" && $NF == "<<<") {
+                if (!depth || names[depth] != name || owners[depth] != owner) exit 1
+                active[name]=0; depth--
+            } else exit 1
+            sub(/^# >>> env-setup-wsl[.]sh /, "# >>> setup-ubuntu.sh ")
+            sub(/^# <<< env-setup-wsl[.]sh /, "# <<< setup-ubuntu.sh ")
+        }
+        { print }
+        END { if (depth) exit 1 }
+    ' "$1"; then
+        printf '错误：托管标记冲突或配对不完整：%s；原文件已保留。\n' "${2:-$1}" >&2
+        return 1
+    fi
+}
+
 # 备份命名沿用 setup-agents.sh 的 .pre-<事件>.bak-<时间戳> 约定，
 # UTC 时间戳便于枚举和排序，也不受时区影响。
 timestamp() {
@@ -320,7 +347,7 @@ backup_shell_config() (
     fi
 
     if [ ! -e "$pristine" ]; then
-        if grep -Fq -- "$SHELL_BLOCK_START" "$target"; then
+        if grep -Fqx -e "$SHELL_BLOCK_START" -e '# >>> env-setup-wsl.sh shell >>>' "$target"; then
             printf '提示：配置已含托管块，无法补建安装前原件备份；本次改动仍会留下带时间戳的备份。\n'
         elif ! temporary_backup=$(mktemp "$pristine.tmp.XXXXXX") ||
              ! cp -p -- "$target" "$temporary_backup" ||
@@ -662,9 +689,13 @@ report_old_node_tools() (
 # Edit staged copies only; keep unknown shell logic for manual inspection.
 disable_nvm_startup() {
     local file="$1" language="$2" staging
-    remove_managed_block '# >>> env-setup-wsl.sh nvm >>>' '# <<< env-setup-wsl.sh nvm <<<' "$file"
-    remove_managed_block '# >>> env-setup-wsl.sh plugin-nvm >>>' '# <<< env-setup-wsl.sh plugin-nvm <<<' "$file"
-    remove_managed_block '# >>> env-setup-wsl.sh nvm-owner >>>' '# <<< env-setup-wsl.sh nvm-owner <<<' "$file"
+    normalize_managed_markers "$file" "${3:-$file}" >/dev/null || return 1
+    local owner component
+    for owner in setup-ubuntu.sh env-setup-wsl.sh; do
+        for component in nvm plugin-nvm nvm-owner; do
+            remove_managed_block "# >>> $owner $component >>>" "# <<< $owner $component <<<" "$file"
+        done
+    done
     staging=$(mktemp "${file}.nvm.XXXXXX")
     local result=0
     awk -v language="$language" -v original="${3:-$file}" '
@@ -708,7 +739,7 @@ disable_nvm_startup() {
             print without_nvm($0); next
         }
         language == "fish" && /^[[:space:]]*nvm use (--silent )?default[[:space:]]*$/ {
-            print "# env-setup-wsl.sh disabled: " $0; next
+            print "# setup-ubuntu.sh disabled: " $0; next
         }
         language != "fish" {
             if ($0 ~ /^[[:space:]]*(\[ [!-]*[[:space:]]*-[rs] "\$NVM_DIR\/(nvm.sh|bash_completion)" \] (&&|\|\|) )?(source|[.]|\\[.]) "\$NVM_DIR\/(nvm.sh|bash_completion)"([[:space:]]*;|[[:space:]]*(#.*)?$)/) {
@@ -717,7 +748,7 @@ disable_nvm_startup() {
                     print "请手动检查同一行的多个 nvm 加载：" original ":" FNR > "/dev/stderr"
                     unresolved=1
                 }
-                print "# env-setup-wsl.sh disabled nvm invocation"
+                print "# setup-ubuntu.sh disabled nvm invocation"
                 print; next
             }
 
@@ -741,11 +772,11 @@ disable_nvm_startup() {
 }
 
 migrate_node_environment() (
-    local language file target staging directory command failed=0
+    local language file target staging directory command failed=0 marker_file=''
     check_npm_prefix
     # Validate all three configurations before writing any of them.
     local -a targets=() staged=()
-    trap 'for staging in "${staged[@]}"; do rm -f -- "$staging"; done' EXIT
+    trap 'rm -f -- "$marker_file"; for staging in "${staged[@]}"; do rm -f -- "$staging"; done' EXIT
     for language in bash zsh fish; do
         file="$HOME/.${language}rc"
         if [ "$language" = fish ]; then file="${XDG_CONFIG_HOME:-$HOME/.config}/fish/config.fish"; fi
@@ -765,6 +796,11 @@ migrate_node_environment() (
         # Invoke outside a conditional to retain errexit for staged-file operations.
         disable_nvm_startup "$staging" "$language" "$target"
         if ! cmp -s "$target" "$staging"; then
+            marker_file=$(mktemp "$directory/.node-markers.XXXXXX")
+            normalize_managed_markers "$staging" "$target" >"$marker_file"
+            cat "$marker_file" >"$staging"
+            rm -f -- "$marker_file"
+            marker_file=''
             command=$(type -P "$language") || { printf '错误：需要 %s 检查迁移配置，请安装后重试。\n' "$language" >&2; return 1; }
             "$command" -n "$staging"
         fi
@@ -1036,12 +1072,12 @@ choose_shell() {
 # failed or unselected component's previous initialization. Only staged files enter here.
 begin_component_config() {
     local name="$1" file="$2"
-    remove_managed_block "# >>> env-setup-wsl.sh $name >>>" "# <<< env-setup-wsl.sh $name <<<" "$file"
-    printf '# >>> env-setup-wsl.sh %s >>>\n' "$name" >>"$file"
+    remove_managed_block "# >>> setup-ubuntu.sh $name >>>" "# <<< setup-ubuntu.sh $name <<<" "$file"
+    printf '# >>> setup-ubuntu.sh %s >>>\n' "$name" >>"$file"
 }
 
 end_component_config() {
-    printf '# <<< env-setup-wsl.sh %s <<<\n' "$1" >>"$2"
+    printf '# <<< setup-ubuntu.sh %s <<<\n' "$1" >>"$2"
 }
 
 prepare_plugin_config() {
@@ -1056,13 +1092,13 @@ prepare_plugin_config() {
     # shellcheck disable=SC2064
     trap "$cleanup_command" EXIT
     awk '
-        $0 == "# >>> env-setup-wsl.sh plugins >>>" { inside=1; next }
-        $0 == "# <<< env-setup-wsl.sh plugins <<<" { inside=0; next }
+        $0 == "# >>> setup-ubuntu.sh plugins >>>" { inside=1; next }
+        $0 == "# <<< setup-ubuntu.sh plugins <<<" { inside=0; next }
         inside { print }
     ' "$file" >"$block"
-    remove_managed_block '# >>> env-setup-wsl.sh plugins >>>' '# <<< env-setup-wsl.sh plugins <<<' "$file"
-    remove_managed_block '# >>> env-setup-wsl.sh plugin-paths >>>' '# <<< env-setup-wsl.sh plugin-paths <<<' "$block"
-    printf '# >>> env-setup-wsl.sh plugin-paths >>>\ntypeset -a plugins\nexport ZSH_CUSTOM=%q\n# <<< env-setup-wsl.sh plugin-paths <<<\n' "$OMZ_CUSTOM" >"$staging"
+    remove_managed_block '# >>> setup-ubuntu.sh plugins >>>' '# <<< setup-ubuntu.sh plugins <<<' "$file"
+    remove_managed_block '# >>> setup-ubuntu.sh plugin-paths >>>' '# <<< setup-ubuntu.sh plugin-paths <<<' "$block"
+    printf '# >>> setup-ubuntu.sh plugin-paths >>>\ntypeset -a plugins\nexport ZSH_CUSTOM=%q\n# <<< setup-ubuntu.sh plugin-paths <<<\n' "$OMZ_CUSTOM" >"$staging"
     cat "$block" >>"$staging"
     cat "$staging" >"$block"
     # Zsh syntax highlighting must load after the other selected plugins.
@@ -1080,10 +1116,10 @@ prepare_plugin_config() {
     # The override must precede OMZ, including when the user already loads it.
     awk -v block="$block" '
         !inserted && $0 !~ /^[[:space:]]*#/ && /(^|[;&|[:space:]])(source|[.]|\\[.])[[:space:]]+[^#]*oh-my-zsh\.sh/ {
-            print "# >>> env-setup-wsl.sh plugins >>>"
+            print "# >>> setup-ubuntu.sh plugins >>>"
             while ((getline line < block) > 0) print line
             close(block)
-            print "# <<< env-setup-wsl.sh plugins <<<"
+            print "# <<< setup-ubuntu.sh plugins <<<"
             inserted=1
         }
         { print }
@@ -1095,7 +1131,7 @@ prepare_plugin_config() {
 prepare_prompt_config() (
     local file="$1" original="$2" staging keep_theme=0
     if [ "${SELECTED[5]}" -eq 1 ] && [ -f "$original" ] &&
-        grep -Fqx '# >>> env-setup-wsl.sh prompt-theme >>>' "$original"; then keep_theme=1; fi
+        grep -Fqx '# >>> setup-ubuntu.sh prompt-theme >>>' "$original"; then keep_theme=1; fi
     # Preserve an existing prompt on installation failure, including legacy blocks.
     if [ "${STEP_STATES[STEP_STARSHIP]:-}" = '成功' ]; then
         remove_managed_block "$WT_HOOK_START" "$WT_HOOK_END" "$file"
@@ -1106,10 +1142,10 @@ prepare_prompt_config() (
         end_component_config starship "$file"
     elif [ "${SELECTED[5]}" -eq 0 ]; then
         remove_managed_block "$WT_HOOK_START" "$WT_HOOK_END" "$file"
-        remove_managed_block '# >>> env-setup-wsl.sh starship >>>' '# <<< env-setup-wsl.sh starship <<<' "$file"
+        remove_managed_block '# >>> setup-ubuntu.sh starship >>>' '# <<< setup-ubuntu.sh starship <<<' "$file"
     fi
     if [ "$SHELL_NAME" = zsh ] && { [ "${STEP_STATES[STEP_STARSHIP]:-}" = '成功' ] || [ "${SELECTED[5]}" -eq 0 ] || [ "$keep_theme" -eq 1 ]; }; then
-        remove_managed_block '# >>> env-setup-wsl.sh prompt-theme >>>' '# <<< env-setup-wsl.sh prompt-theme <<<' "$file"
+        remove_managed_block '# >>> setup-ubuntu.sh prompt-theme >>>' '# <<< setup-ubuntu.sh prompt-theme <<<' "$file"
         if [ "${STEP_STATES[STEP_STARSHIP]:-}" = '成功' ] || [ "$keep_theme" -eq 1 ]; then
             # Insert immediately before framework loading, after user theme assignments.
             staging=$(mktemp "${file}.prompt.XXXXXX")
@@ -1119,9 +1155,9 @@ prepare_prompt_config() (
             trap "$cleanup_command" EXIT
             if ! awk '
                 $0 !~ /^[[:space:]]*#/ && /(^|[;&|[:space:]])(source|[.]|\\[.])[[:space:]]+[^#]*oh-my-zsh\.sh/ {
-                    print "# >>> env-setup-wsl.sh prompt-theme >>>"
+                    print "# >>> setup-ubuntu.sh prompt-theme >>>"
                     print "ZSH_THEME=\"\""
-                    print "# <<< env-setup-wsl.sh prompt-theme <<<"
+                    print "# <<< setup-ubuntu.sh prompt-theme <<<"
                 }
                 { print }
             ' "$file" >"$staging"; then rm -f -- "$staging"; return 1; fi
@@ -1133,7 +1169,7 @@ prepare_prompt_config() (
         local had_prompt=0
         if active_line_contains "starship init $SHELL_NAME" "$file"; then had_prompt=1; fi
         remove_managed_block "$WT_HOOK_START" "$WT_HOOK_END" "$file"
-        remove_managed_block '# >>> env-setup-wsl.sh cwd >>>' '# <<< env-setup-wsl.sh cwd <<<' "$file"
+        remove_managed_block '# >>> setup-ubuntu.sh cwd >>>' '# <<< setup-ubuntu.sh cwd <<<' "$file"
         # 旧版把提示符与 Windows 钩子放在同一块；更新失败时仍保留提示符。
         if [ "$had_prompt" -eq 1 ] && ! active_line_contains "starship init $SHELL_NAME" "$file"; then
             begin_component_config starship "$file"
@@ -1178,7 +1214,7 @@ HOOK
 )
 
 prepare_fish_config() (
-    local target directory temporary_file other_rc
+    local target directory temporary_file other_rc previous_file=''
     if [ -L "$SHELL_RC" ] && [ ! -e "$SHELL_RC" ]; then
         printf '错误：配置符号链接的目标不存在，保留原链接。\n' >&2
         return 1
@@ -1194,12 +1230,15 @@ prepare_fish_config() (
     [ ! -e "$target" ] || [ -f "$target" ] || return 1
     directory=$(dirname -- "$target")
     temporary_file=$(mktemp "$directory/.config.fish.tmp.XXXXXX")
-    trap 'rm -f -- "$temporary_file"' EXIT
+    trap 'rm -f -- "$temporary_file" "$previous_file"' EXIT
     [ ! -f "$target" ] || cp -p -- "$target" "$temporary_file"
+    previous_file=$(mktemp "$directory/.config.fish.previous.XXXXXX")
+    normalize_managed_markers "$temporary_file" "$target" >"$previous_file"
+    cat "$previous_file" >"$temporary_file"
     remove_managed_block "$SHELL_BLOCK_START" "$SHELL_BLOCK_END" "$temporary_file"
     printf '%s\n# 目标 shell：Fish；此块由环境安装向导管理。\n' "$SHELL_BLOCK_START" >>"$temporary_file"
     if [ -f "$target" ]; then
-        awk -v start="$SHELL_BLOCK_START" -v end="$SHELL_BLOCK_END" '$0==start {inside=1;next} $0==end {inside=0;next} inside && $0 !~ /^# 目标 shell/ {print}' "$target" >>"$temporary_file"
+        awk -v start="$SHELL_BLOCK_START" -v end="$SHELL_BLOCK_END" '$0==start {inside=1;next} $0==end {inside=0;next} inside && $0 !~ /^# 目标 shell/ {print}' "$previous_file" >>"$temporary_file"
     fi
     begin_component_config fish-base "$temporary_file"
     cat >>"$temporary_file" <<'FISH'
@@ -1274,7 +1313,7 @@ FISH
         printf '%s\n' 'if status is-interactive' '    starship init fish | source' end >>"$temporary_file"
         end_component_config starship "$temporary_file"
     elif [ "${SELECTED[5]}" -eq 0 ]; then
-        remove_managed_block '# >>> env-setup-wsl.sh starship >>>' '# <<< env-setup-wsl.sh starship <<<' "$temporary_file"
+        remove_managed_block '# >>> setup-ubuntu.sh starship >>>' '# <<< setup-ubuntu.sh starship <<<' "$temporary_file"
     fi
     printf '%s\n' "$SHELL_BLOCK_END" >>"$temporary_file"
     "$SHELL_PATH" -n "$temporary_file"
@@ -1288,7 +1327,7 @@ FISH
 
 prepare_shell_config() (
     if [ "$SHELL_NAME" = fish ]; then prepare_fish_config; return; fi
-    local target directory filename temporary_file cleanup_command
+    local target directory filename temporary_file cleanup_command previous_file=''
     if [ -L "$SHELL_RC" ] && [ ! -e "$SHELL_RC" ]; then
         printf '错误：配置符号链接的目标不存在，保留原链接。\n' >&2
         return 1
@@ -1319,6 +1358,12 @@ prepare_shell_config() (
     if [ -f "$target" ]; then
         cp -p -- "$target" "$temporary_file"
     fi
+    previous_file=$(mktemp "$directory/.${filename}.previous.XXXXXX")
+    printf -v cleanup_command 'rm -f -- %q %q' "$temporary_file" "$previous_file"
+    # shellcheck disable=SC2064
+    trap "$cleanup_command" EXIT
+    normalize_managed_markers "$temporary_file" "$target" >"$previous_file"
+    cat "$previous_file" >"$temporary_file"
     remove_managed_block "$SHELL_BLOCK_START" "$SHELL_BLOCK_END" "$temporary_file"
     printf '%s\n# 目标 shell：%s；此块由环境安装向导管理。\n' "$SHELL_BLOCK_START" "$SHELL_LABEL" >>"$temporary_file"
     # Keep failed/unselected component blocks; replace only successful components.
@@ -1327,16 +1372,16 @@ prepare_shell_config() (
             $0 == start { inside=1; next }
             $0 == end { inside=0; next }
             inside && $0 !~ /^# 目标 shell/ { print }
-        ' "$target" >>"$temporary_file"
+        ' "$previous_file" >>"$temporary_file"
     fi
     if [ "$SHELL_NAME" = zsh ] && [ "${STEP_STATES[STEP_OMZ]:-}" = '成功' ] && [ -f "$target" ]; then
         local previous_plugins
         previous_plugins=$(awk '
-            $0 == "# >>> env-setup-wsl.sh plugins >>>" { inside=1 }
+            $0 == "# >>> setup-ubuntu.sh plugins >>>" { inside=1 }
             inside { print }
-            $0 == "# <<< env-setup-wsl.sh plugins <<<" { inside=0 }
-        ' "$target")
-        remove_managed_block '# >>> env-setup-wsl.sh plugins >>>' '# <<< env-setup-wsl.sh plugins <<<' "$temporary_file"
+            $0 == "# <<< setup-ubuntu.sh plugins <<<" { inside=0 }
+        ' "$previous_file")
+        remove_managed_block '# >>> setup-ubuntu.sh plugins >>>' '# <<< setup-ubuntu.sh plugins <<<' "$temporary_file"
         # Move the previous selection out of the OMZ sub-block before refreshing it.
         # Failed plugins keep their prior initialization while successful ones update.
         if [ -n "$previous_plugins" ]; then printf '%s\n' "$previous_plugins" >>"$temporary_file"; fi
@@ -1396,7 +1441,7 @@ FZF
     if [ "$SHELL_NAME" = zsh ] && [ "${STEP_STATES[STEP_OMZ]:-}" = '成功' ]; then
         prepare_plugin_config "$temporary_file"
     fi
-    prepare_prompt_config "$temporary_file" "$target"
+    prepare_prompt_config "$temporary_file" "$previous_file"
     "$SHELL_PATH" -n "$temporary_file"
     if [ -f "$target" ] && cmp -s "$target" "$temporary_file"; then
         return 0

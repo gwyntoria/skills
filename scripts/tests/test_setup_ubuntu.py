@@ -366,6 +366,148 @@ class UbuntuSetupTests(unittest.TestCase):
         nvm.mkdir(exist_ok=True)
         (nvm / 'nvm.sh').write_text((self.bin / 'nvm-fixture').read_text())
 
+    def test_marker_migration_preserves_components_backups_and_user_text(self):
+        self.stub('starship', STUB)
+        for shell in ['bash', 'zsh', 'fish']:
+            with self.subTest(shell=shell):
+                if shell != 'bash': self.stub(shell, STUB)
+                output, code = self.confirm(self.choose_only({5}, shell=shell))
+                self.assertEqual(code, 0, output)
+                rc = {'bash': self.bashrc, 'zsh': self.zshrc,
+                      'fish': self.home / '.config/fish/config.fish'}[shell]
+                old = re.sub(r'(?m)^(# (?:>>>|<<<)) setup-ubuntu[.]sh ',
+                             r'\1 env-setup-wsl.sh ', rc.read_text())
+                old = old.replace('# <<< env-setup-wsl.sh shell <<<',
+                    '# >>> env-setup-wsl.sh retained >>>\n# retained component\n'
+                    '# <<< env-setup-wsl.sh retained <<<\n# <<< env-setup-wsl.sh shell <<<')
+                user_text = '# user text: env-setup-wsl.sh stays unchanged\n'
+                rc.write_text(user_text + old)
+                original = rc.read_bytes()
+                pristine = rc.with_name(rc.name + '.pre-env-setup-wsl.bak')
+                pristine.unlink(missing_ok=True)
+                self.env['FAIL_STARSHIP'] = '1'
+                output, code = self.confirm(self.choose_only({5}, shell=shell))
+                self.assertEqual(code, 1, output)
+                generated = rc.read_bytes()
+                self.assertIn(user_text, rc.read_text())
+                self.assertIn('# retained component', rc.read_text())
+                self.assertIn('starship init ' + shell, rc.read_text())
+                self.assertIn('# >>> setup-ubuntu.sh shell >>>', rc.read_text())
+                self.assertNotRegex(rc.read_text(), r'(?m)^# (>>>|<<<) env-setup-wsl[.]sh ')
+                self.assertFalse(pristine.exists())
+                backups = list(rc.parent.glob(rc.name + '.env-setup-wsl.bak-*'))
+                self.assertIn(original, [b.read_bytes() for b in backups])
+                output, code = self.confirm(self.choose_only({5}, shell=shell))
+                self.assertEqual(code, 1, output)
+                self.assertEqual(rc.read_bytes(), generated)
+                self.env.pop('FAIL_STARSHIP')
+
+    def test_marker_conflicts_and_crossed_pairs_preserve_each_shell(self):
+        cases = [
+            '# >>> env-setup-wsl.sh shell >>>\n# <<< env-setup-wsl.sh shell <<<\n'
+            '# >>> setup-ubuntu.sh shell >>>\n# <<< setup-ubuntu.sh shell <<<\n',
+            '# >>> env-setup-wsl.sh shell >>>\n# <<< setup-ubuntu.sh shell <<<\n',
+            '# >>> setup-ubuntu.sh shell >>>\n# >>> setup-ubuntu.sh paths >>>\n'
+            '# <<< setup-ubuntu.sh shell <<<\n# <<< setup-ubuntu.sh paths <<<\n',
+        ]
+        for shell in ['bash', 'zsh', 'fish']:
+            if shell != 'bash': self.stub(shell, STUB)
+            rc = {'bash': self.bashrc, 'zsh': self.zshrc,
+                  'fish': self.home / '.config/fish/config.fish'}[shell]
+            rc.parent.mkdir(parents=True, exist_ok=True)
+            for original in cases:
+                with self.subTest(shell=shell, original=original):
+                    self.log.unlink(missing_ok=True)
+                    rc.write_text(original)
+                    output, code = self.confirm(self.choose_only(set(), shell=shell))
+                    self.assertEqual(code, 1, output)
+                    self.assertEqual(rc.read_text(), original)
+                    self.assertFalse(self.calls('chsh'))
+                    self.assertIn('原文件已保留', output)
+                    self.assertFalse(list(rc.parent.glob('.*.previous.*')))
+
+    def test_marker_migration_backup_failure_preserves_old_file(self):
+        original = ('# >>> env-setup-wsl.sh shell >>>\n# old settings\n'
+                    '# <<< env-setup-wsl.sh shell <<<\n')
+        self.bashrc.write_text(original)
+        self.bashrc.chmod(0o640)
+        self.stub('cp', """import os, sys
+from pathlib import Path
+if '.env-setup-wsl.bak-' in sys.argv[-1]:
+    sys.exit(46)
+os.execv(""" + repr(shutil.which('cp')) + """, ['cp'] + sys.argv[1:])
+""")
+        output, code = self.confirm(self.choose_only(set()))
+        self.assertEqual(code, 1, output)
+        self.assertEqual(self.bashrc.read_text(), original)
+        self.assertEqual(self.bashrc.stat().st_mode & 0o777, 0o640)
+        self.assertFalse(self.calls('chsh'))
+        self.assertFalse((self.home / '.bashrc.pre-env-setup-wsl.bak').exists())
+        self.assertFalse(list(self.home.glob('.*.previous.*')))
+        self.assertFalse(list(self.home.glob('.*.tmp.*')))
+
+    def test_both_outer_markers_prevent_fabricating_pristine_backup(self):
+        for owner in ['env-setup-wsl.sh', 'setup-ubuntu.sh']:
+            with self.subTest(owner=owner):
+                self.bashrc.write_text(f'# >>> {owner} shell >>>\n# prior config\n'
+                                      f'# <<< {owner} shell <<<\n')
+                original = self.bashrc.read_bytes()
+                output, code = self.confirm(self.choose_only(set()))
+                self.assertEqual(code, 0, output)
+                self.assertFalse((self.home / '.bashrc.pre-env-setup-wsl.bak').exists())
+                backups = list(self.home.glob('.bashrc.env-setup-wsl.bak-*'))
+                self.assertIn(original, [b.read_bytes() for b in backups])
+                self.assertIn('# >>> setup-ubuntu.sh shell >>>', self.bashrc.read_text())
+
+    def test_node_marker_conflict_stops_migration_before_prefix_change(self):
+        self.dev_fixture()
+        original = ('# >>> env-setup-wsl.sh shell >>>\n# <<< env-setup-wsl.sh shell <<<\n'
+                    '# >>> setup-ubuntu.sh shell >>>\n# <<< setup-ubuntu.sh shell <<<\n')
+        self.zshrc.write_text(original)
+        output, code = self.confirm(self.choose_only({4}))
+        self.assertEqual(code, 1, output)
+        self.assertEqual(self.zshrc.read_text(), original)
+        self.assertFalse((self.home / '.npmrc').exists())
+        self.assertFalse(self.calls('chsh'))
+        self.assertFalse(list(self.home.glob('.node-markers.*')))
+        self.assertFalse(list(self.home.glob('.node-migration.*')))
+
+    def test_marker_normalization_accepts_distinct_mixed_blocks_only(self):
+        text = ('# user text env-setup-wsl.sh\n'
+                '# >>> env-setup-wsl.sh shell >>>\n'
+                '# >>> setup-ubuntu.sh paths >>>\nexport KEEP=yes\n'
+                '# <<< setup-ubuntu.sh paths <<<\n'
+                '# <<< env-setup-wsl.sh shell <<<\n')
+        self.bashrc.write_text(text)
+        result = subprocess.run(['/bin/bash', '-c',
+            'source "$WIZARD_SCRIPT"; normalize_managed_markers "$HOME/.bashrc"'],
+            env=self.env, text=True, capture_output=True, timeout=5)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, text.replace('# >>> env-setup-wsl.sh ', '# >>> setup-ubuntu.sh ')
+                         .replace('# <<< env-setup-wsl.sh ', '# <<< setup-ubuntu.sh '))
+        self.assertEqual(self.bashrc.read_text(), text)
+
+    def test_node_marker_compatibility_does_not_rewrite_untouched_shells(self):
+        self.dev_fixture()
+        self.stub('fish', STUB)
+        # An unused Zsh file must not suddenly require Zsh for marker-only migration.
+        zsh_original = '# >>> env-setup-wsl.sh shell >>>\n# kept\n# <<< env-setup-wsl.sh shell <<<\n'
+        self.zshrc.write_text(zsh_original)
+        fishrc = self.home / '.config/fish/config.fish'
+        fishrc.parent.mkdir(parents=True)
+        fishrc.write_text('# >>> setup-ubuntu.sh nvm >>>\nnvm use default\n'
+                          '# <<< setup-ubuntu.sh nvm <<<\n'
+                          '# >>> env-setup-wsl.sh shell >>>\nset -gx KEEP_FISH yes\n'
+                          '# <<< env-setup-wsl.sh shell <<<\n')
+        original = fishrc.read_bytes()
+        output, code = self.confirm(self.choose_only({4}))
+        self.assertEqual(code, 0, output)
+        self.assertEqual(self.zshrc.read_text(), zsh_original)
+        self.assertNotIn('nvm use', fishrc.read_text())
+        self.assertIn('# >>> setup-ubuntu.sh shell >>>', fishrc.read_text())
+        self.assertFalse(fishrc.with_name('config.fish.pre-env-setup-wsl.bak').exists())
+        self.assertIn(original, [b.read_bytes() for b in fishrc.parent.glob('config.fish.env-setup-wsl.bak-*')])
+
     def test_native_ubuntu_generates_no_windows_hooks_for_any_shell(self):
         self.env['FIXTURE_KERNEL'] = '6.8.0-generic'
         for shell in ['bash', 'zsh', 'fish']:
@@ -1594,7 +1736,7 @@ class UbuntuSetupTests(unittest.TestCase):
                          'direnv', 'procps', 'file', 'unzip', 'jq', 'net-tools', 'ripgrep',
                          'fd-find', 'shellcheck', '7zip'])
         self.assertIn('# keep user settings\nalias ll="ls -l"', self.bashrc.read_text())
-        self.assertIn('# >>> env-setup-wsl.sh shell >>>', self.bashrc.read_text())
+        self.assertIn('# >>> setup-ubuntu.sh shell >>>', self.bashrc.read_text())
         self.assertEqual(self.zshrc.read_text(), '# untouched zsh\n')
         self.assertEqual(self.calls('chsh'), [['chsh', '-s', '/usr/bin/bash', 'fixture']])
         calls = self.calls()
