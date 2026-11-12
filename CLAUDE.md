@@ -1,4 +1,0 @@
-# CLAUDE INSTRUCTION
-
-@AGENTS.md
-
