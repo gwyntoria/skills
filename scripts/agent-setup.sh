@@ -2,7 +2,7 @@
 
 set -eu
 
-PROGRAM_NAME="${0##*/}"
+PROGRAM_NAME="agent-setup.sh"
 INSTALL_AGENT=0
 INSTALL_SKILLS=0
 LIST_SKILLS=0
@@ -20,9 +20,16 @@ resolve_script_path() {
     directory="$(cd -P "$(dirname "$file")" && pwd -P)"
     printf '%s/%s\n' "$directory" "${file##*/}"
 }
-SCRIPT_PATH="$(resolve_script_path "${BASH_SOURCE[0]:-$0}")"
-SCRIPT_DIR="${SCRIPT_PATH%/*}"
-REPO="$(cd -- "$SCRIPT_DIR/.." && pwd -P)"
+SCRIPT_PATH=""
+SCRIPT_DIR=""
+REPO=""
+# stdin execution has no source file; never infer a repository from the caller.
+if [ -n "${BASH_SOURCE[0]:-}" ]; then
+    PROGRAM_NAME="${0##*/}"
+    SCRIPT_PATH="$(resolve_script_path "${BASH_SOURCE[0]}")"
+    SCRIPT_DIR="${SCRIPT_PATH%/*}"
+    REPO="$(cd -- "$SCRIPT_DIR/.." && pwd -P)"
+fi
 PROJECT_TARGET="$(pwd -P)"
 SOURCE_ARCHIVE_URL=https://codeload.github.com/gwyntoria/skills/tar.gz/refs/heads/main
 LATEST_SCRIPT_URL=https://raw.githubusercontent.com/gwyntoria/skills/main/scripts/agent-setup.sh
@@ -387,7 +394,7 @@ cleanup_setup_resources() {
 resolve_resource() {
     local relative="$1" candidate="$REPO/$1"
     case "$relative" in rules | scripts/statusline.sh) ;; *) return 2 ;; esac
-    if [ -e "$candidate" ] || [ -L "$candidate" ]; then
+    if [ -n "$REPO" ] && { [ -e "$candidate" ] || [ -L "$candidate" ]; }; then
         RESOURCE_PATH="$candidate"
     else
         require_command curl || return 1
@@ -2872,6 +2879,14 @@ main() {
     local parse_status i
     AGENT_ITEMS=(); SELECTED_SKILLS=()
     if [ "$#" -eq 0 ]; then
+        # curl | bash uses stdin for the program. Read menu input from the
+        # controlling terminal only after Bash has parsed the entrypoint.
+        if [ -z "$SCRIPT_PATH" ] && [ ! -t 0 ] && [ -t 1 ]; then
+            if ! { exec 0</dev/tty; } 2>/dev/null; then
+                printf 'Error: interactive setup requires a terminal. Use --agent, --skill, or --list.\n' >&2
+                return 2
+            fi
+        fi
         if [ ! -t 0 ] || [ ! -t 1 ]; then
             printf 'Error: interactive setup requires a terminal. Use --agent, --skill, or --list.\n' >&2
             return 2
@@ -2907,6 +2922,8 @@ main() {
     execute_plan
 }
 
-if [ "${BASH_SOURCE[0]:-}" = "$0" ]; then
+if [ -z "${BASH_SOURCE[0]:-}" ] || [ "${BASH_SOURCE[0]}" = "$0" ]; then
     main "$@"
+    # stdin may now be /dev/tty; do not let Bash read it as more program text.
+    exit $?
 fi

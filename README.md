@@ -88,6 +88,18 @@
 | [`statusline.sh`](scripts/statusline.sh) | Claude Code | 状态栏脚本，显示模型与思考等级、目录与 Git 分支、上下文余量、输入输出 token、速率限制和版本 |
 | [`list-skills.sh`](scripts/list-skills.sh) | 仓库维护 | 列出仓库内全部 skill 路径，并检查是否有重名 |
 
+无需克隆仓库即可打开 Agent 安装菜单（需要交互终端）：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/gwyntoria/skills/main/scripts/agent-setup.sh | bash
+```
+
+菜单从 `/dev/tty` 读取输入，所需规则和状态栏文件按需从 GitHub 下载。项目规则安装到执行命令时的当前目录。无终端时可传入参数，例如只查看 skill 清单：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/gwyntoria/skills/main/scripts/agent-setup.sh | bash -s -- --list
+```
+
 ## Skills 安装
 
 ### npx skills

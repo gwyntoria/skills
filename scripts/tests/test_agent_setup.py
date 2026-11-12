@@ -222,6 +222,65 @@ class AgentSetupTests(unittest.TestCase):
     def calls(self):
         return [json.loads(line) for line in self.log.read_text().splitlines()] if self.log.exists() else []
 
+    def run_piped(self, *args):
+        return subprocess.run(['bash', '-s', '--', *args], input=SCRIPT.read_text(),
+                              env=self.env, cwd=self.root, start_new_session=True,
+                              capture_output=True, text=True, timeout=20)
+
+    def test_pipe_help_and_invalid_arguments(self):
+        result = self.run_piped('--help')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('Usage: agent-setup.sh', result.stdout)
+        self.assertEqual(self.run_piped('--unknown').returncode, 2)
+        self.assertEqual(self.run_piped('--list', '--skill').returncode, 2)
+        self.assertFalse(self.calls())
+
+    def test_pipe_without_terminal_reports_error(self):
+        result = self.run_piped()
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn('requires a terminal', result.stderr)
+        self.assertFalse(self.calls())
+
+    def test_pipe_list_is_read_only(self):
+        result = self.run_piped('--list')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('gwyntoria-first', result.stdout)
+        self.assertTrue(self.calls())
+        self.assertTrue(all('--list' in call for call in self.calls()))
+        self.assertEqual(self.old.read_text(), 'keep me')
+
+    def test_pipe_agent_install_fetches_resources_and_cleans_up(self):
+        self.remote_bundle()
+        scratch = self.root / 'scratch'
+        scratch.mkdir()
+        self.env['TMPDIR'] = str(scratch)
+        result = self.run_piped('--agent')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('7 succeeded, 0 failed', result.stdout)
+        self.assertTrue((self.home / '.claude/statusline.sh').exists())
+        self.assertEqual(len((self.root / 'fetch.log').read_text().splitlines()), 1)
+        self.assertEqual(list(scratch.iterdir()), [])
+
+    def test_pipe_interactive_menu_uses_controlling_terminal(self):
+        # A PTY fd alone is not a controlling terminal. Attach it to a new
+        # session so /dev/tty behaves as it does in a user's terminal.
+        launcher = (
+            'import os, fcntl, termios; os.setsid(); '
+            'fcntl.ioctl(0, termios.TIOCSCTTY, 0); '
+            'os.execv("/bin/bash", ["bash", "-c", '
+            + repr(f'cat {shlex.quote(str(SCRIPT))} | bash') + '])'
+        )
+        term = Terminal(self.env, cwd=self.root, command=['python3', '-c', launcher])
+        self.addCleanup(term.close)
+        term.expect('Agent setup')
+        term.expect('Item 1/5')
+        term.send(b'\r')
+        term.expect('Choose installation tasks')
+        term.expect('Item 1/3')
+        term.send(b'q\n')
+        self.assertEqual(term.finish(), 0)
+        self.assertFalse(self.calls())
+
     def node_bootstrap_fixture(self, custom=False):
         # Exclude any host Node installation from the initial PATH.
         isolated = self.root / 'isolated-bin'
