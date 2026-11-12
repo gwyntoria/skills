@@ -56,6 +56,7 @@ elif name == 'apt-cache':
     if args[-1] == 'lazygit' and os.environ.get('NO_LAZY_APT'): sys.exit(100)
     print('Package: ' + args[-1])
 elif name == 'sudo':
+    if os.environ.get('REQUIRE_SUDO_TTY') and not os.isatty(0): sys.exit(79)
     sys.exit(__import__('subprocess').call(args))
 elif name == 'apt':
     print('fixture: apt ' + ' '.join(args), flush=True)
@@ -218,11 +219,11 @@ else:
 
 
 class Terminal:
-    def __init__(self, env):
+    def __init__(self, env, command=None, cwd=None):
         self.master, slave = pty.openpty()
         self.before = termios.tcgetattr(self.master)
-        self.process = subprocess.Popen(['/bin/bash', env.get('WIZARD_SCRIPT', str(SCRIPT))], stdin=slave,
-                                        stdout=slave, stderr=slave, env=env)
+        self.process = subprocess.Popen(command or ['/bin/bash', env.get('WIZARD_SCRIPT', str(SCRIPT))], stdin=slave,
+                                        stdout=slave, stderr=slave, env=env, cwd=cwd)
         os.close(slave)
         self.output = b''
         self.consumed = 0
@@ -303,7 +304,6 @@ class WslSetupTests(unittest.TestCase):
         self.env['SYSTEM_NODE_FIXTURE'] = str(self.system_bin)
         for tool in ['node', 'npm']:
             self.stub(tool + '-fixture', STUB)
-        shutil.copyfile(SCRIPT.with_name('env-update.sh'), self.root / 'env-update.sh')
         self.env['WIZARD_SCRIPT'] = str(isolated_script)
         self.env.pop('NO_COLOR', None)
         for key in ['ZSH', 'ZSH_CUSTOM', 'ZDOTDIR', 'NODE_VERSION', 'NPM_CONFIG_PREFIX', 'npm_config_prefix', 'NPM_CONFIG_USERCONFIG', 'npm_config_userconfig']:
@@ -322,9 +322,17 @@ class WslSetupTests(unittest.TestCase):
         target.write_text('#!' + sys.executable + '\n' + body)
         target.chmod(0o755)
 
-    def terminal(self, shell="bash"):
+    def terminal(self, shell="bash", piped=False):
         self.env['EXPECTED_SHELL'] = '/bin/' + shell
-        term = Terminal(self.env)
+        command = None
+        if piped:
+            # /dev/tty needs a controlling terminal, not merely PTY descriptors.
+            pipeline = '/bin/cat ' + shlex.quote(self.env['WIZARD_SCRIPT']) + ' | /bin/bash'
+            launcher = ('import os, fcntl, termios; os.setsid(); '
+                        'fcntl.ioctl(0, termios.TIOCSCTTY, 0); '
+                        'os.execv("/bin/bash", ["bash", "-c", ' + repr(pipeline) + '])')
+            command = [sys.executable, '-c', launcher]
+        term = Terminal(self.env, command=command, cwd=self.home if piped else None)
         self.addCleanup(term.close)
         term.expect('选择终端类型')
         term.send(b'\x1b[B' * {'fish': 0, 'zsh': 1, 'bash': 2}[shell] + b'\r')
@@ -913,8 +921,8 @@ class WslSetupTests(unittest.TestCase):
                 elif kind == 'shared': self.assertTrue(self.zshrc.samefile(self.bashrc))
                 else: self.assertEqual(self.zshrc.read_text(), 'if broken\n')
 
-    def choose_only(self, chosen, shell="bash", plugins=()):
-        term = self.terminal(shell)
+    def choose_only(self, chosen, shell="bash", plugins=(), piped=False):
+        term = self.terminal(shell, piped=piped)
         # Reset in dependency order, then express only the requested selections.
         term.send(b'\x1b[B' * 6)
         for row in range(6, 0, -1):
@@ -1336,13 +1344,19 @@ class WslSetupTests(unittest.TestCase):
         self.assertNotIn('brew shellenv', self.bashrc.read_text())
         self.assertTrue(self.calls('chsh'))
 
-    def test_updater_install_failure_does_not_block_existing_uv(self):
+    def test_existing_updater_is_preserved_and_not_installed(self):
         self.dev_fixture()
+        updater = self.home / '.local/bin/toria-update'
+        updater.parent.mkdir(parents=True)
+        updater.write_text('user-owned updater\n')
+        updater.chmod(0o700)
         self.stub('install', 'import sys\nsys.exit(60)\n')
         output, code = self.confirm(self.choose_only({3}))
-        self.assertEqual(code, 1, output)
-        self.assertIn('[失败] 用户工具目录 / toria-update', output)
+        self.assertEqual(code, 0, output)
+        self.assertIn('[成功] 用户工具目录', output)
         self.assertIn('[成功] uv/Python', output)
+        self.assertEqual(updater.read_text(), 'user-owned updater\n')
+        self.assertEqual(updater.stat().st_mode & 0o777, 0o700)
         self.assertFalse(self.calls('curl'))
 
     def test_development_components_default_selected_and_reuse_installed_tools(self):
@@ -1362,7 +1376,7 @@ class WslSetupTests(unittest.TestCase):
         config = self.bashrc.read_text()
         for expected in ['brew shellenv', 'alias ls=', 'alias la=', '.local/bin']:
             self.assertIn(expected, config)
-        self.assertTrue((self.home / '.local/bin/toria-update').is_file())
+        self.assertFalse((self.home / '.local/bin/toria-update').exists())
         self.assertIn('set completion-ignore-case on', (self.home / '.inputrc').read_text())
         self.assertEqual(self.zshrc.read_text(), '# untouched zsh\n')
         self.assertTrue(self.calls('curl'))
@@ -1661,6 +1675,79 @@ os.execv(""" + repr(shutil.which('cp')) + """, ['cp'] + sys.argv[1:])
         self.assertFalse(self.calls('apt'))
         self.assertFalse(self.calls('chsh'))
         self.assertFalse(self.bashrc.exists())
+
+    def test_pipe_help_errors_and_no_terminal(self):
+        for args, code, message in [(('--help',), 0, '用法：env-setup-wsl.sh'),
+                                    (('--unattended',), 2, '未知选项'),
+                                    ((), 1, '需要交互终端')]:
+            with self.subTest(args=args):
+                result = subprocess.run(['/bin/bash', '-s', '--', *args],
+                                        input=Path(self.env['WIZARD_SCRIPT']).read_text(),
+                                        env=self.env, cwd=self.home, start_new_session=True,
+                                        capture_output=True, text=True, timeout=5)
+                self.assertEqual(result.returncode, code, result.stderr)
+                self.assertIn(message, result.stdout + result.stderr)
+        self.assertFalse(self.calls())
+        self.assertFalse(self.bashrc.exists())
+
+    def test_pipe_menu_quit_restores_terminal(self):
+        term = self.terminal(piped=True)
+        term.send(b'q')
+        self.assertEqual(term.finish(), 0)
+        self.assertEqual(term.before, termios.tcgetattr(term.master))
+        self.assertFalse(self.calls('apt'))
+        self.assertFalse(self.calls('chsh'))
+        self.assertFalse(self.bashrc.exists())
+
+    def test_pipe_declining_confirmation_does_not_write(self):
+        term = self.choose_only(set(), piped=True)
+        term.send(b'\r')
+        term.expect('确认执行')
+        term.send(b'n\r')
+        self.assertEqual(term.finish(), 0)
+        self.assertFalse(self.calls('apt'))
+        self.assertFalse(self.calls('chsh'))
+        self.assertFalse((self.home / '.local').exists())
+        self.assertFalse(self.bashrc.exists())
+
+    def test_pipe_install_is_standalone_and_does_not_create_updater(self):
+        self.dev_fixture()
+        self.env['REQUIRE_SUDO_TTY'] = '1'
+        output, code = self.confirm(self.choose_only({0}, piped=True))
+        self.assertEqual(code, 0, output)
+        self.assertIn('[成功] 用户工具目录', output)
+        self.assertTrue((self.home / '.local/bin').is_dir())
+        self.assertFalse((self.home / '.local/bin/toria-update').exists())
+        self.assertIn('.local/bin', self.bashrc.read_text())
+        self.assertTrue(self.calls('sudo'))
+        self.assertTrue(self.calls('chsh'))
+
+    def test_pipe_failure_prints_retry_with_versions_on_bash(self):
+        self.dev_fixture()
+        (self.bin / 'uv').unlink()
+        self.env.update(FAIL_DOWNLOAD='1', PYTHON_VERSION='3.13', NODE_VERSION='22')
+        output, code = self.confirm(self.choose_only({3}, piped=True))
+        self.assertEqual(code, 1, output)
+        self.assertIn('[失败] uv/Python', output)
+        retry = ('curl -fsSL https://raw.githubusercontent.com/gwyntoria/skills/'
+                 'refs/heads/main/scripts/env-setup-wsl.sh | '
+                 'PYTHON_VERSION=3.13 NODE_VERSION=22 bash')
+        self.assertIn(retry, output)
+        # Execute the displayed command with harmless stubs to prove the
+        # variables reach Bash on the right side of the pipeline.
+        probe = self.root / 'retry-probe'
+        probe.mkdir()
+        curl = probe / 'curl'
+        curl.write_text('#!/bin/sh\nexit 0\n')
+        curl.chmod(0o755)
+        bash = probe / 'bash'
+        bash.write_text('#!/bin/sh\nprintf "%s %s" "$PYTHON_VERSION" "$NODE_VERSION"\n')
+        bash.chmod(0o755)
+        env = dict(self.env, PATH=str(probe), PYTHON_VERSION='wrong', NODE_VERSION='wrong')
+        result = subprocess.run(['/bin/bash', '-c', retry], env=env,
+                                capture_output=True, text=True, timeout=5)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, '3.13 22')
 
     def test_shell_switch_is_not_successful_until_account_state_matches(self):
         self.env['UNCHANGED_SHELL'] = '1'

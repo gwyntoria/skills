@@ -15,8 +15,14 @@ set -euo pipefail
 #   - Fish, Zsh or Bash
 # ============================================================
 
-PROGRAM_NAME="${0##*/}"
-SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+PROGRAM_NAME="env-setup-wsl.sh"
+SCRIPT_PATH=""
+SETUP_URL="https://raw.githubusercontent.com/gwyntoria/skills/refs/heads/main/scripts/env-setup-wsl.sh"
+# 管道执行没有源文件路径，本地执行才解析用于重试的绝对路径。
+if [ -n "${BASH_SOURCE[0]:-}" ]; then
+    SCRIPT_PATH="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/${BASH_SOURCE[0]##*/}"
+    PROGRAM_NAME="${SCRIPT_PATH##*/}"
+fi
 
 PYTHON_VERSION="${PYTHON_VERSION:-3.14}"
 NODE_VERSION="${NODE_VERSION:-24}"
@@ -439,9 +445,6 @@ configure_user_bin() {
     printf '配置用户工具目录：%s%s%s\n' "$BLUE" "$LOCAL_BIN" "$RESET"
 
     mkdir -p "$LOCAL_BIN"
-
-    install -m 0755 "$SCRIPT_DIR/env-update.sh" "$LOCAL_BIN/toria-update"
-    printf 'toria-update 已安装\n'
 
     export PATH="$LOCAL_BIN:$PATH"
 }
@@ -1560,7 +1563,11 @@ run_install() {
     fi
     STEP_LABELS=() STEP_STATES=() STEP_REMEDIES=() STEP_CODES=()
     local rerun_command config_command shell_install_command
-    printf -v rerun_command 'bash %q' "$SCRIPT_DIR/$PROGRAM_NAME"
+    if [ -n "$SCRIPT_PATH" ]; then
+        printf -v rerun_command 'bash %q' "$SCRIPT_PATH"
+    else
+        printf -v rerun_command 'curl -fsSL %q | bash' "$SETUP_URL"
+    fi
     printf -v config_command '%s -n %q && %s' "$SHELL_NAME" "$SHELL_RC" "$rerun_command"
     shell_install_command="sudo apt install -y $SHELL_NAME && $rerun_command"
     run_step 0 "$SHELL_LABEL 安装" "$shell_install_command" install_selected_shell
@@ -1586,13 +1593,18 @@ run_install() {
             skip_step "$STEP_OMZ" 'Oh My Zsh' '因依赖失败跳过' "$shell_install_command"
         fi
     fi
-    run_step "$STEP_USER_BIN" '用户工具目录 / toria-update' "$rerun_command" configure_user_bin
+    run_step "$STEP_USER_BIN" '用户工具目录' "$rerun_command" configure_user_bin
     export PATH="$LOCAL_BIN:$PATH"
     if ! command_exists brew && [ -x "$HOMEBREW_BIN" ]; then
         export PATH="${HOMEBREW_BIN%/*}:$PATH"
     fi
     local step_id installer dependency_failed runtime_command
-    printf -v runtime_command 'PYTHON_VERSION=%q NODE_VERSION=%q %s' "$PYTHON_VERSION" "$NODE_VERSION" "$rerun_command"
+    if [ -n "$SCRIPT_PATH" ]; then
+        printf -v runtime_command 'PYTHON_VERSION=%q NODE_VERSION=%q %s' "$PYTHON_VERSION" "$NODE_VERSION" "$rerun_command"
+    else
+        # 版本变量属于安装器，必须传给管道右侧的 Bash。
+        printf -v runtime_command 'curl -fsSL %q | PYTHON_VERSION=%q NODE_VERSION=%q bash' "$SETUP_URL" "$PYTHON_VERSION" "$NODE_VERSION"
+    fi
     for component_id in 1 2 3 4 5 6; do
         step_id=${COMPONENT_STEPS[component_id]}
         case "$component_id" in
@@ -1677,11 +1689,20 @@ main() {
         return 2
     fi
 
+    # Bash 已解析入口后再切换 stdin，菜单和 sudo 共用控制终端。
+    if [ -z "$SCRIPT_PATH" ] && [ ! -t 0 ] && [ -t 1 ]; then
+        if ! { exec 0</dev/tty; } 2>/dev/null; then
+            printf '错误：安装向导需要交互终端，请在终端中直接运行。\n' >&2
+            return 1
+        fi
+    fi
     run_install
 }
 
 # 守卫让脚本可以被 source 进来单独调用某个函数做检查，
 # 直接执行时行为不变。
-if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+if [ -z "${BASH_SOURCE[0]:-}" ] || [ "${BASH_SOURCE[0]}" = "$0" ]; then
     main "$@"
+    # stdin 可能已切换为终端，退出后不能继续把键盘输入当作脚本读取。
+    exit $?
 fi

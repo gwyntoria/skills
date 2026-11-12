@@ -100,6 +100,18 @@ curl -fsSL https://raw.githubusercontent.com/gwyntoria/skills/refs/heads/main/sc
 curl -fsSL https://raw.githubusercontent.com/gwyntoria/skills/refs/heads/main/scripts/agent-setup.sh | bash -s -- --list
 ```
 
+WSL 环境安装向导也支持直接运行（需要交互终端）：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/gwyntoria/skills/refs/heads/main/scripts/env-setup-wsl.sh | bash
+```
+
+该向导以单文件运行，菜单和密码提示通过 `/dev/tty` 交互，确认安装计划后执行。它准备 `~/.local/bin` 和 PATH。自定义版本时，将变量传给管道右侧的 Bash：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/gwyntoria/skills/refs/heads/main/scripts/env-setup-wsl.sh | PYTHON_VERSION=3.13 NODE_VERSION=22 bash
+```
+
 ## Skills 安装
 
 ### npx skills
