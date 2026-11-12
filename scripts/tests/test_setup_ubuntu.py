@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise the WSL wizard through its real entrypoint in an isolated HOME/PTY."""
+"""Exercise the Ubuntu wizard through its real entrypoint in an isolated HOME/PTY."""
 import json
 import os
 from pathlib import Path
@@ -15,7 +15,7 @@ import termios
 import time
 import unittest
 
-SCRIPT = Path(__file__).resolve().parents[1] / 'setup-wsl.sh'
+SCRIPT = Path(__file__).resolve().parents[1] / 'setup-ubuntu.sh'
 ZSH_BINARY = shutil.which('zsh')
 FISH_BINARY = shutil.which('fish')
 
@@ -26,7 +26,13 @@ name = Path(sys.argv[0]).name
 args = sys.argv[1:]
 with open(os.environ['CALL_LOG'], 'a') as log:
     log.write(json.dumps([name] + args) + '\n')
-if name == 'getent':
+if name == 'uname':
+    print({'-s': os.environ.get('FIXTURE_OS', 'Linux'),
+           '-m': os.environ.get('FIXTURE_ARCH', 'x86_64'),
+           '-r': os.environ.get('FIXTURE_KERNEL', '6.6.0-microsoft-standard-WSL2')}[args[0]])
+elif name == 'id':
+    print(os.environ.get('FIXTURE_UID', '1000'))
+elif name == 'getent':
     state = Path(os.environ['SHELL_STATE'])
     shell = state.read_text() if state.exists() else '/bin/zsh'
     print('fixture:x:1000:1000::' + os.environ['HOME'] + ':' + shell)
@@ -57,6 +63,7 @@ elif name == 'apt-cache':
     print('Package: ' + args[-1])
 elif name == 'sudo':
     if os.environ.get('REQUIRE_SUDO_TTY') and not os.isatty(0): sys.exit(79)
+    if args == ['-v']: sys.exit(1 if os.environ.get('FAIL_SUDO') else 0)
     sys.exit(__import__('subprocess').call(args))
 elif name == 'apt':
     print('fixture: apt ' + ' '.join(args), flush=True)
@@ -266,7 +273,7 @@ class Terminal:
         os.close(self.master)
 
 
-class WslSetupTests(unittest.TestCase):
+class UbuntuSetupTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix='wsl-wizard-')
         self.addCleanup(self.temp.cleanup)
@@ -276,10 +283,10 @@ class WslSetupTests(unittest.TestCase):
         self.bin = self.root / 'bin'
         self.bin.mkdir()
         # No inherited PATH: even unexpected future installer calls cannot reach real tools.
-        for name in ['awk', 'cat', 'chmod', 'cmp', 'cp', 'dirname', 'grep', 'id',
+        for name in ['awk', 'cat', 'chmod', 'cmp', 'cp', 'dirname', 'grep',
                      'date', 'mktemp', 'mv', 'readlink', 'rm', 'basename', 'bash', 'mkdir', 'install', 'touch', 'head', 'sh', 'env']:
             (self.bin / name).symlink_to(shutil.which(name))
-        for name in ['apt', 'apt-cache', 'sudo', 'getent', 'dpkg-query', 'chsh', 'tput',
+        for name in ['uname', 'id', 'apt', 'apt-cache', 'sudo', 'getent', 'dpkg-query', 'chsh', 'tput',
                      '7zz', 'curl', 'wget', 'brew', 'git', 'nvm', 'uv', 'gpg']:
             self.stub(name, STUB)
         self.log = self.root / 'calls.jsonl'
@@ -289,7 +296,7 @@ class WslSetupTests(unittest.TestCase):
                         SHELL_STATE=str(self.root / 'login-shell'))
         # Mock the fixed external Homebrew location as well as PATH. The whole
         # entrypoint still runs; no installed host Homebrew can bypass the fakes.
-        isolated_script = self.root / 'setup-wsl.sh'
+        isolated_script = self.root / 'setup-ubuntu.sh'
         source = SCRIPT.read_text()
         external_path = 'HOMEBREW_BIN="/home/linuxbrew/.linuxbrew/bin/brew"'
         self.assertEqual(source.count(external_path), 1, 'Refresh the external-path fixture before running installers')
@@ -300,6 +307,9 @@ class WslSetupTests(unittest.TestCase):
         source = isolated_script.read_text().replace('SYSTEM_NODE_DIR="/usr/bin"', 'SYSTEM_NODE_DIR=' + shlex.quote(str(self.system_bin)))
         for variable, basename in [('NODESOURCE_LIST', 'nodesource.list'), ('NODESOURCE_KEY', 'nodesource.gpg'), ('NODESOURCE_PIN', 'nodesource.pin')]:
             source = re.sub(r'^' + variable + r'=.*$', variable + '=' + shlex.quote(str(self.root / basename)), source, flags=re.M)
+        self.os_release = self.root / 'os-release'
+        self.os_release.write_text('ID=ubuntu\nVERSION_ID=24.04\nPRETTY_NAME="Ubuntu 24.04 LTS"\n')
+        source = source.replace('/etc/os-release', str(self.os_release))
         isolated_script.write_text(source)
         self.env['SYSTEM_NODE_FIXTURE'] = str(self.system_bin)
         for tool in ['node', 'npm']:
@@ -355,6 +365,170 @@ class WslSetupTests(unittest.TestCase):
         nvm = self.home / '.nvm'
         nvm.mkdir(exist_ok=True)
         (nvm / 'nvm.sh').write_text((self.bin / 'nvm-fixture').read_text())
+
+    def test_native_ubuntu_generates_no_windows_hooks_for_any_shell(self):
+        self.env['FIXTURE_KERNEL'] = '6.8.0-generic'
+        for shell in ['bash', 'zsh', 'fish']:
+            with self.subTest(shell=shell):
+                if shell != 'bash': self.stub(shell, STUB)
+                output, code = self.confirm(self.choose_only(set(), shell=shell))
+                self.assertEqual(code, 0, output)
+                self.assertNotIn('未检测到 WSL', output)
+                rc = {'bash': self.bashrc, 'zsh': self.zshrc,
+                      'fish': self.home / '.config/fish/config.fish'}[shell]
+                self.assertNotIn('__env_setup_wsl_update_cwd', rc.read_text())
+                self.assertNotIn('wslpath', rc.read_text())
+
+    def test_platform_errors_exit_before_menu_or_writes(self):
+        for changes, distro, message in [
+            ({'FIXTURE_UID': '0'}, 'ubuntu', '普通用户'),
+            ({'FIXTURE_ARCH': 'riscv64'}, 'ubuntu', '架构'),
+            ({'FIXTURE_OS': 'Darwin'}, 'ubuntu', 'Ubuntu'),
+            ({}, 'debian', 'Ubuntu'),
+            ({}, 'linuxmint', 'Ubuntu'),
+        ]:
+            with self.subTest(changes=changes, distro=distro):
+                self.os_release.write_text('ID=' + distro + '\nID_LIKE=ubuntu\n')
+                term = Terminal(dict(self.env, **changes))
+                self.addCleanup(term.close)
+                self.assertEqual(term.finish(), 1)
+                output = term.output.decode()
+                self.assertIn(message, output)
+                self.assertNotIn('选择终端类型', output)
+                self.assertFalse(self.calls('sudo'))
+                self.assertFalse(self.calls('apt'))
+                self.assertFalse(self.bashrc.exists())
+
+    def test_sudo_failure_does_not_write_configuration_or_install(self):
+        self.env['FAIL_SUDO'] = '1'
+        term = self.choose_only(set())
+        term.send(b'\r')
+        term.expect('确认执行')
+        term.send(b'y\r')
+        self.assertEqual(term.finish(), 1)
+        self.assertIn('sudo', term.output.decode())
+        self.assertFalse(self.calls('apt'))
+        self.assertFalse(self.calls('chsh'))
+        self.assertFalse((self.home / '.local').exists())
+        self.assertFalse(self.bashrc.exists())
+
+    def test_supported_ubuntu_versions_and_architectures_are_not_wsl_only(self):
+        for version, arch, kernel, wsl in [
+            ('22.04', 'x86_64', '5.15.0-generic', 0),
+            ('24.04', 'aarch64', '6.8.0-generic', 0),
+            ('26.04', 'x86_64', '6.6.0-microsoft-standard-WSL2', 1),
+            ('26.10', 'arm64', '6.6.0-Microsoft', 1),
+        ]:
+            with self.subTest(version=version, arch=arch):
+                self.os_release.write_text('ID=ubuntu\nVERSION_ID=' + version +
+                                           '\nPRETTY_NAME="Ubuntu ' + version + '"\n')
+                result = subprocess.run(['/bin/bash', '-c',
+                    'source "$WIZARD_SCRIPT"; check_platform; '
+                    'printf "%s|%s|%s" "$UBUNTU_NAME" "$CPU_ARCH" "$IS_WSL"'],
+                    env=dict(self.env, FIXTURE_ARCH=arch, FIXTURE_KERNEL=kernel),
+                    capture_output=True, text=True, timeout=5)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout, f'Ubuntu {version}|{arch}|{wsl}')
+        self.assertFalse(self.calls('sudo'))
+        self.assertFalse(self.bashrc.exists())
+
+    def test_missing_platform_prerequisites_do_not_enter_menu(self):
+        for name in ['apt', 'sudo', 'os-release']:
+            with self.subTest(name=name):
+                path = self.os_release if name == 'os-release' else self.bin / name
+                saved = path.read_bytes()
+                path.unlink()
+                term = Terminal(self.env)
+                self.addCleanup(term.close)
+                self.assertEqual(term.finish(), 1)
+                output = term.output.decode()
+                self.assertNotIn('选择终端类型', output)
+                self.assertIn('错误', output)
+                self.assertFalse(self.bashrc.exists())
+                self.assertFalse(self.calls('sudo'))
+                path.write_bytes(saved)
+                if name != 'os-release': path.chmod(0o755)
+
+    def test_declined_native_plan_never_requests_sudo(self):
+        self.env['FIXTURE_KERNEL'] = '6.8.0-generic'
+        term = self.choose_only(set())
+        term.send(b'\r')
+        term.expect('确认执行')
+        self.assertIn('原生 Ubuntu', term.output.decode())
+        self.assertFalse(self.calls('sudo'))
+        term.send(b'n\r')
+        self.assertEqual(term.finish(), 0)
+        self.assertFalse(self.calls('sudo'))
+        self.assertFalse(self.bashrc.exists())
+
+    def test_native_rerun_removes_only_owned_windows_hooks_and_is_idempotent(self):
+        for shell in ['bash', 'zsh', 'fish']:
+            with self.subTest(shell=shell):
+                if shell != 'bash': self.stub(shell, STUB)
+                self.env['FIXTURE_KERNEL'] = '6.6.0-microsoft-standard-WSL2'
+                output, code = self.confirm(self.choose_only(set(), shell=shell))
+                self.assertEqual(code, 0, output)
+                rc = {'bash': self.bashrc, 'zsh': self.zshrc,
+                      'fish': self.home / '.config/fish/config.fish'}[shell]
+                self.assertIn('__env_setup_wsl_update_cwd', rc.read_text())
+                # User-owned prompt code outside the managed blocks must survive.
+                rc.write_text('# keep my prompt\n' + rc.read_text())
+                self.env['FIXTURE_KERNEL'] = '6.8.0-generic'
+                for _ in range(2):
+                    output, code = self.confirm(self.choose_only(set(), shell=shell))
+                    self.assertEqual(code, 0, output)
+                    self.assertNotIn('__env_setup_wsl_update_cwd', rc.read_text())
+                    self.assertEqual(rc.read_text().count('# keep my prompt'), 1)
+                    if _ == 0: generated = rc.read_bytes()
+                    else: self.assertEqual(rc.read_bytes(), generated)
+                self.assertTrue(list(rc.parent.glob(rc.name + '.env-setup-wsl.bak-*')))
+
+    def test_native_migration_preserves_legacy_prompt_when_starship_update_fails(self):
+        self.env.update(FIXTURE_KERNEL='6.8.0-generic', FAIL_STARSHIP='1')
+        self.stub('starship', STUB)
+        self.bashrc.write_text('# >>> env-setup-wsl.sh Windows Terminal CWD hook >>>\n'
+                              'function __wt_update_cwd() { echo old; }\n'
+                              'starship_precmd_user_func="__wt_update_cwd"\n'
+                              'eval "$(starship init bash)"\n'
+                              '# <<< env-setup-wsl.sh Windows Terminal CWD hook <<<\n')
+        output, code = self.confirm(self.choose_only({5}))
+        self.assertEqual(code, 1, output)
+        self.assertIn('[失败] Starship', output)
+        self.assertNotIn('__wt_update_cwd', self.bashrc.read_text())
+        self.assertIn('starship init bash', self.bashrc.read_text())
+        # The installation failure must not disable the already installed prompt.
+        prompt_env = dict(self.env)
+        prompt_env.pop('FAIL_STARSHIP')
+        loaded = subprocess.run(['/bin/bash', '--noprofile', '--norc', '-c',
+                                 'source "$HOME/.bashrc"'],
+                                env=prompt_env, capture_output=True, text=True)
+        self.assertEqual(loaded.returncode, 0, loaded.stderr)
+        self.assertEqual((self.home / 'prompt-loads').read_text(), 'starship-loaded\n')
+
+    def test_fish_editor_defaults_preserve_existing_values_and_require_code(self):
+        self.env['FIXTURE_KERNEL'] = '6.8.0-generic'
+        self.stub('fish', STUB)
+        output, code = self.confirm(self.choose_only(set(), shell='fish'))
+        self.assertEqual(code, 0, output)
+        for has_code, editor, visual, expected in [
+            (False, None, None, '|'),
+            (False, 'nano', 'vim', 'nano|vim'),
+            (True, None, None, 'code --wait|code --wait'),
+            (True, 'nvim', None, 'nvim|code --wait'),
+            (True, 'nvim', 'emacs', 'nvim|emacs'),
+        ]:
+            with self.subTest(has_code=has_code, editor=editor, visual=visual):
+                if has_code: self.stub('code', "print('fixture editor')\n")
+                env = dict(self.env)
+                env.pop('EDITOR', None)
+                env.pop('VISUAL', None)
+                if editor is not None: env['EDITOR'] = editor
+                if visual is not None: env['VISUAL'] = visual
+                result = subprocess.run([FISH_BINARY, '--no-config', '-c',
+                    'source "$HOME/.config/fish/config.fish"; printf "%s|%s" "$EDITOR" "$VISUAL"'],
+                    env=env, capture_output=True, text=True, timeout=5)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout, expected)
 
     def test_starship_defaults_install_and_bash_hooks_preserve_user_prompt(self):
         self.stub('starship-fixture', STUB)
@@ -828,6 +1002,9 @@ class WslSetupTests(unittest.TestCase):
         self.assertFalse([c for c in self.calls('git') if 'clone' in c])
 
     def test_fish_fzf_configuration_loads_and_repeated_runs_are_idempotent(self):
+        self.stub('code', "print('fixture editor')\n")
+        self.env.pop('EDITOR', None)
+        self.env.pop('VISUAL', None)
         self.stub('fish', STUB)
         self.stub('fzf', STUB)
         self.stub('wslpath', STUB)
@@ -1677,7 +1854,7 @@ os.execv(""" + repr(shutil.which('cp')) + """, ['cp'] + sys.argv[1:])
         self.assertFalse(self.bashrc.exists())
 
     def test_pipe_help_errors_and_no_terminal(self):
-        for args, code, message in [(('--help',), 0, '用法：setup-wsl.sh'),
+        for args, code, message in [(('--help',), 0, '用法：setup-ubuntu.sh'),
                                     (('--unattended',), 2, '未知选项'),
                                     ((), 1, '需要交互终端')]:
             with self.subTest(args=args):
@@ -1730,7 +1907,7 @@ os.execv(""" + repr(shutil.which('cp')) + """, ['cp'] + sys.argv[1:])
         self.assertEqual(code, 1, output)
         self.assertIn('[失败] uv/Python', output)
         retry = ('curl -fsSL https://raw.githubusercontent.com/gwyntoria/skills/'
-                 'refs/heads/main/scripts/setup-wsl.sh | '
+                 'refs/heads/main/scripts/setup-ubuntu.sh | '
                  'PYTHON_VERSION=3.13 NODE_VERSION=22 bash')
         self.assertIn(retry, output)
         # Execute the displayed command with harmless stubs to prove the

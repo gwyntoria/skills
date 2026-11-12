@@ -106,22 +106,24 @@ claude plugin install gwyn-space-skills-writing@gwyn-space
 
 ## Scripts
 
-[`scripts/`](scripts/) 下是个人环境安装、WSL 配置和仓库维护三类辅助脚本。
+[`scripts/`](scripts/) 下是个人环境安装、Ubuntu 配置和仓库维护三类辅助脚本。
 
 | 脚本 | 运行环境 | 说明 |
 | --- | --- | --- |
 | [`setup-agents.sh`](scripts/setup-agents.sh) | macOS / Linux | 统一交互安装全局或项目 rules、Agent 配置和第三方 skills；支持安装本地命令、非交互安装及 `--list` 候选清单 |
-| [`setup-wsl.sh`](scripts/setup-wsl.sh) | WSL Ubuntu | 通过中文 TUI 选择基础包、开发环境与 AI 工具，选择 Fish/Zsh/Bash（默认 Fish）、准备启动配置并切换默认 shell |
+| [`setup-ubuntu.sh`](scripts/setup-ubuntu.sh) | Ubuntu（原生 / WSL） | 通过中文 TUI 选择基础包、开发环境与 AI 工具，选择 Fish/Zsh/Bash（默认 Fish）、准备启动配置并切换默认 shell |
 | [`update-tools.sh`](scripts/update-tools.sh) | macOS / Linux | 依次更新 Skills、Agents 和 Homebrew（使用 `brew upgrade --no-ask` 自动确认）；Agents 默认仅更新 Codex 及其插件市场，传入 `--all` 才加入 Claude（含插件市场和插件）、Pi（含扩展）及 Hermes；末尾汇总结果 |
 | [`list-skills.sh`](scripts/list-skills.sh) | 仓库维护 | 列出仓库内全部 skill 路径，并检查是否有重名 |
 | [`statusline.sh`](scripts/statusline.sh) | Claude Code | 状态栏脚本，显示模型与思考等级、目录与 Git 分支、上下文余量、输入输出 token、速率限制和版本 |
 
-可在交互终端执行如下命令打开 Agent 和 WSL(Linux) 配置菜单：
+Ubuntu 安装器面向仍受常规安全维护的 Ubuntu Desktop、Server（含 SSH）和 WSL Ubuntu，支持 amd64/arm64，需以有 sudo 权限的普通用户运行；不支持 root、容器和无人值守安装。Windows Terminal 目录同步仅在 WSL 下配置。第三方组件与软件包仍取决于当前架构、版本及已启用的软件源，不自动开启软件源；失败项会给出手动处理提示。
+
+可在交互终端执行如下命令打开 Agent 和 Ubuntu 配置菜单：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/gwyntoria/skills/refs/heads/main/scripts/setup-agents.sh | bash
 ```
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/gwyntoria/skills/refs/heads/main/scripts/setup-wsl.sh | bash
+curl -fsSL https://raw.githubusercontent.com/gwyntoria/skills/refs/heads/main/scripts/setup-ubuntu.sh | bash
 ```

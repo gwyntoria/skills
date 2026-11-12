@@ -3,21 +3,21 @@
 set -euo pipefail
 
 # ============================================================
-# WSL Ubuntu Development Environment
+# Ubuntu Development Environment (native and WSL)
 #
 # Usage:
-#   ./setup-wsl.sh  Install
+#   ./setup-ubuntu.sh  Install
 #
 # Interactive Fish/Zsh/Bash setup, plugins, prompts, development runtimes and AI tools.
 #
 # Target:
-#   - Ubuntu on WSL
+#   - Ubuntu Desktop, Server or WSL; amd64 or arm64; ordinary user with sudo
 #   - Fish, Zsh or Bash
 # ============================================================
 
-PROGRAM_NAME="setup-wsl.sh"
+PROGRAM_NAME="setup-ubuntu.sh"
 SCRIPT_PATH=""
-SETUP_URL="https://raw.githubusercontent.com/gwyntoria/skills/refs/heads/main/scripts/setup-wsl.sh"
+SETUP_URL="https://raw.githubusercontent.com/gwyntoria/skills/refs/heads/main/scripts/setup-ubuntu.sh"
 # 管道执行没有源文件路径，本地执行才解析用于重试的绝对路径。
 if [ -n "${BASH_SOURCE[0]:-}" ]; then
     SCRIPT_PATH="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/${BASH_SOURCE[0]##*/}"
@@ -32,6 +32,9 @@ NODESOURCE_KEY="/usr/share/keyrings/nodesource.gpg"
 NODESOURCE_PIN="/etc/apt/preferences.d/nodesource"
 
 HOMEBREW_BIN="/home/linuxbrew/.linuxbrew/bin/brew"
+IS_WSL=0
+UBUNTU_NAME=""
+CPU_ARCH=""
 
 WT_HOOK_START='# >>> env-setup-wsl.sh Windows Terminal CWD hook >>>'
 WT_HOOK_END='# <<< env-setup-wsl.sh Windows Terminal CWD hook <<<'
@@ -122,6 +125,42 @@ set_paths() {
     SHELL_RC="$HOME/.bashrc"
     INPUTRC="$HOME/.inputrc"
     NVM_DIR="$HOME/.nvm"
+}
+
+# 只读预检；不按发行版白名单判断维护周期，也不在确认前请求 sudo 授权。
+check_platform() {
+    local ID="" PRETTY_NAME="" kernel uid
+    if [ "$(uname -s)" != Linux ] || [ ! -r /etc/os-release ]; then
+        printf '错误：此脚本仅支持 Ubuntu（原生或 WSL）。\n' >&2
+        return 1
+    fi
+    # shellcheck disable=SC1091
+    . /etc/os-release || return 1
+    if [ "$ID" != ubuntu ]; then
+        printf '错误：此脚本仅支持 Ubuntu，当前系统：%s。\n' "${PRETTY_NAME:-$ID}" >&2
+        return 1
+    fi
+    CPU_ARCH=$(uname -m) || return 1
+    case "$CPU_ARCH" in
+    x86_64|aarch64|arm64) ;;
+    *) printf '错误：不支持架构 %s，仅支持 amd64 和 arm64。\n' "$CPU_ARCH" >&2; return 1 ;;
+    esac
+    uid=$(id -u) || return 1
+    if [ "$uid" -eq 0 ]; then
+        printf '错误：请使用有 sudo 权限的普通用户运行，不要使用 root 或 sudo bash。\n' >&2
+        return 1
+    fi
+    local required
+    for required in apt sudo; do
+        if ! command_exists "$required"; then
+            printf '错误：未找到 %s，请先准备 Ubuntu 的 apt 和 sudo 环境。\n' "$required" >&2
+            return 1
+        fi
+    done
+    UBUNTU_NAME="${PRETTY_NAME:-Ubuntu}"
+    kernel=$(uname -r) || return 1
+    IS_WSL=0
+    case "${kernel,,}" in *microsoft*) IS_WSL=1 ;; esac
 }
 
 # ------------------------------------------------------------
@@ -317,6 +356,8 @@ backup_shell_config() (
 usage() {
     printf '用法：%s [选项]\n' "$PROGRAM_NAME"
     printf '\n交互式 Fish/Zsh/Bash 环境配置：选择 shell 和组件，确认后安装并设置默认 shell。\n'
+    printf '适用：常规安全维护期内的 Ubuntu Desktop、Server（含 SSH）和 WSL；amd64/arm64。\n'
+    printf '请以有 sudo 权限的普通用户运行；不支持 root、容器或无人值守安装。\n'
     printf '可选：系统基础包、Homebrew/eza、lazygit、uv/Python、Node.js/npm（apt）、Starship、fzf。\n'
     printf '\n选项：\n  -h, --help       显示帮助（无需交互终端）\n'
     printf '\n配置备份：写入前先在配置文件同目录留下 <配置名>.pre-env-setup-wsl.bak（安装前原件，仅一份）\n'
@@ -1088,6 +1129,19 @@ prepare_prompt_config() (
             rm -f -- "$staging"
         fi
     fi
+    if [ "$IS_WSL" -eq 0 ]; then
+        local had_prompt=0
+        if active_line_contains "starship init $SHELL_NAME" "$file"; then had_prompt=1; fi
+        remove_managed_block "$WT_HOOK_START" "$WT_HOOK_END" "$file"
+        remove_managed_block '# >>> env-setup-wsl.sh cwd >>>' '# <<< env-setup-wsl.sh cwd <<<' "$file"
+        # 旧版把提示符与 Windows 钩子放在同一块；更新失败时仍保留提示符。
+        if [ "$had_prompt" -eq 1 ] && ! active_line_contains "starship init $SHELL_NAME" "$file"; then
+            begin_component_config starship "$file"
+            printf 'eval "$(starship init %s)"\n' "$SHELL_NAME" >>"$file"
+            end_component_config starship "$file"
+        fi
+        return 0
+    fi
     # A legacy hook already owns its registration when Starship failed to update.
     if active_line_contains '__wt_update_cwd' "$file"; then return 0; fi
     begin_component_config cwd "$file"
@@ -1150,8 +1204,14 @@ prepare_fish_config() (
     begin_component_config fish-base "$temporary_file"
     cat >>"$temporary_file" <<'FISH'
 fish_add_path --global "$HOME/.local/bin"
-set -gx EDITOR 'code --wait'
-set -gx VISUAL 'code --wait'
+if type -q code
+    if not set -q EDITOR
+        set -gx EDITOR 'code --wait'
+    end
+    if not set -q VISUAL
+        set -gx VISUAL 'code --wait'
+    end
+end
 if status is-interactive
     alias ll 'ls'
     alias grep 'grep --color=auto'
@@ -1163,7 +1223,12 @@ if status is-interactive
     if type -q direnv
         direnv hook fish | source
     end
-    if set -q WSL_DISTRO_NAME; and type -q wslpath
+end
+FISH
+    if [ "$IS_WSL" -eq 1 ]; then
+        cat >>"$temporary_file" <<'FISH'
+if status is-interactive
+    if type -q wslpath
         function __env_setup_wsl_update_cwd --on-event fish_prompt
             set -l windows_path (wslpath -w "$PWD" 2>/dev/null)
             or return
@@ -1172,6 +1237,7 @@ if status is-interactive
     end
 end
 FISH
+    fi
     end_component_config fish-base "$temporary_file"
     if [ "${STEP_STATES[STEP_BREW]:-}" = '成功' ] || [ "${STEP_STATES[STEP_LAZY_BREW]:-}" = '成功' ]; then
         local brew_path
@@ -1469,6 +1535,7 @@ run_install() {
         return 1
     fi
     init_colors
+    check_platform || return 1
     if ! load_account; then
         printf '错误：无法读取当前账号信息，未执行安装。\n' >&2
         return 1
@@ -1497,6 +1564,8 @@ run_install() {
         esac
     done
     printf '\n安装计划\n目标 shell：%s%s%s\n配置路径：%s%s%s\n' "$CYAN" "$SHELL_LABEL" "$RESET" "$BLUE" "$SHELL_RC" "$RESET"
+    printf '系统：%s；架构：%s；环境：' "$UBUNTU_NAME" "$CPU_ARCH"
+    if [ "$IS_WSL" -eq 1 ]; then printf 'WSL\n'; else printf '原生 Ubuntu\n'; fi
     if [ "$SHELL_NAME" = zsh ]; then
         printf '必做：%sOh My Zsh%s，安装位置：%s%s%s（复用已有安装，不覆盖启动文件）。\n' "$CYAN" "$RESET" "$BLUE" "$OMZ_DIR" "$RESET"
         if [ ! -s "$OMZ_DIR/oh-my-zsh.sh" ] && ! command_exists git; then
@@ -1554,12 +1623,9 @@ run_install() {
     *) printf '已取消，未执行安装计划。\n'; return 0 ;;
     esac
 
-    if ! command_exists apt; then
-        printf '错误：未找到 apt，当前仅支持 WSL Ubuntu/Debian。\n' >&2
+    if ! sudo -v; then
+        printf '错误：sudo 授权失败，未执行安装。\n' >&2
         return 1
-    fi
-    if ! grep -qi microsoft /proc/version 2>/dev/null; then
-        printf '%s警告：此脚本面向 WSL，当前未检测到 WSL 标记。%s\n' "$YELLOW" "$RESET"
     fi
     STEP_LABELS=() STEP_STATES=() STEP_REMEDIES=() STEP_CODES=()
     local rerun_command config_command shell_install_command
