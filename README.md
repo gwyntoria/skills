@@ -102,7 +102,7 @@ claude plugin install gwyn-space-skills-writing@gwyn-space
 | [`code-comments.md`](rules/code-comments.md) | 跨语言的接口契约、数据含义、流程与分支注释规则 |
 | [`writing-repo.md`](rules/writing-repo.md) | Markdown 写作仓库的资源路径、引用方式和格式检查规则 |
 
-> 规则可通过 [`scripts/agent-setup.sh`](scripts/agent-setup.sh) 的交互菜单安装和卸载。安装器还会动态获取 [Waza 的规则](https://github.com/tw93/Waza/tree/main/rules)。
+> 规则可通过 [`scripts/setup-agents.sh`](scripts/setup-agents.sh) 的交互菜单安装和卸载。安装器还会动态获取 [Waza 的规则](https://github.com/tw93/Waza/tree/main/rules)。
 
 ## Scripts
 
@@ -110,18 +110,18 @@ claude plugin install gwyn-space-skills-writing@gwyn-space
 
 | 脚本 | 运行环境 | 说明 |
 | --- | --- | --- |
-| [`agent-setup.sh`](scripts/agent-setup.sh) | macOS / Linux | 统一交互安装全局或项目 rules、Agent 配置和第三方 skills；支持安装本地命令、非交互安装及 `--list` 候选清单 |
-| [`env-setup-wsl.sh`](scripts/env-setup-wsl.sh) | WSL Ubuntu | 通过中文 TUI 选择基础包、开发环境与 AI 工具，选择 Fish/Zsh/Bash（默认 Fish）、准备启动配置并切换默认 shell |
-| [`env-update.sh`](scripts/env-update.sh) | macOS / Linux | 依次更新 Skills、Agents 和 Homebrew（使用 `brew upgrade --no-ask` 自动确认）；Agents 默认仅更新 Codex 及其插件市场，传入 `--all` 才加入 Claude（含插件市场和插件）、Pi（含扩展）及 Hermes；末尾汇总结果 |
+| [`setup-agents.sh`](scripts/setup-agents.sh) | macOS / Linux | 统一交互安装全局或项目 rules、Agent 配置和第三方 skills；支持安装本地命令、非交互安装及 `--list` 候选清单 |
+| [`setup-wsl.sh`](scripts/setup-wsl.sh) | WSL Ubuntu | 通过中文 TUI 选择基础包、开发环境与 AI 工具，选择 Fish/Zsh/Bash（默认 Fish）、准备启动配置并切换默认 shell |
+| [`update-tools.sh`](scripts/update-tools.sh) | macOS / Linux | 依次更新 Skills、Agents 和 Homebrew（使用 `brew upgrade --no-ask` 自动确认）；Agents 默认仅更新 Codex 及其插件市场，传入 `--all` 才加入 Claude（含插件市场和插件）、Pi（含扩展）及 Hermes；末尾汇总结果 |
 | [`list-skills.sh`](scripts/list-skills.sh) | 仓库维护 | 列出仓库内全部 skill 路径，并检查是否有重名 |
 | [`statusline.sh`](scripts/statusline.sh) | Claude Code | 状态栏脚本，显示模型与思考等级、目录与 Git 分支、上下文余量、输入输出 token、速率限制和版本 |
 
 可在交互终端执行如下命令打开 Agent 和 WSL(Linux) 配置菜单：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/gwyntoria/skills/refs/heads/main/scripts/agent-setup.sh | bash
+curl -fsSL https://raw.githubusercontent.com/gwyntoria/skills/refs/heads/main/scripts/setup-agents.sh | bash
 ```
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/gwyntoria/skills/refs/heads/main/scripts/env-setup-wsl.sh | bash
+curl -fsSL https://raw.githubusercontent.com/gwyntoria/skills/refs/heads/main/scripts/setup-wsl.sh | bash
 ```

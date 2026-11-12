@@ -1,6 +1,6 @@
 # 写入 shell 配置前先备份，安装前原件与每次改动分开保存
 
-`env-setup-wsl.sh` 会改写 `~/.bashrc`、`~/.zshrc`、`~/.config/fish/config.fish`。它保留合并语义：用户自有内容留在原处，脚本只在 `# >>> env-setup-wsl.sh` 托管块内写入，因此"把配置改写成只有托管内容"会毁掉用户的 alias、`ZSH_THEME` 和第三方 `source`。为了任何一次改动后都能回滚，写入前在同一目录留下两份备份：`<配置名>.pre-env-setup-wsl.bak` 是首次写入前（文件尚未被本脚本托管时）建立的安装前原件，只此一份、永不覆盖；`<配置名>.env-setup-wsl.bak-<UTC 时间戳>` 是每次改动各一份的上一版。备份失败即放弃覆盖，原文件保持不动。
+`setup-wsl.sh` 会改写 `~/.bashrc`、`~/.zshrc`、`~/.config/fish/config.fish`。它保留合并语义：用户自有内容留在原处，脚本只在 `# >>> env-setup-wsl.sh` 托管块内写入，因此"把配置改写成只有托管内容"会毁掉用户的 alias、`ZSH_THEME` 和第三方 `source`。为了任何一次改动后都能回滚，写入前在同一目录留下两份备份：`<配置名>.pre-env-setup-wsl.bak` 是首次写入前（文件尚未被本脚本托管时）建立的安装前原件，只此一份、永不覆盖；`<配置名>.env-setup-wsl.bak-<UTC 时间戳>` 是每次改动各一份的上一版。备份失败即放弃覆盖，原文件保持不动。
 
 ## Considered Options
 
@@ -11,5 +11,5 @@
 ## Consequences
 
 - 备份与被备份的 rc 同目录：`~/.bashrc` 的备份因此是隐藏文件，`config.fish` 的不是。
-- 命名沿用 `agent-setup.sh` 的 `.pre-<事件>.bak-<UTC 时间戳>` 约定，但备份只增不删，脚本不提供清理入口，恢复靠运行时打印的 `cp -p` 命令。
+- 命名沿用 `setup-agents.sh` 的 `.pre-<事件>.bak-<UTC 时间戳>` 约定，但备份只增不删，脚本不提供清理入口，恢复靠运行时打印的 `cp -p` 命令。
 - 已经运行过旧版本的用户，配置里已有托管块，无法再补建安装前原件；脚本会明确提示，而不是拿当前文件伪造一份"原件"。

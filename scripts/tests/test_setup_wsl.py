@@ -15,7 +15,7 @@ import termios
 import time
 import unittest
 
-SCRIPT = Path(__file__).resolve().parents[1] / 'env-setup-wsl.sh'
+SCRIPT = Path(__file__).resolve().parents[1] / 'setup-wsl.sh'
 ZSH_BINARY = shutil.which('zsh')
 FISH_BINARY = shutil.which('fish')
 
@@ -289,7 +289,7 @@ class WslSetupTests(unittest.TestCase):
                         SHELL_STATE=str(self.root / 'login-shell'))
         # Mock the fixed external Homebrew location as well as PATH. The whole
         # entrypoint still runs; no installed host Homebrew can bypass the fakes.
-        isolated_script = self.root / 'env-setup-wsl.sh'
+        isolated_script = self.root / 'setup-wsl.sh'
         source = SCRIPT.read_text()
         external_path = 'HOMEBREW_BIN="/home/linuxbrew/.linuxbrew/bin/brew"'
         self.assertEqual(source.count(external_path), 1, 'Refresh the external-path fixture before running installers')
@@ -1677,7 +1677,7 @@ os.execv(""" + repr(shutil.which('cp')) + """, ['cp'] + sys.argv[1:])
         self.assertFalse(self.bashrc.exists())
 
     def test_pipe_help_errors_and_no_terminal(self):
-        for args, code, message in [(('--help',), 0, '用法：env-setup-wsl.sh'),
+        for args, code, message in [(('--help',), 0, '用法：setup-wsl.sh'),
                                     (('--unattended',), 2, '未知选项'),
                                     ((), 1, '需要交互终端')]:
             with self.subTest(args=args):
@@ -1730,7 +1730,7 @@ os.execv(""" + repr(shutil.which('cp')) + """, ['cp'] + sys.argv[1:])
         self.assertEqual(code, 1, output)
         self.assertIn('[失败] uv/Python', output)
         retry = ('curl -fsSL https://raw.githubusercontent.com/gwyntoria/skills/'
-                 'refs/heads/main/scripts/env-setup-wsl.sh | '
+                 'refs/heads/main/scripts/setup-wsl.sh | '
                  'PYTHON_VERSION=3.13 NODE_VERSION=22 bash')
         self.assertIn(retry, output)
         # Execute the displayed command with harmless stubs to prove the

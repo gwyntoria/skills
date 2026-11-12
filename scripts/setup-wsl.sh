@@ -6,7 +6,7 @@ set -euo pipefail
 # WSL Ubuntu Development Environment
 #
 # Usage:
-#   ./env-setup-wsl.sh  Install
+#   ./setup-wsl.sh  Install
 #
 # Interactive Fish/Zsh/Bash setup, plugins, prompts, development runtimes and AI tools.
 #
@@ -15,9 +15,9 @@ set -euo pipefail
 #   - Fish, Zsh or Bash
 # ============================================================
 
-PROGRAM_NAME="env-setup-wsl.sh"
+PROGRAM_NAME="setup-wsl.sh"
 SCRIPT_PATH=""
-SETUP_URL="https://raw.githubusercontent.com/gwyntoria/skills/refs/heads/main/scripts/env-setup-wsl.sh"
+SETUP_URL="https://raw.githubusercontent.com/gwyntoria/skills/refs/heads/main/scripts/setup-wsl.sh"
 # 管道执行没有源文件路径，本地执行才解析用于重试的绝对路径。
 if [ -n "${BASH_SOURCE[0]:-}" ]; then
     SCRIPT_PATH="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/${BASH_SOURCE[0]##*/}"
@@ -259,7 +259,7 @@ remove_managed_block() {
     fi
 }
 
-# 备份命名沿用 agent-setup.sh 的 .pre-<事件>.bak-<时间戳> 约定，
+# 备份命名沿用 setup-agents.sh 的 .pre-<事件>.bak-<时间戳> 约定，
 # UTC 时间戳便于枚举和排序，也不受时区影响。
 timestamp() {
     date -u '+%Y%m%dT%H%M%SZ'

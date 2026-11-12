@@ -15,7 +15,7 @@ import tempfile
 import time
 import unittest
 
-SCRIPT = Path(__file__).resolve().parents[1] / 'agent-setup.sh'
+SCRIPT = Path(__file__).resolve().parents[1] / 'setup-agents.sh'
 
 NPX = r'''#!/usr/bin/env python3
 import json, os, sys
@@ -230,7 +230,7 @@ class AgentSetupTests(unittest.TestCase):
     def test_pipe_help_and_invalid_arguments(self):
         result = self.run_piped('--help')
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn('Usage: agent-setup.sh', result.stdout)
+        self.assertIn('Usage: setup-agents.sh', result.stdout)
         self.assertEqual(self.run_piped('--unknown').returncode, 2)
         self.assertEqual(self.run_piped('--list', '--skill').returncode, 2)
         self.assertFalse(self.calls())
@@ -1174,7 +1174,7 @@ target.chmod(0o755)
         text = (nested / 'AGENTS.md').read_text()
         self.assertIn(personal, text)
         self.assertEqual(text.count('<!-- gwyn-space-skills: code-comments:start -->'), 1)
-        self.assertIn('Installed from rules/code-comments.md by agent-setup.sh', text)
+        self.assertIn('Installed from rules/code-comments.md by setup-agents.sh', text)
         self.assertEqual((project / 'AGENTS.md').read_text(), 'root must stay unchanged\n')
         self.assertFalse((nested / '.claude').exists())
         result = self.source('apply_rule code-comments project codex', cwd=nested)

@@ -2,7 +2,7 @@
 
 set -eu
 
-PROGRAM_NAME="agent-setup.sh"
+PROGRAM_NAME="setup-agents.sh"
 INSTALL_AGENT=0
 INSTALL_SKILLS=0
 LIST_SKILLS=0
@@ -32,7 +32,7 @@ if [ -n "${BASH_SOURCE[0]:-}" ]; then
 fi
 PROJECT_TARGET="$(pwd -P)"
 SOURCE_ARCHIVE_URL=https://codeload.github.com/gwyntoria/skills/tar.gz/refs/heads/main
-LATEST_SCRIPT_URL=https://raw.githubusercontent.com/gwyntoria/skills/main/scripts/agent-setup.sh
+LATEST_SCRIPT_URL=https://raw.githubusercontent.com/gwyntoria/skills/main/scripts/setup-agents.sh
 RESOURCE_TEMP=""
 RESOURCE_PATH=""
 STATUSLINE_SOURCE=""
@@ -591,7 +591,7 @@ install_setup_command() (
     mkdir -p "$directory"
     temporary="$(mktemp "$directory/.agent-setup.XXXXXX")"
     trap 'rm -f -- "$temporary"' EXIT
-    if [ "${SCRIPT_PATH##*/}" = agent-setup.sh ] &&
+    if [ "${SCRIPT_PATH##*/}" = setup-agents.sh ] &&
         [ "${SCRIPT_DIR##*/}" = scripts ] && [ -d "$REPO/rules" ]; then
         cp "$SCRIPT_PATH" "$temporary"
     else
@@ -634,7 +634,7 @@ apply_rule() {
 # The rule engine owns its helpers and traps only inside this subshell.
 rule_engine() (
     set -euo pipefail
-    PROGRAM_NAME='agent-setup.sh'
+    PROGRAM_NAME='setup-agents.sh'
     RULE="$1"; SCOPE="$2"; TARGET_OPT="$3"; MODE="${4:-install}"
     RULE_FILE="$RULE.md"; RULE_CLASSIFICATION="${6:-$SCOPE}"; RULE_SOURCE=""; RULE_TITLE=""
     MARKER_PREFIX=gwyn-space-skills

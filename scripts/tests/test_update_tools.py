@@ -16,7 +16,7 @@ import sys
 import tempfile
 import unittest
 
-SCRIPT = Path(__file__).resolve().parents[1] / 'env-update.sh'
+SCRIPT = Path(__file__).resolve().parents[1] / 'update-tools.sh'
 STUB = r'''
 import json, os, sys
 from pathlib import Path
