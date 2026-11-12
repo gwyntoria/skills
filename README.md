@@ -91,13 +91,13 @@
 无需克隆仓库即可打开 Agent 安装菜单（需要交互终端）：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/gwyntoria/skills/main/scripts/agent-setup.sh | bash
+curl -fsSL https://raw.githubusercontent.com/gwyntoria/skills/refs/heads/main/scripts/agent-setup.sh | bash
 ```
 
 菜单从 `/dev/tty` 读取输入，所需规则和状态栏文件按需从 GitHub 下载。项目规则安装到执行命令时的当前目录。无终端时可传入参数，例如只查看 skill 清单：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/gwyntoria/skills/main/scripts/agent-setup.sh | bash -s -- --list
+curl -fsSL https://raw.githubusercontent.com/gwyntoria/skills/refs/heads/main/scripts/agent-setup.sh | bash -s -- --list
 ```
 
 ## Skills 安装
