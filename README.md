@@ -66,13 +66,13 @@
 
 ## Rules
 
-本仓库规则位于 `rules/project/`；安装器还会动态获取 [Waza 的规则](https://github.com/tw93/Waza/tree/main/rules)。来源与安装范围独立。
+本仓库规则位于 `rules/`；安装器还会动态获取 [Waza 的规则](https://github.com/tw93/Waza/tree/main/rules)。来源与安装范围独立。
 
 | 文件 | 使用范围 | 说明 |
 | --- | --- | --- |
-| [`code-comments.md`](rules/project/code-comments.md) | 项目 | 跨语言的接口契约、数据含义、流程与分支注释规则 |
-| [`writing-repo.md`](rules/project/writing-repo.md) | 项目 | Markdown 写作仓库的资源路径、引用方式和格式检查规则 |
-| [`chinese-punctuation.md`](rules/project/chinese-punctuation.md) | 项目 | 终端回复的中文半角标点、空格规则和适用范围 |
+| [`code-comments.md`](rules/code-comments.md) | 项目 | 跨语言的接口契约、数据含义、流程与分支注释规则 |
+| [`writing-repo.md`](rules/writing-repo.md) | 项目 | Markdown 写作仓库的资源路径、引用方式和格式检查规则 |
+| [`chinese-punctuation.md`](rules/chinese-punctuation.md) | 项目 | 终端回复的中文半角标点、空格规则和适用范围 |
 
 规则通过 [`scripts/agent-setup.sh`](scripts/agent-setup.sh) 的交互菜单安装。
 

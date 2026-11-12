@@ -948,7 +948,7 @@ target.chmod(0o755)
     def test_global_local_rule_keeps_title_and_project_behavior(self):
         result = self.source('apply_rule code-comments global both install project', cwd=self.root)
         self.assertEqual(result.returncode, 0, result.stderr)
-        source = (SCRIPT.parents[1] / 'rules/project/code-comments.md').read_text()
+        source = (SCRIPT.parents[1] / 'rules/code-comments.md').read_text()
         codex = (self.home / '.codex/AGENTS.md').read_text()
         self.assertTrue(codex.startswith('# Global Rules\n'))
         self.assertIn('## Code Comment Guidelines\n', codex)
@@ -1038,7 +1038,7 @@ target.chmod(0o755)
                      'code-comments', 'chinese-punctuation', 'writing-repo'):
             self.assertEqual(text.count(f'gwyn-space-skills: {name}:start'), 1)
         self.assertIn('Upstream code-comments body.', text)
-        self.assertIn('Installed from rules/project/code-comments.md', text)
+        self.assertIn('Installed from rules/code-comments.md', text)
 
     def test_rule_tree_children_partial_state_and_group_toggle(self):
         self.waza_bundle(('anti-patterns', 'chinese', 'clarity'))
@@ -1115,7 +1115,7 @@ target.chmod(0o755)
         text = (nested / 'AGENTS.md').read_text()
         self.assertIn(personal, text)
         self.assertEqual(text.count('<!-- gwyn-space-skills: code-comments:start -->'), 1)
-        self.assertIn('Installed from rules/project/code-comments.md by agent-setup.sh', text)
+        self.assertIn('Installed from rules/code-comments.md by agent-setup.sh', text)
         self.assertEqual((project / 'AGENTS.md').read_text(), 'root must stay unchanged\n')
         self.assertFalse((nested / '.claude').exists())
         result = self.source('apply_rule code-comments project codex', cwd=nested)
@@ -1236,14 +1236,14 @@ target.chmod(0o755)
                 self.rule_agents_and_scope(term, scope=scope)
                 frame = term.transcript.decode().rsplit('\x1b[H\x1b[2J', 1)[-1]
                 self.assertIn('tw93/Waza @ main', frame)
-                self.assertIn('rules/project/code-comments.md', frame)
+                self.assertIn('rules/code-comments.md', frame)
                 term.send(b'\r')
                 term.expect('2 succeeded, 0 failed')
                 self.assertEqual(term.finish_action(), 0)
                 codex = project / 'AGENTS.md' if scope == 'project' else self.home / '.codex/AGENTS.md'
                 text = codex.read_text()
                 self.assertIn('https://github.com/tw93/Waza/blob/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/rules/anti-patterns.md', text)
-                self.assertIn('Installed from rules/project/code-comments.md', text)
+                self.assertIn('Installed from rules/code-comments.md', text)
                 self.assertEqual(text.count('waza-anti-patterns:start'), 1)
                 self.assertEqual(text.count('code-comments:start'), 1)
                 if scope == 'project':
@@ -1309,10 +1309,10 @@ target.chmod(0o755)
         self.assertEqual(len((self.root / 'fetch.log').read_text().splitlines()), 1)
         self.assertEqual(list(scratch.iterdir()), [])
 
-    def test_local_scope_wins_and_missing_scope_fetches_without_merging(self):
+    def test_local_rules_win_and_missing_directory_fetches_without_merging(self):
         self.remote_bundle()
         script = self.standalone()
-        local = script.parent.parent / 'rules/project'
+        local = script.parent.parent / 'rules'
         local.mkdir(parents=True)
         (local / 'local-only.md').write_text('# Local only\nlocal content\n')
         result = self.source('RULE_SCOPE=project\nload_rule_catalog\nprintf "%s\\n" "${RULE_NAMES_PROJECT[@]}"', script)

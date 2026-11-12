@@ -386,7 +386,7 @@ cleanup_setup_resources() {
 
 resolve_resource() {
     local relative="$1" candidate="$REPO/$1"
-    case "$relative" in rules/global | rules/project | scripts/statusline.sh) ;; *) return 2 ;; esac
+    case "$relative" in rules | scripts/statusline.sh) ;; *) return 2 ;; esac
     if [ -e "$candidate" ] || [ -L "$candidate" ]; then
         RESOURCE_PATH="$candidate"
     else
@@ -410,7 +410,7 @@ resolve_resource() {
         RESOURCE_PATH="$candidate"
     fi
     case "$relative" in
-        rules/*) [ -d "$RESOURCE_PATH" ] ;;
+        rules) [ -d "$RESOURCE_PATH" ] ;;
         *) [ -f "$RESOURCE_PATH" ] ;;
     esac || { printf 'Invalid resource: %s\n' "$RESOURCE_PATH" >&2; return 1; }
 }
@@ -552,13 +552,13 @@ resolve_rule_source() {
         load_waza_rules || return 1
         RESOURCE_PATH="$WAZA_RULES_PATH"
     else
-        resolve_resource "rules/$1"
+        resolve_resource rules
     fi
 }
 
 load_rule_catalog() {
     local file name title names=()
-    resolve_resource "rules/$RULE_SCOPE" || return 1
+    resolve_resource rules || return 1
     for file in "$RESOURCE_PATH"/*.md; do
         [ -f "$file" ] || continue
         name="${file##*/}"; name="${name%.md}"
@@ -1006,7 +1006,7 @@ write_block() {
                 "${WAZA_RULES_COMMIT:-main}" "${RULE#waza-}" "$PROGRAM_NAME" "$eol"
         else
             printf '<!-- Installed from rules/%s by %s. Edits inside this block are overwritten on reinstall. -->%s\n' \
-                "$RULE_CLASSIFICATION/$RULE_FILE" "$PROGRAM_NAME" "$eol"
+                "$RULE_FILE" "$PROGRAM_NAME" "$eol"
         fi
         while IFS= read -r line || [ -n "$line" ]; do
             line_number=$((line_number + 1))
@@ -2462,7 +2462,7 @@ print_install_plan() {
             if [ "$source_scope" = waza ]; then
                 printf '  Rule source: GitHub tw93/Waza @ main -> %s (rules/%s.md)\n' "$WAZA_RULES_COMMIT" "${i#waza-}"
             elif [ -n "$RESOURCE_TEMP" ] && [[ "$RESOURCE_PATH" = "$RESOURCE_TEMP/"* ]]; then
-                printf '  Rule source: GitHub gwyntoria/skills @ main (rules/%s/%s.md)\n' "$source_scope" "$i"
+                printf '  Rule source: GitHub gwyntoria/skills @ main (rules/%s.md)\n' "$i"
             else
                 printf '  Rule source: %s/%s.md\n' "$RESOURCE_PATH" "$i"
             fi
