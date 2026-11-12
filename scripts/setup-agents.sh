@@ -1694,9 +1694,27 @@ read_key() {
     KEY=""
     IFS= read -rsn1 KEY || return 1
     if [ "$KEY" = $'\e' ]; then
-        IFS= read -rsn2 -t 1 suffix || true
+        # Allow split arrow sequences while keeping standalone Esc responsive.
+        IFS= read -rsn2 -t 0.05 suffix || true
         KEY="$KEY$suffix"
     fi
+}
+
+# Read a confirmation into REPLY, retaining Enter submission and backspace.
+# A standalone Esc discards pending input and returns the existing Back answer.
+read_back_answer() {
+    REPLY=""
+    while read_key; do
+        case "$KEY" in
+            '') printf '\n'; return 0 ;;
+            $'\e') REPLY=b; printf '\n'; return 0 ;;
+            $'\177' | $'\b')
+                if [ -n "$REPLY" ]; then REPLY="${REPLY%?}"; printf '\b \b'; fi ;;
+            $'\e'*) ;; # Navigation sequences are not confirmation text or Back.
+            *) REPLY+="$KEY"; printf '%s' "$KEY" ;;
+        esac
+    done
+    return 1
 }
 
 # Fixed-height pages keep long skill catalogs usable in a small terminal.
@@ -1738,7 +1756,7 @@ choose_items_page() {
         printf 'Up/Down: move'
         if [ "$multiple" -eq 1 ]; then printf ' | Space: select | a: all | n: none'; fi
         printf ' | Enter: continue'
-        if [ "$page" -ne 0 ]; then printf ' | b: back'; fi
+        if [ "$page" -ne 0 ]; then printf ' | b/Esc: back'; fi
         printf ' | q: exit\n\n'
         if [ "$page" -eq 11 ]; then print_install_plan || return 3; printf '\n'; fi
         start=$((cursor / 8 * 8)); end=$((start + 8))
@@ -1764,8 +1782,8 @@ choose_items_page() {
             '')
                 if [ "$multiple" -eq 0 ]; then MENU_SELECTED=("$cursor"); fi
                 return 0 ;;
-            b | B) if [ "$page" -ne 0 ]; then return 2; fi ;;
-            q | Q | $'\e') return 1 ;;
+            b | B | $'\e') if [ "$page" -ne 0 ]; then return 2; fi ;;
+            q | Q) return 1 ;;
         esac
     done
 }
@@ -1878,10 +1896,10 @@ choose_skill_repositories_page() {
         printf '\033[H\033[2J%s\n' "$title"
         [ -z "$notice" ] || printf '%s\n' "$notice"
         if [ "$child" -lt 0 ]; then
-            printf 'Up/Down: move | Space: select %s | Enter: open / Continue | a: all | n: none | b: back | q: exit\n\n' "$group_word"
+            printf 'Up/Down: move | Space: select %s | Enter: open / Continue | a: all | n: none | b/Esc: back | q: exit\n\n' "$group_word"
             total=$((${#groups[@]} + 1)); MENU_CURSORS[page]="$cursor"
         else
-            printf '%s: %s\nUp/Down: move | Space: select | a: all | n: none | Enter/b: %s | q: exit\n\n' "$group_heading" "${groups[child]}" "$group_list"
+            printf '%s: %s\nUp/Down: move | Space: select | a: all | n: none | Enter/b/Esc: %s | q: exit\n\n' "$group_heading" "${groups[child]}" "$group_list"
             children=()
             for ((i=0; i<${#selected[@]}; i++)); do [ "${item_groups[i]}" -ne "$child" ] || children+=("$i"); done
             total="${#children[@]}"; key_page=$((100 + page * 100 + child)); MENU_CURSORS[key_page]="$cursor"
@@ -1955,9 +1973,9 @@ choose_skill_repositories_page() {
                 if [ "$child" -ge 0 ]; then child=-1; cursor="${MENU_CURSORS[page]}";
                 elif [ "$cursor" -eq "${#groups[@]}" ]; then return 0;
                 else child="$cursor"; key_page=$((100 + page * 100 + child)); cursor="${MENU_CURSORS[key_page]:-0}"; fi ;;
-            b | B)
+            b | B | $'\e')
                 if [ "$child" -ge 0 ]; then child=-1; cursor="${MENU_CURSORS[page]}"; else return 2; fi ;;
-            q | Q | $'\e') return 1 ;;
+            q | Q) return 1 ;;
         esac
     done
 }
@@ -2382,7 +2400,7 @@ scan_removal_inventory() {
 }
 
 preview_selected_removal() {
-    local i links answer ids=()
+    local i links ids=()
     for i in "${REMOVAL_RULE_SELECTION[@]+"${REMOVAL_RULE_SELECTION[@]}"}"; do ids+=("${REMOVAL_RULE_IDS[i]}"); done
     for i in "${REMOVAL_SKILL_SELECTION[@]+"${REMOVAL_SKILL_SELECTION[@]}"}"; do ids+=("${REMOVAL_SKILL_IDS[i]}"); done
     if [ "${#ids[@]}" -eq 0 ]; then printf 'No removal targets selected.\n'; return 2; fi
@@ -2391,14 +2409,14 @@ preview_selected_removal() {
     if [ -n "$links" ]; then
         printf 'Claude links referencing the selected skills:\n%s\n' "$links"
         while :; do
-            printf 'Also remove these Claude links? [y/N] (b: back | q: exit): '
-            IFS= read -r answer || return 4
-            case "$answer" in
+            printf 'Also remove these Claude links? [y/N] (b/Esc: back | q: exit): '
+            read_back_answer || return 4
+            case "$REPLY" in
                 y | Y) removal_inventory include-links || return 1; break ;;
                 n | N | '') break ;;
                 b | B) return 3 ;;
                 q | Q) return 4 ;;
-                *) printf 'Please enter y or n (b: back | q: exit).\n' ;;
+                *) printf 'Please enter y or n (b/Esc: back | q: exit).\n' ;;
             esac
         done
     fi
@@ -2592,7 +2610,7 @@ interactive_setup() {
     trap cleanup_setup_resources EXIT
     trap 'exit 130' INT
     trap 'exit 143' TERM
-    local page="${1:-main}" i task answer menu_status removal_scanned=0 removal_signature="" signature command_action removal_backup=0
+    local page="${1:-main}" i task menu_status removal_scanned=0 removal_signature="" signature command_action removal_backup=0
     local session_status=0 INTERACTIVE_RESULT=0 show_summary=0
     local repo_labels=() repo_group repo_url
     local rule_labels=() rule_names=() rule_sources=() source_scope selected_rule
@@ -2616,9 +2634,9 @@ interactive_setup() {
                     command_action=Update
                 fi
                 printf '\n%s this command?\nTarget: \033[32m%s/.local/bin/agent-setup\033[0m\n' "$command_action" "$HOME"
-                printf 'Continue? [Y/n] (b: back | q: exit) '
-                IFS= read -r answer || return "$session_status"
-                case "$answer" in
+                printf 'Continue? [Y/n] (b/Esc: back | q: exit) '
+                read_back_answer || return "$session_status"
+                case "$REPLY" in
                     y | Y | '')
                         run_item "$command_action this command" install_setup_command
                         print_summary || session_status=1
@@ -2700,9 +2718,9 @@ interactive_setup() {
                 page=remove_backup ;;
             remove_backup)
                 removal_backup=0
-                printf 'Create backup? [y/N] (b: back | q: exit): '
-                IFS= read -r answer || return "$session_status"
-                case "$answer" in
+                printf 'Create backup? [y/N] (b/Esc: back | q: exit): '
+                read_back_answer || return "$session_status"
+                case "$REPLY" in
                     y | Y) removal_backup=1; page=remove_confirm ;;
                     n | N | '') page=remove_confirm ;;
                     q | Q) return "$session_status" ;;
@@ -2711,7 +2729,7 @@ interactive_setup() {
                         elif [ "$REMOVE_RULES" -eq 1 ] && [ "${#REMOVAL_RULE_IDS[@]}" -gt 0 ]; then page=remove_rules;
                         else page=remove_agents; fi
                         continue ;;
-                    *) printf 'Please enter y or n (b: back | q: exit).\n' ;;
+                    *) printf 'Please enter y or n (b/Esc: back | q: exit).\n' ;;
                 esac ;;
             remove_confirm)
                 if [ "$removal_backup" -eq 1 ]; then
@@ -2719,9 +2737,9 @@ interactive_setup() {
                 else
                     printf 'No backup will be created.\n'
                 fi
-                printf 'Confirm removal? [Y/n] (b: back | q: exit): '
-                IFS= read -r answer || return "$session_status"
-                case "$answer" in
+                printf 'Confirm removal? [Y/n] (b/Esc: back | q: exit): '
+                read_back_answer || return "$session_status"
+                case "$REPLY" in
                     y | Y | '') run_interactive_task removal_inventory remove "$removal_backup" ;;
                     q | Q) return "$session_status" ;;
                     b | B) page=remove_backup; continue ;;
@@ -2910,9 +2928,9 @@ interactive_setup() {
                     if [ "$((${#AGENT_ITEMS[@]} + ${#SELECTED_SKILLS[@]}))" -eq 0 ]; then
                         show_summary=1; page=complete; continue
                     fi
-                    printf 'Continue? [Y/n] (b: back | q: exit) '
-                    IFS= read -r answer || return "$session_status"
-                    case "$answer" in
+                    printf 'Continue? [Y/n] (b/Esc: back | q: exit) '
+                    read_back_answer || return "$session_status"
+                    case "$REPLY" in
                         y | Y | '') ;;
                         q | Q) return "$session_status" ;;
                         b | B)
@@ -2928,12 +2946,12 @@ interactive_setup() {
             complete)
                 if [ "$INTERACTIVE_RESULT" -ne 0 ] || [ "${#FAILED[@]}" -gt 0 ]; then session_status=1; fi
                 if [ "$show_summary" -eq 1 ]; then print_summary || true; fi
-                printf '\nPress Enter to return to the main menu (q: exit): '
+                printf '\nPress Enter to return to the main menu (Esc: back | q: exit): '
                 while :; do
                     read_key || return "$session_status"
                     case "$KEY" in
-                        '') break ;;
-                        q | Q | $'\e') return "$session_status" ;;
+                        '' | $'\e') break ;;
+                        q | Q) return "$session_status" ;;
                     esac
                 done
                 # New actions start with defaults; Back within an action keeps selections.
