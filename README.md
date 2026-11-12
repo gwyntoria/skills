@@ -68,13 +68,13 @@
 
 本仓库规则位于 `rules/`；安装器还会动态获取 [Waza 的规则](https://github.com/tw93/Waza/tree/main/rules)。来源与安装范围独立。
 
-| 文件 | 使用范围 | 说明 |
-| --- | --- | --- |
-| [`code-comments.md`](rules/code-comments.md) | 项目 | 跨语言的接口契约、数据含义、流程与分支注释规则 |
-| [`writing-repo.md`](rules/writing-repo.md) | 项目 | Markdown 写作仓库的资源路径、引用方式和格式检查规则 |
-| [`chinese-punctuation.md`](rules/chinese-punctuation.md) | 项目 | 终端回复的中文半角标点、空格规则和适用范围 |
+| 文件 | 说明 |
+| --- | --- |
+| [`chinese-punctuation.md`](rules/chinese-punctuation.md) | 终端回复的中文半角标点、空格规则和适用范围 |
+| [`code-comments.md`](rules/code-comments.md) | 跨语言的接口契约、数据含义、流程与分支注释规则 |
+| [`writing-repo.md`](rules/writing-repo.md) | Markdown 写作仓库的资源路径、引用方式和格式检查规则 |
 
-规则通过 [`scripts/agent-setup.sh`](scripts/agent-setup.sh) 的交互菜单安装。
+> 规则可通过 [`scripts/agent-setup.sh`](scripts/agent-setup.sh) 的交互菜单安装和卸载。
 
 ## Scripts
 
@@ -88,7 +88,7 @@
 | [`statusline.sh`](scripts/statusline.sh) | Claude Code | 状态栏脚本，显示模型与思考等级、目录与 Git 分支、上下文余量、输入输出 token、速率限制和版本 |
 | [`list-skills.sh`](scripts/list-skills.sh) | 仓库维护 | 列出仓库内全部 skill 路径，并检查是否有重名 |
 
-无需克隆仓库即可打开 Agent 安装菜单和 WSL(Linux) 环境安装菜单（需要交互终端）：
+可在交互终端执行如下命令打开 Agent 和 WSL(Linux) 配置菜单：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/gwyntoria/skills/refs/heads/main/scripts/agent-setup.sh | bash
