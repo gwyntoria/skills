@@ -1825,8 +1825,8 @@ main"""]
         term.expect('Repository: mattpocock/skills')
         term.expect('Item 1/2')
         term.send(b'\x1b[B ')
-        term.expect('[ ] Codex / codebase-design [directory]')
-        term.expect('[x] Codex / tdd [directory]')
+        term.expect('[ ] codebase-design [Codex:directory]')
+        term.expect('[x] tdd [Codex:directory]')
         term.send(b'q')
         self.assertEqual(term.finish(), 0)
 
@@ -1901,6 +1901,109 @@ main"""]
         self.assertEqual(self.old.read_text(), 'keep me')
         self.assertEqual(json.loads(lock.read_text()), original)
         self.assertIn('\x1b[36mRestore:', result.stdout)
+
+    def test_global_skill_rows_merge_aliases_but_keep_unknown_copies_separate(self):
+        self.lock_fixture()
+        claude = self.home / '.claude/skills'
+        claude.mkdir(parents=True)
+        (claude / 'renamed').symlink_to(self.old.parent)
+        (claude / 'other').mkdir()  # Unknown provenance is not evidence of identity.
+        self.scan_entries(rules=False)
+        rows = self.inventory('rows')
+        self.assertEqual(rows.returncode, 0, rows.stderr)
+        lines = [line.split('\t') for line in rows.stdout.splitlines()]
+        self.assertEqual(len(lines), 3)
+        merged, = [line for line in lines if line[3].startswith('existing ')]
+        self.assertEqual(merged[3], 'existing [Codex:directory] [Claude:link]')
+        self.assertEqual(len(merged[0].split(',')), 2)
+        self.assertEqual({line[2] for line in lines if line[3].startswith('other ')},
+                         {'owner/repo', 'Unknown / local'})
+
+    def test_global_unknown_skill_and_proven_reference_share_one_row(self):
+        claude = self.home / '.claude/skills'
+        claude.mkdir(parents=True)
+        (claude / 'alias').symlink_to(self.old.parent)
+        self.scan_entries(rules=False)
+        rows = self.inventory('rows')
+        self.assertEqual(rows.returncode, 0, rows.stderr)
+        self.assertEqual(len(rows.stdout.splitlines()), 1)
+        self.assertIn('existing [Codex:directory] [Claude:link]', rows.stdout)
+
+    def test_external_link_inclusion_is_backed_up_and_restorable(self):
+        lock, original = self.lock_fixture()
+        link = self.home / '.claude/skills/alias'
+        link.parent.mkdir(parents=True)
+        link.symlink_to(self.old.parent)
+        entries = self.scan_entries(claude=False, rules=False)
+        self.select_entries([e for e in entries if e['name'] == 'existing'])
+        links = self.inventory('linked-skills')
+        self.assertEqual(links.returncode, 0, links.stderr)
+        self.assertIn(str(link), links.stdout)
+        included = self.inventory('include-links')
+        self.assertEqual(included.returncode, 0, included.stderr)
+        preview = self.inventory('preview')
+        self.assertIn('claude / alias [link]', preview.stdout)
+        self.assertNotIn('will be kept', preview.stdout)
+        removed = self.inventory('remove', '1')
+        self.assertEqual(removed.returncode, 0, removed.stderr)
+        self.assertFalse(link.is_symlink())
+        self.assertFalse(self.old.exists())
+        backup, = self.home.glob('.agent-skills-backup-*/removal.tar')
+        with tarfile.open(backup) as tar:
+            self.assertTrue(tar.getmember('.claude/skills/alias').issym())
+        subprocess.run(['tar', '-xf', str(backup), '-C', str(self.home)], check=True)
+        self.assertTrue(link.is_symlink())
+        self.assertEqual(self.old.read_text(), 'keep me')
+        self.assertEqual(json.loads(lock.read_text()), original)
+
+    def test_external_link_change_after_prompt_stops_removal(self):
+        self.lock_fixture()
+        link = self.home / '.claude/skills/existing'
+        link.parent.mkdir(parents=True)
+        link.symlink_to(self.old.parent)
+        entries = self.scan_entries(claude=False, rules=False)
+        self.select_entries([e for e in entries if e['name'] == 'existing'])
+        self.assertEqual(self.inventory('linked-skills').returncode, 0)
+        link.unlink()
+        link.symlink_to(self.home / '.agents/skills/other')
+        result = self.inventory('include-links')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Content changed', result.stderr)
+        self.assertTrue(self.old.exists())
+        self.assertTrue(link.is_symlink())
+
+    def test_shared_claude_directory_link_is_warned_and_kept(self):
+        self.lock_fixture()
+        link = self.home / '.claude/skills'
+        link.parent.mkdir(parents=True)
+        link.symlink_to(self.home / '.agents/skills')
+        entries = self.scan_entries(claude=False, rules=False)
+        self.select_entries([e for e in entries if e['name'] == 'existing'])
+        links = self.inventory('linked-skills')
+        self.assertEqual(links.returncode, 0, links.stderr)
+        self.assertEqual(links.stdout, '')
+        preview = self.inventory('preview')
+        self.assertIn('Shared Claude skills directory link will be kept', preview.stdout)
+        self.assertIn('also affects Claude', preview.stdout)
+        result = self.inventory('remove')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(link.is_symlink())
+        self.assertTrue((link / 'other/SKILL.md').exists())
+
+    def test_external_link_cleanup_preserves_system_entries(self):
+        self.lock_fixture()
+        link = self.home / '.claude/skills/.system/reference'
+        link.parent.mkdir(parents=True)
+        link.symlink_to(self.old.parent)
+        entries = self.scan_entries(claude=False, rules=False)
+        self.select_entries([e for e in entries if e['name'] == 'existing'])
+        links = self.inventory('linked-skills')
+        self.assertEqual(links.returncode, 0, links.stderr)
+        self.assertEqual(links.stdout, '')
+        self.assertIn('Claude link will be kept', self.inventory('preview').stdout)
+        result = self.inventory('remove')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(link.is_symlink())
 
     def test_claude_only_removal_keeps_shared_source_and_lock(self):
         lock, original = self.lock_fixture()
@@ -2458,35 +2561,85 @@ main"""]
         backup, = self.home.glob('.agent-rules-backup-*/removal.tar')
         self.assertEqual(backup.parent.stat().st_mode & 0o777, 0o700)
 
-    def test_removal_repository_child_can_select_one_agent_only(self):
+    def test_removal_repository_child_counts_and_removes_one_skill_across_agents(self):
         self.lock_fixture()
         link = self.home / '.claude/skills/existing'
         link.parent.mkdir(parents=True)
         link.symlink_to(self.old.parent)
         term = self.removal_terminal()
         term.expect('Remove skills by repository')
-        term.expect('Item 1/2')
+        term.expect('owner/repo (0/2)')
         term.send(b'\r')
-        term.expect('Codex / existing [directory]')
-        term.expect('Claude / existing [link]')
-        term.send(b' \r')  # only first Codex entry
-        term.expect('[-] owner/repo')
+        term.expect('existing [Codex:directory] [Claude:link]')
+        term.expect('other [Codex:directory]')
+        term.send(b' \r')
+        term.expect('owner/repo (1/2)')
         term.send(b'b')
         term.expect('Remove: choose agents')
         term.expect('Item 1/3')
         term.send(b'\r')
-        term.expect('[-] owner/repo')
+        term.expect('owner/repo (1/2)')
         term.send(b'\x1b[A\r')
-        term.expect('WARNING: Claude link will be kept')
         term.expect('Create backup? [y/N]')
+        self.assertNotIn(b'Also remove these Claude links?', term.transcript)
         term.send(b'\n')
         term.expect('Confirm removal? [Y/n]')
         term.send(b'y\n')
-        term.expect('1 succeeded, 0 failed')
+        term.expect('2 succeeded, 0 failed')
         self.assertEqual(term.finish_action(), 0)
-        self.assertTrue(link.is_symlink())
+        self.assertFalse(link.is_symlink())
         self.assertFalse(self.old.exists())
         self.assertTrue((self.home / '.agents/skills/other').exists())
+
+    def test_codex_only_ui_confirms_external_links_before_backup(self):
+        self.lock_fixture()
+        link = self.home / '.claude/skills/existing'
+        link.parent.mkdir(parents=True)
+        for accept in [False, True]:
+            with self.subTest(accept=accept):
+                before = set(self.home.glob('.agent-skills-backup-*/removal.tar'))
+                if link.is_symlink(): link.unlink()
+                link.symlink_to(self.old.parent)
+                term = self.removal_terminal(agents='codex')
+                term.expect('owner/repo (0/2)')
+                term.send(b'\r')
+                term.expect('existing [Codex:directory]')
+                term.send(b' \r\x1b[A\r')
+                term.expect('Also remove these Claude links? [y/N]')
+                self.assertNotIn(b'Create backup?', term.transcript)
+                self.assertTrue(self.old.exists())
+                term.send(b'y\n' if accept else b'\n')
+                if not accept: term.expect('WARNING: Claude link will be kept')
+                term.expect('Create backup? [y/N]')
+                term.send(b'y\n')
+                term.expect('Confirm removal? [Y/n]')
+                term.send(b'y\n')
+                term.expect(f'{2 if accept else 1} succeeded, 0 failed')
+                self.assertEqual(term.finish_action(), 0)
+                self.assertEqual(link.is_symlink(), not accept)
+                self.assertFalse(self.old.exists())
+                # Restore the source and lock before the next subcase.
+                backup, = set(self.home.glob('.agent-skills-backup-*/removal.tar')) - before
+                subprocess.run(['tar', '-xf', str(backup), '-C', str(self.home)], check=True)
+
+    def test_codex_external_link_prompt_back_and_exit_preserve_files(self):
+        self.lock_fixture()
+        link = self.home / '.claude/skills/existing'
+        link.parent.mkdir(parents=True)
+        link.symlink_to(self.old.parent)
+        term = self.removal_terminal(agents='codex')
+        term.expect('owner/repo (0/2)')
+        term.send(b' \x1b[A\r')
+        term.expect('Also remove these Claude links? [y/N]')
+        term.send(b'b\n')
+        term.expect('Remove skills by repository')
+        term.expect('owner/repo (2/2)')
+        term.send(b'\r')
+        term.expect('Also remove these Claude links? [y/N]')
+        term.send(b'q\n')
+        self.assertEqual(term.finish(), 0)
+        self.assertTrue(self.old.exists())
+        self.assertTrue(link.is_symlink())
 
     def test_removal_menu_defaults_back_cancel_q_and_fresh_scan(self):
         term = self.terminal()

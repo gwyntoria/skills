@@ -2068,6 +2068,27 @@ function ruleGroups(entries) {
 const agentName = agent => ({codex: 'Codex', claude: 'Claude', pi: 'Pi'}[agent]);
 const ruleLabel = group => `${display(group.name)} ${group.entries.map(e => `[${agentName(e.agent)}:${e.type}]`).join(' ')}`;
 const targetLabel = e => display(full(e.relative)) + (e.type === 'block' ? ` # ${display(e.name)}` : '');
+function linkDestination(p) {
+    const destination = path.resolve(path.dirname(p), fs.readlinkSync(p));
+    if (scope !== 'global') return destination;
+    // Keep the named Codex entry even when it is itself a link to another location.
+    if (path.dirname(destination) === full('.agents/skills')) return destination;
+    try { return fs.realpathSync(p); }
+    catch (error) {
+        if (!['ENOENT', 'ENOTDIR', 'ELOOP'].includes(error.code)) throw error;
+        return destination;
+    }
+}
+function skillGroups(entries) {
+    const groups = new Map();
+    for (const e of entries.filter(e => e.kind === 'skills')) {
+        const name = e.skillName || e.name;
+        const key = e.group !== 'Unknown / local' ? JSON.stringify([e.group, name]) : e.skillSource || e.relative;
+        if (!groups.has(key)) groups.set(key, {name, group: e.group, entries: []});
+        groups.get(key).entries.push(e);
+    }
+    return [...groups.values()];
+}
 function scan(codex, claude, rules, skills, pi = false) {
     const piRelative = pi && rules && scope === 'global' ? path.relative(root, path.resolve(piRulePath)) : null;
     if (piRelative !== null) full(piRelative); // Preserve the HOME boundary for custom Pi paths.
@@ -2117,12 +2138,17 @@ function scan(codex, claude, rules, skills, pi = false) {
                     if (name === '.system') continue;
                     const relative = path.join(root, name), info = stat(full(relative));
                     let record = agent === 'codex' ? lock.data?.skills?.[name] : null;
+                    let skillName = name, skillSource = relative;
                     if (agent === 'claude' && info.isSymbolicLink()) {
-                        const destination = path.resolve(path.dirname(full(relative)), fs.readlinkSync(full(relative)));
-                        if (path.dirname(destination) === full('.agents/skills')) record = lock.data?.skills?.[path.basename(destination)];
+                        const destination = linkDestination(full(relative));
+                        if (path.dirname(destination) === full('.agents/skills')) {
+                            skillName = path.basename(destination);
+                            skillSource = path.join('.agents/skills', skillName);
+                            record = lock.data?.skills?.[skillName];
+                        }
                     }
                     add({kind: 'skills', type: info.isSymbolicLink() ? 'link' : info.isDirectory() ? 'directory' : 'file',
-                         agent, relative, name, group: repository(record)});
+                         agent, relative, name, skillName, skillSource, group: repository(record)});
                 }
             }
         }
@@ -2157,23 +2183,31 @@ function verify(data, items) {
     }
     if (items.some(e => e.kind === 'skills') && fingerprint(lockPath) !== data.lockSnapshot) throw Error('Skill lock changed; rescan and select again');
 }
-function warnings(items) {
+function relatedLinks(items) {
     const removed = new Set(items.filter(e => e.type !== 'block').map(e => full(e.relative)));
     const sources = items.filter(e => e.kind === 'skills' && e.agent === 'codex').map(e => full(e.relative));
-    if (!sources.length) return;
-    console.log(yellow('Other agents may use shared skills.'));
+    const links = [];
+    if (!sources.length) return links;
     function walk(p) {
         const info = stat(p);
         if (!info) return;
         if (info.isSymbolicLink()) {
-            const destination = path.resolve(path.dirname(p), fs.readlinkSync(p));
+            const destination = linkDestination(p);
             if (!removed.has(p) && sources.some(source => destination === source || destination.startsWith(source + path.sep) || source.startsWith(destination + path.sep))) {
-                console.log(red(`WARNING: Claude link will be kept: ${display(p)} -> ${display(destination)}`));
+                links.push({relative: path.relative(root, p), destination,
+                    shared: sources.some(source => source.startsWith(destination + path.sep))});
             }
         } else if (info.isDirectory()) for (const name of fs.readdirSync(p)) walk(path.join(p, name));
     }
     // Do not traverse a symlinked agent parent just to produce a warning.
     if (!stat(full('.claude'))?.isSymbolicLink()) walk(full('.claude/skills'));
+    return links;
+}
+function warnings(items) {
+    for (const link of relatedLinks(items)) {
+        if (scope === 'global' && link.shared) console.log(yellow(`WARNING: Shared Claude skills directory link will be kept: ${display(full(link.relative))} -> ${display(link.destination)}; removing the selected skills also affects Claude.`));
+        else console.log(red(`WARNING: Claude link will be kept: ${display(full(link.relative))} -> ${display(link.destination)}; it will become broken if its target is removed.`));
+    }
 }
 function atomicWrite(relative, text) {
     parents(relative);
@@ -2198,8 +2232,15 @@ if (action === 'scan') {
     if (data.piRulePath && data.piRulePath !== path.resolve(piRulePath)) throw Error('Pi rule path changed; rescan and select again');
     if (action === 'rows') {
         for (const group of ruleGroups(data.entries)) console.log([group.entries.map(e => e.id).join(','), 'rules', '-', ruleLabel(group)].join('\t'));
-        for (const e of data.entries.filter(e => e.kind === 'skills')) console.log([e.id, e.kind, display(e.group || '-'), `${agentName(e.agent)} / ${display(e.name)} [${e.type}]`].join('\t'));
+        if (scope === 'global') {
+            for (const group of skillGroups(data.entries)) {
+                const label = `${display(group.name)} ${group.entries.map(e => `[${agentName(e.agent)}:${e.type}]`).join(' ')}`;
+                console.log([group.entries.map(e => e.id).join(','), 'skills', display(group.group || '-'), label].join('\t'));
+            }
+        } else for (const e of data.entries.filter(e => e.kind === 'skills')) console.log([e.id, e.kind, display(e.group || '-'), `${agentName(e.agent)} / ${display(e.name)} [${e.type}]`].join('\t'));
     } else if (action === 'select') {
+        data.entries = data.entries.filter(e => !e.external);
+        data.externalLinks = [];
         data.selected = [...new Set(args.flatMap(value => value.split(',').map(Number)))];
         if (data.selected.some(id => !data.entries.some(e => e.id === id))) throw Error('Invalid removal selection');
         fs.writeFileSync(manifest, JSON.stringify(data));
@@ -2207,7 +2248,26 @@ if (action === 'scan') {
         const items = selected(data);
         if (!items.length) { console.log('No removal targets selected.'); process.exit(0); }
         verify(data, items);
-        if (action === 'preview') {
+        if (action === 'linked-skills') {
+            data.externalLinks = scope === 'global' ? relatedLinks(items).filter(link => !link.shared &&
+                link.relative !== '.claude/skills/.system' && !link.relative.startsWith('.claude/skills/.system/')).map(link => ({
+                kind: 'skills', type: 'link', agent: 'claude', relative: link.relative,
+                name: path.relative('.claude/skills', link.relative), external: true,
+                snapshot: fingerprint(link.relative), parents: parents(link.relative)
+            })) : [];
+            for (const e of data.externalLinks) console.log(`  ${targetLabel(e)} -> ${display(fs.readlinkSync(full(e.relative)))}`);
+            fs.writeFileSync(manifest, JSON.stringify(data));
+        } else if (action === 'include-links') {
+            const links = data.externalLinks || [];
+            verify(data, links);
+            for (const e of links) {
+                e.id = data.entries.length;
+                data.entries.push(e);
+                data.selected.push(e.id);
+            }
+            data.externalLinks = [];
+            fs.writeFileSync(manifest, JSON.stringify(data));
+        } else if (action === 'preview') {
             console.log(`Removal scope: ${scope} (${display(root)})`);
             console.log('Removal targets:');
             for (const group of ruleGroups(items)) {
@@ -2322,11 +2382,26 @@ scan_removal_inventory() {
 }
 
 preview_selected_removal() {
-    local i ids=()
+    local i links answer ids=()
     for i in "${REMOVAL_RULE_SELECTION[@]+"${REMOVAL_RULE_SELECTION[@]}"}"; do ids+=("${REMOVAL_RULE_IDS[i]}"); done
     for i in "${REMOVAL_SKILL_SELECTION[@]+"${REMOVAL_SKILL_SELECTION[@]}"}"; do ids+=("${REMOVAL_SKILL_IDS[i]}"); done
     if [ "${#ids[@]}" -eq 0 ]; then printf 'No removal targets selected.\n'; return 2; fi
     removal_inventory select "${ids[@]}" || return 1
+    links=$(removal_inventory linked-skills) || return 1
+    if [ -n "$links" ]; then
+        printf 'Claude links referencing the selected skills:\n%s\n' "$links"
+        while :; do
+            printf 'Also remove these Claude links? [y/N] (b: back | q: exit): '
+            IFS= read -r answer || return 4
+            case "$answer" in
+                y | Y) removal_inventory include-links || return 1; break ;;
+                n | N | '') break ;;
+                b | B) return 3 ;;
+                q | Q) return 4 ;;
+                *) printf 'Please enter y or n (b: back | q: exit).\n' ;;
+            esac
+        done
+    fi
     removal_inventory preview || return 1
 }
 
@@ -2617,6 +2692,8 @@ interactive_setup() {
                 fi
                 preview_selected_removal || {
                     menu_status=$?
+                    if [ "$menu_status" -eq 3 ]; then continue; fi
+                    if [ "$menu_status" -eq 4 ]; then return "$session_status"; fi
                     if [ "$menu_status" -ne 2 ]; then FAILED+=('Removal preview failed; rescan required'); show_summary=1; fi
                     page=complete; continue
                 }
