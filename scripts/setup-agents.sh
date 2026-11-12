@@ -2377,9 +2377,9 @@ confirm_backup_removal() {
         printf '  \033[31m%s/%s\033[0m\n' "$HOME" "$name"
     done <<<"$names"
     printf 'This permanently deletes these backups and their restore data. No new backup is created.\n'
-    printf 'Confirm removal? [y/N]: '
+    printf 'Confirm removal? [Y/n]: '
     IFS= read -r answer || return 0
-    case "$answer" in y | Y) ;; *) return 0 ;; esac
+    case "$answer" in y | Y | '') ;; *) return 0 ;; esac
     run_item 'Remove all backups' remove_setup_backups "${backups[@]}"
     print_summary
 }
@@ -2541,10 +2541,10 @@ interactive_setup() {
                     command_action=Update
                 fi
                 printf '\n%s this command?\nTarget: \033[32m%s/.local/bin/agent-setup\033[0m\n' "$command_action" "$HOME"
-                printf 'Continue? [y/N] (b: back | q: exit) '
+                printf 'Continue? [Y/n] (b: back | q: exit) '
                 IFS= read -r answer || return "$session_status"
                 case "$answer" in
-                    y | Y)
+                    y | Y | '')
                         run_item "$command_action this command" install_setup_command
                         print_summary || session_status=1
                         page=complete ;;
@@ -2642,10 +2642,10 @@ interactive_setup() {
                 else
                     printf 'No backup will be created.\n'
                 fi
-                printf 'Confirm removal? [y/N] (b: back | q: exit): '
+                printf 'Confirm removal? [Y/n] (b: back | q: exit): '
                 IFS= read -r answer || return "$session_status"
                 case "$answer" in
-                    y | Y) run_interactive_task removal_inventory remove "$removal_backup" ;;
+                    y | Y | '') run_interactive_task removal_inventory remove "$removal_backup" ;;
                     q | Q) return "$session_status" ;;
                     b | B) page=remove_backup; continue ;;
                     *) printf 'Cancelled.\n' ;;
@@ -2833,10 +2833,10 @@ interactive_setup() {
                     if [ "$((${#AGENT_ITEMS[@]} + ${#SELECTED_SKILLS[@]}))" -eq 0 ]; then
                         show_summary=1; page=complete; continue
                     fi
-                    printf 'Continue? [y/N] (b: back | q: exit) '
+                    printf 'Continue? [Y/n] (b: back | q: exit) '
                     IFS= read -r answer || return "$session_status"
                     case "$answer" in
-                        y | Y) ;;
+                        y | Y | '') ;;
                         q | Q) return "$session_status" ;;
                         b | B)
                             if [ "$INSTALL_SKILLS" -eq 1 ]; then
