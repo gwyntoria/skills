@@ -74,7 +74,7 @@
 | [`writing-repo.md`](rules/project/writing-repo.md) | 项目 | Markdown 写作仓库的资源路径、引用方式和格式检查规则 |
 | [`chinese-punctuation.md`](rules/project/chinese-punctuation.md) | 项目 | 终端回复的中文半角标点、空格规则和适用范围 |
 
-规则通过 [`scripts/agent-setup.sh`](scripts/agent-setup.sh) 的交互菜单安装：选择 `Install / Update` → `Rules`，依次多选规则、选择 Global 或 Project 范围。Global 再选择目标 Agent（Codex、Claude Code、Pi 默认全选）；Project 跳过 Agent 选择，直接写入启动目录的 `AGENTS.md`，最后确认安装。规则默认不选；选择页支持 `b` 返回、`q` 退出，并保留勾选与光标。确认页展示资源来源和完整安装路径。规则页按 Waza 和本仓库来源分组列出规则，允许跨范围安装；所选规则统一安装到最后选择的范围，确认页保留原始来源。
+规则通过 [`scripts/agent-setup.sh`](scripts/agent-setup.sh) 的交互菜单安装。
 
 ## Scripts
 

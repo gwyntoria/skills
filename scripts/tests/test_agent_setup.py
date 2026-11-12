@@ -256,8 +256,8 @@ class AgentSetupTests(unittest.TestCase):
         term.send(b'\x1b[B' * 2 + b' \r')
         term.expect('Choose Agents')
         term.expect('Item 1/3')
-        self.assertIn('[x] Pi (with three packages)', term.transcript.decode())
-        term.send(b' \x1b[B\x1b[B \r')
+        self.assertIn('[ ] Pi (with three packages)', term.transcript.decode())
+        term.send(b' \x1b[B\x1b[B\r')
         term.expect('Continue? [y/N]')
         plan = term.transcript.decode().rsplit('Execution plan:', 1)[-1]
         self.assertIn('Claude Code CLI', plan)
@@ -380,7 +380,9 @@ target.chmod(0o755)
         term.send(b'\r')
         term.expect('Remove: choose agents')
         term.expect('Item 1/3' if scope == 'global' else 'Item 1/2')
-        if agents != 'all':
+        if agents == 'all':
+            term.send(b'a')
+        elif agents != 'default':
             index = {'codex': 0, 'claude': 1, 'pi': 2}[agents]
             term.send(b'n' + b'\x1b[B' * index + b' ')
         term.send(b'\r')
@@ -657,9 +659,11 @@ target.chmod(0o755)
         if scope == 'global':
             term.expect('Rules: choose agents')
             term.expect('Item 1/3')
-            for label in ['[x] Codex', '[x] Claude Code', '[x] Pi']:
+            for label in ['[x] Codex', '[x] Claude Code', '[ ] Pi']:
                 self.assertIn(label, term.transcript.decode())
-            if agents != 'all':
+            if agents == 'all':
+                term.send(b'a')
+            elif agents != 'default':
                 index = {'codex': 0, 'claude': 1, 'pi': 2}[agents]
                 term.send(b'n' + b'\x1b[B' * index + b' ')
             term.send(b'\r')
@@ -989,7 +993,7 @@ target.chmod(0o755)
         self.addCleanup(term.close)
         term.expect('Choose Agents')
         term.expect('Item 1/3')
-        for label in ['[x] Codex', '[x] Claude Code (with statusline)', '[x] Pi (with three packages)']:
+        for label in ['[x] Codex', '[x] Claude Code (with statusline)', '[ ] Pi (with three packages)']:
             self.assertIn(label, term.transcript.decode())
         term.send(b'q')
         self.assertEqual(term.finish(), 0)
@@ -1130,7 +1134,7 @@ target.chmod(0o755)
                     term.send(b'\r')
                     term.expect('Rules: choose agents')
                     term.expect('Item 1/3')
-                    for label in ['[x] Codex', '[x] Claude Code', '[x] Pi']:
+                    for label in ['[x] Codex', '[x] Claude Code', '[ ] Pi']:
                         self.assertIn(label, term.transcript.decode())
                 if page == 'confirm':
                     term.send(b'\r')
@@ -1164,7 +1168,7 @@ target.chmod(0o755)
         self.assertEqual(term.finish(), 0)
 
     def test_global_rule_ui_installs_only_selected_agent(self):
-        for agent in ['claude', 'codex', 'pi']:
+        for agent in ['default', 'claude', 'codex', 'pi']:
             with self.subTest(agent=agent):
                 # Keep each selection isolated so unexpected destinations are visible.
                 for directory in ['.claude', '.codex', '.pi']:
@@ -1178,15 +1182,14 @@ target.chmod(0o755)
                     'pi': self.home / '.pi/agent/AGENTS.md',
                 }
                 frame = term.transcript.decode().rsplit('\x1b[H\x1b[2J', 1)[-1]
-                self.assertIn(str(destinations[agent]), frame)
-                for other in destinations:
-                    if other != agent:
-                        self.assertNotIn(str(destinations[other]), frame)
+                selected = {'codex', 'claude'} if agent == 'default' else {agent}
+                for name, destination in destinations.items():
+                    self.assertEqual(str(destination) in frame, name in selected)
                 term.send(b'\r')
                 term.expect('1 succeeded, 0 failed')
                 self.assertEqual(term.finish_action(), 0)
                 for name, destination in destinations.items():
-                    self.assertEqual(destination.exists(), name == agent)
+                    self.assertEqual(destination.exists(), name in selected)
 
     def test_pi_global_engine_custom_directory_updates_and_preserves_content(self):
         self.env['PI_CODING_AGENT_DIR'] = '~/custom pi'
@@ -1918,13 +1921,13 @@ main"""]
         self.assertEqual(claude.read_text(), 'Claude user rules.\n')
         self.assertFalse(list(self.home.glob('.agent-rules-backup-*')))
 
-    def test_global_removal_defaults_include_pi_and_mixed_agents(self):
+    def test_global_removal_explicit_all_includes_pi_and_mixed_agents(self):
         target, personal, blocks = self.pi_removal_fixture()
         codex = self.home / '.codex/AGENTS.md'
         codex.parent.mkdir()
         codex.write_text('Codex notes.\n' + blocks['one'])
         term = self.removal_terminal(types=('Rules',))
-        self.assertIn('[x] Pi (rules only)', term.transcript.decode())
+        self.assertIn('[ ] Pi (rules only)', term.transcript.decode())
         term.expect('one [Codex:block] [Pi:block]')
         term.expect('two [Pi:block]')
         term.expect('Item 1/2')
@@ -1937,6 +1940,23 @@ main"""]
         self.assertEqual(term.finish_action(), 0)
         self.assertEqual(target.read_text(), personal)
         self.assertEqual(codex.read_text(), 'Codex notes.\n')
+
+    def test_global_removal_default_preserves_pi_rules(self):
+        codex, claude, pi, _, _ = self.grouped_rule_fixture()
+        before = pi.read_bytes()
+        term = self.removal_terminal(types=('Rules',), agents='default')
+        term.expect('one [Codex:block] [Claude:file]')
+        term.expect('Item 1/1')
+        term.send(b'a\r')
+        term.expect('Create backup? [y/N]')
+        term.send(b'\n')
+        term.expect('Confirm removal? [y/N]')
+        term.send(b'y\n')
+        term.expect('2 succeeded, 0 failed')
+        self.assertEqual(term.finish_action(), 0)
+        self.assertEqual(pi.read_bytes(), before)
+        self.assertEqual(codex.read_text(), 'Codex notes.\n')
+        self.assertFalse(claude.exists())
 
     def grouped_rule_fixture(self):
         pi, personal, blocks = self.pi_removal_fixture()

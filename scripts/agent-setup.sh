@@ -88,7 +88,7 @@ usage() {
 Usage: $PROGRAM_NAME [--agent] [--skill] | --list
 
 No arguments: open the interactive menu (requires a terminal).
-  --agent     Choose Codex, Claude Code and Pi (all by default), with bundled components
+  --agent     Choose Codex and Claude Code by default; Pi is optional, with bundled components
   --skill     Install/update all configured skills; preserve existing skills
   --list      List available skills by source without installing
   -h, --help  Show help
@@ -1707,7 +1707,12 @@ choose_items_page() {
     local page="$1" title="$2" multiple="$3" defaults="$4"
     shift 4
     local options=("$@") selected=() restored=() cursor=0 i start end mark
-    for ((i=0; i<${#options[@]}; i++)); do selected+=("$defaults"); done
+    # Defaults are one shared flag or a space-separated flag for each option.
+    if [[ "$defaults" = *" "* ]]; then
+        read -r -a selected <<<"$defaults"
+    else
+        for ((i=0; i<${#options[@]}; i++)); do selected+=("$defaults"); done
+    fi
     if [ "${MENU_VISITED[page]:-0}" -eq 1 ]; then
         cursor="${MENU_CURSORS[page]}"
         for ((i=0; i<${#options[@]}; i++)); do selected[i]=0; done
@@ -2559,13 +2564,14 @@ interactive_setup() {
                 if [ "${MENU_SELECTED[0]}" -eq 0 ]; then REMOVE_SCOPE=global; else REMOVE_SCOPE=project; fi
                 page=remove_agents ;;
             remove_agents)
-                local remove_agent_labels=(Codex 'Claude Code')
+                local remove_agent_labels=(Codex 'Claude Code') remove_agent_defaults='1 1'
                 if [ "$REMOVE_SCOPE" = global ]; then
                     remove_agent_labels+=('Pi (rules only)')
+                    remove_agent_defaults+=' 0'
                 elif [ "${MENU_CURSORS[4]:-0}" -gt 1 ]; then
                     MENU_CURSORS[4]=1
                 fi
-                choose_items 4 'Remove: choose agents' 1 1 "${remove_agent_labels[@]}" || {
+                choose_items 4 'Remove: choose agents' 1 "$remove_agent_defaults" "${remove_agent_labels[@]}" || {
                     [ "$?" -eq 2 ] || return "$session_status"
                     page=remove_scope; continue
                 }
@@ -2658,7 +2664,7 @@ interactive_setup() {
                 fi
                 if [ "$agent_requested" -eq 1 ]; then page=agent_choices; else page=before_rules; fi ;;
             agent_choices)
-                choose_items 12 'Choose Agents' 1 1 Codex 'Claude Code (with statusline)' 'Pi (with three packages)' || {
+                choose_items 12 'Choose Agents' 1 '1 1 0' Codex 'Claude Code (with statusline)' 'Pi (with three packages)' || {
                     [ "$?" -eq 2 ] || return "$session_status"
                     page=tasks; continue
                 }
@@ -2736,7 +2742,7 @@ interactive_setup() {
                     RULE_SCOPE=project; RULE_TARGETS=codex; page=after_rules
                 fi ;;
             rule_targets)
-                choose_items 8 'Rules: choose agents' 1 1 Codex 'Claude Code' Pi || {
+                choose_items 8 'Rules: choose agents' 1 '1 1 0' Codex 'Claude Code' Pi || {
                     [ "$?" -eq 2 ] || return "$session_status"
                     page=rule_scope; continue
                 }
