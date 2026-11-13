@@ -1,14 +1,21 @@
 ---
 name: how
-description: "Use for \"how does X work\", code walkthroughs before changing something, and placement / ownership / layering questions (\"where should this live\", \"which package owns this\", \"is this the right layer\"). Explains subsystem architecture, runtime flow, onboarding mental models. Use why for motivation."
-disable-model-invocation: true
+description: 'Use for "how does X work", code walkthroughs before changing something, and placement / ownership / layering questions ("where should this live", "which package owns this", "is this the right layer"). Explains subsystem architecture, runtime flow, onboarding mental models. Use why for motivation.'
 ---
 
 # How
 
 Explore the codebase to answer "how does X work?" questions. Produce architectural explanations at the level of a senior engineer onboarding onto a subsystem, enough to build a working mental model, not so much that it reads like annotated source code.
 
-Every spawn is a Task subagent with `subagent_type: generalPurpose` and `readonly: true`. Explorers use the `how explorer` line in the `pstack-models.mdc` rule (default `grok-4.7-xhigh-fast`), and every explainer uses the `how explainer` line (default `claude-opus-5-5-xhigh`). Set `model` to that line's value, or to the default if the rule or the line is missing. Leave `model` unset when the value is `auto` or `inherit-parent`. If the Task tool rejects a slug, use the default and say so. If it rejects the default, use the closest valid slug of the same family from its error message. Pick each subagent's reasoning level and fast or standard speed for the job, per the Subagents section of the **poteto-mode** skill.
+## Codex execution
+
+Resolve reference paths relative to this skill directory, not the target repository.
+
+Use the subagent tools exposed by the current Codex session to spawn explorers and explainers, wait for their results, and release finished agents. Leave model, reasoning, and speed overrides unset so each role inherits the current session configuration. Include the question, assigned role, relevant prompt template, repository location, and read-only constraint in every assignment. Give the explainer the explorer findings when applicable.
+
+All roles may read and search the repository but must not edit files, commit, or modify external state. This is a behavioral constraint, not a tool parameter.
+
+Keep independent explorers parallel within the session's concurrency limit. If necessary, run them in batches and release finished agents before starting more. Collect every explorer's result before spawning the explainer. If subagent tools are unavailable, report that the required workflow is blocked; do not replace it with an inline answer.
 
 ## 1. Assess complexity
 
@@ -21,7 +28,7 @@ When in doubt, take the simple path.
 
 ## 2. Explore (complex only)
 
-Decompose the question into 2 to 4 angles, each a distinct slice of the subsystem. Spawn all explorers in a single message, each with `references/explorer-prompt.md` and its angle filled in.
+Decompose the question into 2 to 4 angles, each a distinct slice of the subsystem. Spawn all explorers concurrently within the session limit, each with `references/explorer-prompt.md` and its angle filled in.
 
 ## 3. Synthesize (complex only)
 

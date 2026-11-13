@@ -55,30 +55,39 @@ Before reporting a finding as strong, ask whether you would expect to find it if
 Return your findings in this structure. The synthesizer reads it directly.
 
 ### Source
+
 Which source you investigated (source control, issue / ticket tracker, long-form documents, real-time team chat, infrastructure observability, error / exception tracking, product analytics warehouse, code comments, etc.).
 
 ### What I Searched
+
 The queries you ran, items you opened, and places you looked. Be specific. This shows how thorough the search was and what is still unsearched.
 
 ### Direct Evidence Found
+
 For each item that explicitly addresses the question:
+
 - **What it says**: verbatim quote or accurate paraphrase
 - **Where it's from**: PR #123, ticket ID, doc URL, chat permalink, commit hash, or file:line
 - **Author and date** (if available)
 - **Relevance**: one sentence on how it bears on the question
 
 ### Indirect / Circumstantial Evidence
+
 For each item that bears on the question without answering it:
+
 - **What it is**: brief description
 - **Where it's from**: location
 - **What it suggests**: what a careful reader might infer, and the inference chain
 - **Alternative readings**: if the same evidence could support a different interpretation, note it
 
 ### Contradictions
+
 Items that disagree with each other, with both citations.
 
 ### Gaps
+
 What you searched for and didn't find, specifically: "Searched the issue tracker for [query] across [time range]. No matching issues."
 
 ### Additional Leads
+
 Anything that suggests further investigation in a different source, for its investigator or a follow-up pass. For example, a chat thread that a PR mentions.
