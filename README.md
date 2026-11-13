@@ -102,6 +102,8 @@ claude plugin install gwyn-space-skills-writing@gwyn-space
 安装或更新插件后，新建会话以加载最新的 skill。
 
 > 使用 Claude Code 的插件形式，单纯是为了在 npx skills 安装的时候能提供分类信息。
+>
+> 实际上 Codex 已经可以识别 Claude Code 格式声明的 GitHub 仓库，所以也可以直接在 Codex 中加入本仓库。
 
 ### 补充说明
 
