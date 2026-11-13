@@ -1022,16 +1022,13 @@ format_rule_headings() {
 }
 
 # Build the managed block: markers, a provenance line, then the rendered body.
-# Only Codex project installations retain the legacy omit-title behavior.
 write_block() {
     local output="$1"
     local body="$2"
     local eol="$3"
-    local omit_h1="$4"
     local start
     local end
     local line
-    local line_number=0
 
     start="$(start_marker)"
     end="$(end_marker)"
@@ -1046,10 +1043,6 @@ write_block() {
                 "$RULE_FILE" "$PROGRAM_NAME" "$eol"
         fi
         while IFS= read -r line || [ -n "$line" ]; do
-            line_number=$((line_number + 1))
-            if [ "$omit_h1" -eq 1 ] && [ "$line_number" -eq 1 ]; then
-                continue
-            fi
             printf '%s%s\n' "$line" "$eol"
         done <"$body"
         printf '%s%s\n' "$end" "$eol"
@@ -1334,7 +1327,6 @@ write_managed_block() {
     local block_file
     local merged_file
     local eol=""
-    local omit_h1=0
     local body="$RULE_SOURCE"
 
     destination="$(managed_file_path "$target" "$scope")"
@@ -1366,10 +1358,11 @@ write_managed_block() {
         body="$SCRATCH_DIR/codex-body"
         format_rule_headings "$RULE_SOURCE" 2 >"$body"
     elif [ "$target" = "codex" ] && [ "$RULE_CLASSIFICATION" = "project" ]; then
-        omit_h1=1
+        body="$SCRATCH_DIR/codex-body"
+        format_rule_headings "$RULE_SOURCE" 2 >"$body"
     fi
 
-    write_block "$block_file" "$body" "$eol" "$omit_h1"
+    write_block "$block_file" "$body" "$eol"
 
     if [ "$discard_existing" -eq 1 ] && [ -f "$resolved" ]; then
         : >"$merged_file"
