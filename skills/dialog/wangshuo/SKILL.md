@@ -1,7 +1,7 @@
 ---
 name: wangshuo
 description: 借鉴王烁公开文章的方法分析复杂问题、审查决策或写作：问题重构、激励与信号、谈判退路、概率边界和清楚表达。
-user-invocable: true
+disable-model-invocation: true
 ---
 
 # 王烁

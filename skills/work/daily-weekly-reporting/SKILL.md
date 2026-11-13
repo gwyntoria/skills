@@ -1,6 +1,7 @@
 ---
 name: daily-weekly-reporting
 description: Use when writing Chinese daily reports, weekly reports, 日报, 周报, 工作总结, or Git-based status updates, especially when all-branch commits, local uncommitted changes, or previous-day unfinished work must be covered.
+disable-model-invocation: false
 ---
 
 # Daily Weekly Reporting

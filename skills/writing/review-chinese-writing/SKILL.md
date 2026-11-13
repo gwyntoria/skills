@@ -1,6 +1,7 @@
 ---
 name: review-chinese-writing
 description: "Review Chinese nonfiction for general readers with an evidence-backed two-stage assessment: first judge whether the draft is publishably clear, accurate, coherent, and supported, then identify optional improvements in presentation, rhythm, diction, syntax, and style. Use when users ask to 审稿, 审察文章好坏, 检查文章是否合格, 评价中文文章, or give revision advice on Chinese explainers, opinion pieces, columns, and popular technical writing."
+disable-model-invocation: true
 ---
 
 # Review Chinese Writing

@@ -1,6 +1,7 @@
 ---
 name: maintain-changelog
 description: Write, update, or review CHANGELOG.md files and release change summaries using Keep a Changelog conventions. Use when users ask to 编写 changelog, 更新 CHANGELOG, 审核版本记录, prepare an Unreleased section, or check release entries. Not for commit-message review or general code review.
+disable-model-invocation: true
 ---
 
 # Maintain Changelog

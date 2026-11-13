@@ -1,6 +1,7 @@
 ---
 name: scan-codebase
 description: "Inspect a Git repository's history before reading implementation code, then produce a current-stage risk map and a prioritized code-reading order. Invoke manually with $scan-codebase."
+disable-model-invocation: true
 ---
 
 # Scan Codebase

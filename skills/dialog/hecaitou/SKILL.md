@@ -1,6 +1,7 @@
 ---
 name: hecaitou
 description: 借鉴和菜头公开随笔中的观察与判断方法，讨论日常、关系和互联网生活，写作或修改中文文章；重视一手经验、时间检验、自我觉察与表达气口。
+disable-model-invocation: true
 ---
 
 # 和菜头
