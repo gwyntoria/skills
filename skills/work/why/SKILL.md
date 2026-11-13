@@ -1,6 +1,6 @@
 ---
 name: why
-description: "Use for 'why does X work this way', 'why we picked Y', design rationale, regressions, postmortems, or data-backed thresholds. Discovers available MCPs and queries each evidence category (source control, issue tracker, long-form docs, real-time chat, infrastructure observability, error tracking, product analytics warehouse) in parallel, then returns a cited read on decisions and tradeoffs. Use how for runtime behavior."
+description: "Investigate code design rationale, historical decisions, tradeoffs, and the background of fixes. Uses source history, issues, design documents, and relevant error records to return cited findings with calibrated confidence. Use how for runtime behavior."
 ---
 
 # Why
@@ -35,53 +35,26 @@ Pull the PR bodies, reviews, and discussion for substantive commits using availa
 
 ## Step 3. Spawn Parallel Investigators
 
-**Default to the full parallel investigation.** The goal is a complete coverage map, not a minimal one. Document the null, don't skip the search.
+### Select evidence categories
 
-### Discovery
+Use the four-category routing table in [references/source-playbook.md](references/source-playbook.md). Select categories by the question and readable evidence, then discover only the tools needed to access them. Local files, installed and authenticated CLIs, connectors or MCPs, and user-provided materials can supply evidence. A missing MCP does not make local evidence unavailable.
 
-Before spawning investigators, discover the evidence tools available in the current Codex session. Inspect the exposed tool catalog and use the session's tool-discovery mechanism for deferred connectors or MCPs. Use MCP resource listing only for servers that expose resources; an empty resource list does not establish that no callable tools exist. Base availability on discovered capabilities and actual access, not on a presumed configuration directory.
+Check source history and repository design documents by default when the repository is accessible. Search issue records when an access channel or supplied material is available. Include error tracking when the question involves exceptions, fixes, defensive logic, or an explicit error reference. Expand searches within these four categories when evidence is insufficient or contradictory.
 
-Map each available connector or MCP to one evidence category:
+Spawn one investigator per selected category with accessible evidence, concurrently within the session limit. Each investigator may use multiple access channels within its category. A single connector may serve multiple categories: GitHub PRs belong to source history, Issues to task tracking, and repository ADRs to long-form documents. Route cross-category leads to their owning investigator or a follow-up pass.
 
-1. Source control history
-2. Issue / ticket tracker
-3. Long-form documents
-4. Real-time team chat
-5. Infrastructure observability
-6. Error / exception tracking
-7. Product analytics warehouse
+Each investigator receives:
 
-Check local git history and available GitHub tools for source control; neither git nor `gh` is guaranteed. For the other six categories, classify using connector or MCP names, server descriptions, tool schemas, and resource descriptors. If a source could fit more than one category, choose the one matching its primary evidence. Record ambiguous cases in the coverage map. A GitHub integration may serve both PR history and Issues through separate category assignments.
-
-Spawn one investigator per available evidence category, concurrently within the session limit. Each owns one selected connector or MCP backend; the source-control investigator may combine local git with GitHub access for PR evidence. Do not ask one investigator to cover multiple categories or unrelated backends.
-
-Each investigator's prompt is `references/investigator-prompt.md` filled in, plus:
-
-- the tool-adaptation guidance in `references/source-playbook.md` and the category playbook selected from its table. Use that exact filename (for example, source control uses `sources/code-archaeology.md`); do not derive a filename from the category or tool name
-- the assigned backend and available tool-discovery details, including known access limits
-- `references/sources/incident-postmortem.md` **if the target code looks defensive** (null checks, retry logic, timeout handling, rate limiting, feature flags, egress guards, OOM handlers)
+- `references/investigator-prompt.md`, filled in with its assignment
+- the access guidance and exact category playbook linked from `references/source-playbook.md`
+- assigned evidence locations and available tools, including known access limits
 - the code anchor and the user's original question
 
-### Investigator roster, one per available evidence category
+### Coverage and stopping
 
-Each category below is uniquely positioned to surface one shape of "why", shown after "Best at". Use it to know what to expect back, to name a gap when a category returns empty, and, only in the rare provably-irrelevant case, to justify a skip.
+Record categories searched, searches with no results, access failures, and categories not selected with a brief reason. If access fails, retain the failure report and continue accessible investigations. Reading a playbook is preparation, not a search of that evidence source.
 
-1. **Source control** (git history, available GitHub tools for PRs, code comments, tests). Always spawn when repository evidence is accessible; report any unavailable history or remote access. Best at *implementation-time rationale captured during review*.
-2. **Issue / ticket tracker** (e.g. Linear, Jira, GitHub Issues, Plane, Shortcut MCP). Best at *the product or business forcing function*. Strongest when the why is external to engineering.
-3. **Long-form documents** (e.g. Notion, Confluence, Google Docs, Coda MCP). Best at *long-form design rationale*, written out before it becomes code.
-4. **Real-time team chat** (e.g. Slack, Discord, Microsoft Teams, Mattermost MCP). Best at *real-time deliberation that never reached a doc*. Especially important when the source control, ticket, and doc paper trail is thin.
-5. **Infrastructure observability** (e.g. Datadog, New Relic, Honeycomb, Grafana, Splunk MCP). Best at *infrastructure and runtime reality that motivated the code*. Strongest when the target reacts to an infra signal (timeouts, retries, rate limits, circuit breakers).
-6. **Error / exception tracking** (e.g. Sentry, Rollbar, Bugsnag, Airbrake MCP). Best at *the specific exceptions and error trajectories that motivated defensive or corrective code*. Strongest for catch blocks, null guards, type checks, retries, and other defenses.
-7. **Product analytics warehouse** (e.g. Databricks, Snowflake, BigQuery, ClickHouse, dbt, Redshift MCP). Best at *product and data reality that shaped the code*. Strongest for flag-gated code, experiment-driven ships, data migrations, and "where did this number come from" questions.
-
-### When to skip an investigator
-
-Only with an **explicit, written justification** that goes in the final Sources Consulted. Two valid reasons:
-
-- **No usable evidence access is available for that category** in this environment, including missing tools, history, permissions, or authentication. Flag it as a gap, not an empty search: "Real-time team chat skipped. No matching connector or MCP available, so the conversational record was not searchable." If access fails after dispatch, retain the investigator's failure report in the coverage map and continue the other investigations.
-- **The source is provably irrelevant**, not just "probably irrelevant." A high bar: "Error / exception tracking skipped. Target is a build-time script with no runtime code path."
-
-If your scope assessment suggests a single-commit trivial target where the PR description already contains the complete answer, you may answer inline **only after** confirming all seven available category searches would be redundant. Say so explicitly. This should be rare.
+When searches have covered the selected scope and relevant cross-category leads have been followed or recorded as inaccessible, collect the findings for synthesis. Unsupported motivation remains unknown; accessible evidence need not exist in all four categories.
 
 ## Step 4. Synthesize
 
@@ -99,7 +72,7 @@ Present the synthesizer's output to the user. You may lightly edit for clarity o
 
 ## Output Format
 
-The structure is the one in `references/synthesizer-prompt.md`: The Question, The Code in Question, What We Found, What We Can Reasonably Infer, Competing Hypotheses, What We Don't Know, Sources Consulted, Confidence Summary. Adapt as needed, but keep the confidence separation intact, and keep Sources Consulted as one line per investigator, including the ones that returned nothing or were skipped, with the reason.
+The structure is the one in `references/synthesizer-prompt.md`: The Question, The Code in Question, What We Found, What We Can Reasonably Infer, Competing Hypotheses, What We Don't Know, Sources Consulted, Confidence Summary. Adapt as needed, but keep the confidence separation intact, and keep Sources Consulted as one line per searched category, including empty results. Name unsearched categories and access gaps that materially limit the answer, with the reason.
 
 After Sources Consulted, if the user's `why` question is a precursor to changing this code, convert the lineage findings into a Preserve / Change / Avoid / Risk constraint set for planning the change.
 

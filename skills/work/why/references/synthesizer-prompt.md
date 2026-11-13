@@ -4,7 +4,7 @@ Fill in the placeholders.
 
 ---
 
-You are answering a "why" question about a piece of code by synthesizing findings from investigators who searched different historical sources (source control, issue / ticket tracker, long-form documents, real-time team chat, infrastructure observability, error / exception tracking, product analytics warehouse, and code comments). Produce a confidence-weighted, evidence-cited narrative that says honestly what the evidence supports, and just as honestly what it doesn't.
+You are answering a "why" question about a piece of code by synthesizing findings from investigators who searched different historical sources (source and version history, issue / task tracking, long-form documents, and error / exception tracking). Produce a confidence-weighted, evidence-cited narrative that says honestly what the evidence supports, and just as honestly what it doesn't.
 
 ## The Question
 
@@ -29,7 +29,7 @@ You are answering a "why" question about a piece of code by synthesizing finding
 You MUST follow `references/epistemics.md`. Read it in full before writing. The key rules:
 
 1. Every claim must sit in one tier: **Direct**, **Supported**, **Inferred**, **Speculative**, **Unknown**. The tier sets its section and its phrasing.
-2. Every Direct/Supported claim must have a citation (PR #, ticket ID, doc URL, chat permalink, commit hash, or file:line).
+2. Every Direct/Supported claim must have a citation (PR #, ticket ID, document path or URL, error event ID or URL, commit hash, or file:line).
 3. Inferred and Speculative claims must use hedged language ("appears to", "likely", "suggests", "one possibility is").
 4. Never cite code as evidence for its own intent.
 5. Document gaps. Don't fill them with plausible-sounding guesses.
@@ -41,7 +41,7 @@ You MUST follow `references/epistemics.md`. Read it in full before writing. The 
 2. **Merge overlaps.** When several investigators cite the same PR, ticket, or doc, give it one authoritative reference.
 3. **Surface contradictions.** When two items disagree, show both. Don't pick one.
 4. **Calibrate each claim.** Find its evidence and tier. Direct: cite it and state it plainly. Inferred: hedge it and show the inference. Speculative: mark it. No evidence: put it in the gaps.
-5. **Verify citations by spot-checking.** If you're uncertain a cited item exists or says what the investigator claims, check it by reading the codebase or calling MCP tools. Don't propagate errors. Do not write files, commit, or modify external state.
+5. **Verify citations by spot-checking.** If you're uncertain a cited item exists or says what the investigator claims, check it by reading the cited files, supplied materials, or available external records. Don't propagate errors. Do not write files, commit, or modify external state.
 6. **Don't overreach.** The user will act on this. Leave an open question open rather than fill it with a confident guess.
 
 ## Output Format
@@ -91,26 +91,25 @@ Specific gaps: "We searched the issue tracker for [query1], [query2], [query3] a
 
 - Questions that went unanswered
 - Searches that returned nothing
-- Sources that were unavailable, and why (such as a missing real-time team chat MCP)
+- Sources that were unavailable, and why (such as inaccessible error records or a restricted design document)
 - People who would likely know but whom you can't ask
 
 ### Sources Consulted
 
-What was actually searched, so the user can judge coverage and redirect:
+What was actually searched, so the user can judge coverage and redirect. Include one line per searched category, including searches with no results:
 
-- **Source control history**: {file paths}, {number of commits reviewed}, PRs #{numbers}, and code comments searched. Name any unavailable git history or GitHub access and the specific tool, permission, or authentication gap.
-- **Issue / ticket tracker**: {ticket IDs and keyword searches}. Or "Not searched. No matching connector or MCP available in this environment."
-- **Long-form documents**: {page titles and search queries}. Or "Not searched. No matching connector or MCP available in this environment."
-- **Real-time team chat**: {channels searched, date ranges, queries}. Or "Not searched. No matching connector or MCP available in this environment."
-- **Infrastructure observability**: {dashboards, monitors, metrics, logs, traces, or incidents searched}. Or "Not searched. No matching connector or MCP available in this environment."
-- **Error / exception tracking**: {issues, events, or releases searched}. Or "Not searched. No matching connector or MCP available in this environment."
-- **Product analytics warehouse**: {fully-qualified tables queried, the time windows, and the numeric summaries (counts, percentiles, first/last-seen timestamps) that bore on the question}. Or "Not searched. No matching connector or MCP available in this environment."
+- **Source and version history**: files, commits, PRs, reviews, comments, and tests examined.
+- **Issue / task tracking**: task IDs, keyword searches, and relevant parent or duplicate records.
+- **Long-form documents**: local paths or external titles and URLs, sections, versions, and search queries.
+- **Error / exception tracking**: event or issue IDs, exception signatures, releases, and time ranges examined.
+
+For each included category, name the access channel or supplied material and any limits. Add unsearched categories only when they materially limit the answer, explaining whether access was unavailable or the category was not selected. A playbook read is not evidence searched; a missing MCP does not rule out local or supplied records.
 
 ### Confidence Summary
 
 One or two sentences on overall confidence, e.g.:
 
-> "The core rationale (A) is well-supported by direct PR and ticket evidence. The specific threshold value (100) is inferred from the surrounding context but not explicitly documented. The question of whether this was driven by a customer request could not be answered. No relevant issue tracker or long-form doc content surfaced, and real-time team chat search was unavailable."
+> "The core rationale (A) is well-supported by direct PR and ticket evidence. The specific threshold value (100) is inferred from the surrounding context but not explicitly documented. The question of whether this was driven by a customer request could not be answered. No relevant issue or design-document content surfaced, and historical error records were unavailable."
 
 ---
 

@@ -1,25 +1,18 @@
-# Source playbooks
+# Evidence routing
 
-The why skill spawns one investigator per available evidence category, each reading a single source-specific playbook below. The playbooks are concrete examples for common MCPs. Adapt them for a different connector or MCP in the same category.
+Select evidence by its content and relevance. Access channels are interchangeable where their actual capabilities allow it; these playbooks describe investigation methods rather than vendor APIs.
 
-## Adapt tools to the session
+| Category | Evidence and purpose | Access examples | Playbook |
+| --- | --- | --- | --- |
+| Source and version history | Code changes, commits, PRs, and review discussion: implementation-time rationale | Local files, git, GitHub tools, `gh`, supplied patches or PR exports | [code-archaeology.md](sources/code-archaeology.md) |
+| Issue / task tracking | Requirements, business constraints, problem background, and scope changes | GitHub Issues, Linear or Jira tools, supplied issue exports | [issue-tracking.md](sources/issue-tracking.md) |
+| Long-form documents | Repository ADRs, RFCs, and internal or external design documents: reasons, alternatives, and architectural tradeoffs | Local files, repository search, document tools, supplied documents | [design-documents.md](sources/design-documents.md) |
+| Error / exception tracking | Exception records, stack traces, affected releases, and resolution notes: background of fixes or defensive logic | Error-tracking tools such as Sentry, supplied event exports or exception logs | [error-tracking.md](sources/error-tracking.md) |
 
-Inspect the assigned backend's actual tool schemas before calling it. Tool names, parameters, authentication mechanisms, and SQL capabilities below are examples, not guaranteed APIs. Use the exposed equivalent without changing the investigation's purpose. Prefer available connector or MCP capabilities; use `gh` for missing GitHub capabilities only when installed and authenticated. Keep all queries read-only.
+## Access guidance
 
-Verify environment-specific table names, columns, and data conventions before relying on them. If a capability is absent or access fails, record what could not be searched and why; do not label it an empty result or invent an equivalent tool. Continue other accessible searches in the assigned category. The synthesizer must also use actual available tools when spot-checking citations.
+Use available capabilities, following the target project's documented access conventions. Prefer connector or MCP capabilities where sufficient; use installed and authenticated CLIs when needed. Inspect actual tool schemas before calling them. Keep all queries read-only.
 
-## Category playbooks
+A category may combine local evidence and external records, and one tool may serve multiple categories. Assign documents by content: an ADR belongs to long-form documents even when stored in git. Source-history investigators pass its path and relevant commits to the document investigator.
 
-| Category | Playbook | Example MCP it documents |
-| --- | --- | --- |
-| Source control history | [`code-archaeology.md`](./sources/code-archaeology.md) | git, `gh` |
-| Issue / ticket tracker | [`linear.md`](./sources/linear.md) | Linear (adapt for Jira, GitHub Issues, Plane, Shortcut) |
-| Long-form documents | [`notion.md`](./sources/notion.md) | Notion (adapt for Confluence, Google Docs, Coda) |
-| Real-time team chat | [`slack.md`](./sources/slack.md) | Slack (adapt for Discord, Microsoft Teams, Mattermost) |
-| Infrastructure observability | [`datadog.md`](./sources/datadog.md) | Datadog (adapt for New Relic, Honeycomb, Grafana, Splunk) |
-| Error / exception tracking | [`sentry.md`](./sources/sentry.md) | Sentry (adapt for Rollbar, Bugsnag, Airbrake) |
-| Product analytics warehouse | [`databricks.md`](./sources/databricks.md) | Databricks SQL (adapt for Snowflake, BigQuery, ClickHouse, dbt) |
-
-Cross-cutting:
-
-- [`incident-postmortem.md`](./sources/incident-postmortem.md). Add this if the target code looks defensive (null checks, retry, timeout, rate limit, feature flag, egress guard, OOM handler).
+When a capability is absent or access fails, record the affected source and reason, then continue with other readable evidence in the category. Distinguish an empty search from inaccessible records and from a category not selected. Supplied exports cover only their included content and time range; report that limit rather than implying a live search. The synthesizer uses the same access rules for citation checks.

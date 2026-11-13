@@ -1,10 +1,10 @@
 # Investigator Prompt Template
 
-Fill in the placeholders. Append the one category playbook `sources/<source>.md` for this investigator's evidence category (index: `source-playbook.md`). If the target code looks defensive (null checks, retry logic, timeout handling, rate limiting, feature flags, egress guards, OOM handlers), also append `sources/incident-postmortem.md` so the investigator runs incident-flavored queries inside its own source.
+Fill in the placeholders. Append the category playbook linked from `source-playbook.md` and the assigned evidence locations, access channels, and known limits.
 
 ---
 
-You are investigating the historical context and motivation behind a piece of code. Other investigators search other sources in parallel, and a separate synthesizer combines all findings into the final answer. Go deep on your assigned source only. Gather evidence accurately rather than writing prose.
+You are investigating the historical context and motivation behind a piece of code. Other investigators search other sources in parallel, and a separate synthesizer combines all findings into the final answer. Go deep on your assigned evidence category using its available access channels. Gather evidence accurately rather than writing prose.
 
 Work like a **careful, cautious, and precise investigator**. Surface evidence and describe it accurately, including the parts that don't fit a tidy story. Boring and exact beats plausible. One verbatim quote with a precise citation is worth more than a paragraph of summary.
 
@@ -35,8 +35,8 @@ Work like a **careful, cautious, and precise investigator**. Surface evidence an
 
 1. **Cast a wide net first** so you don't miss related context. Only then narrow in on specific items.
 2. **Read the whole thing.** Read each PR, ticket, doc, or thread fully, not just the title or summary. The key evidence is often in a comment, a subtask, or a follow-up.
-3. **Follow links within your source only.** Pull the PR or commit a PR references, the parent or sibling of a ticket, the doc a doc links. Do NOT chase a cross-source reference. Record it under Additional Leads for that source's investigator. The one-investigator-per-category design depends on this. Chasing it duplicates work and confuses scope.
-4. **Quote verbatim**, with the exact location (PR number, ticket ID, URL, commit hash, file:line), so the reader can confirm the claim in seconds.
+3. **Follow links within your category.** Read related PRs, parent or duplicate tickets, or linked design documents as appropriate. Record cross-category references under Additional Leads for the owning investigator or a follow-up pass. Repository ADRs belong to the document category; sharing a tool does not change category ownership.
+4. **Quote verbatim**, with the exact location (PR number, ticket ID, URL, event ID, commit hash, file:line), so the reader can confirm the claim in seconds.
 5. **Record what you searched, not just what you found.** Write queries verbatim. An empty search is a finding.
 6. **Resist the story.** If two items in your source disagree, record both. Don't suppress the inconvenient one. If three items line up and a fourth contradicts them, the contradiction is the most interesting finding.
 
@@ -56,7 +56,7 @@ Return your findings in this structure. The synthesizer reads it directly.
 
 ### Source
 
-Which source you investigated (source control, issue / ticket tracker, long-form documents, real-time team chat, infrastructure observability, error / exception tracking, product analytics warehouse, code comments, etc.).
+Which category you investigated: source and version history, issue / task tracking, long-form documents, or error / exception tracking. Name the access channels and supplied materials used.
 
 ### What I Searched
 
@@ -67,7 +67,7 @@ The queries you ran, items you opened, and places you looked. Be specific. This 
 For each item that explicitly addresses the question:
 
 - **What it says**: verbatim quote or accurate paraphrase
-- **Where it's from**: PR #123, ticket ID, doc URL, chat permalink, commit hash, or file:line
+- **Where it's from**: PR #123, ticket ID, document path or URL, error event ID or URL, commit hash, or file:line
 - **Author and date** (if available)
 - **Relevance**: one sentence on how it bears on the question
 
@@ -90,4 +90,4 @@ What you searched for and didn't find, specifically: "Searched the issue tracker
 
 ### Additional Leads
 
-Anything that suggests further investigation in a different source, for its investigator or a follow-up pass. For example, a chat thread that a PR mentions.
+Anything that suggests further investigation in a different source, for its investigator or a follow-up pass. For example, an ADR linked from a PR or an error event referenced by a task.

@@ -5,17 +5,16 @@
 - Commit history (messages, dates, authors, diffs)
 - PR descriptions, review comments, and discussion threads (via available GitHub connector or MCP tools, or `gh` as a fallback)
 - Inline code comments, TODOs, FIXMEs, deprecation notes
-- ADRs (architectural decision records) if the repo keeps them
 - Tests, whose names and assertions often encode the edge cases that motivated a change
 - Related files modified in the same commits (co-change signal)
 - CHANGELOG entries and release notes in the repo
 - Issue/ticket IDs in commit messages and PR bodies
 
-The most trustworthy source, tied directly to the code, and the most complete. Everything that went through the repo should be here.
+Repository evidence ties changes to their implementation context. Explicit commit or review explanations can establish motivation; diffs and tests alone show mechanics, not intent. Pass ADR paths and relevant commits to the long-form document investigator.
 
 ## How to search it
 
-Use the available repository history. Missing git metadata, shallow history, unavailable PR access, and authentication failures are coverage gaps, not evidence that no rationale exists. Expand the seed commit list where local git history is accessible:
+Use readable repository files, available history and PR access, or supplied patches and PR exports. Missing git metadata, shallow history, unavailable PR access, and authentication failures are coverage gaps, not evidence that no rationale exists. Expand the seed commit list where local git history is accessible:
 
 ```bash
 # History through renames
@@ -37,15 +36,14 @@ git show <hash>
 git log <old>..<new> -p -- <file>
 ```
 
-Look for out-of-band docs:
+Look for related implementation evidence:
 
 ```bash
-# ADRs often live in docs/adr/ or similar
-rg -l -i 'architecture.decision' --glob '*.md'
-
 # TODOs and FIXMEs near the target
 rg -n -C2 '(TODO|FIXME|HACK|XXX|NOTE)' <target_file>
 
 # Related tests
 rg -l '<symbol>' --glob '*test*'
 ```
+
+When investigating defensive code, look for incident-fix messages and revert/reapply sequences around its introduction. Pass linked tasks, postmortems, and exception records to their owning categories.
