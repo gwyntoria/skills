@@ -316,7 +316,7 @@ class AgentSetupTests(unittest.TestCase):
         term.expect('Choose Agents')
         term.expect('Item 1/3')
         self.assertIn('[ ] Pi (with three packages)', term.transcript.decode())
-        term.send(b' \x1b[B\x1b[B\r')
+        term.send(b' \x1b[B \x1b[B\r')
         term.expect('Continue? [Y/n]')
         plan = term.transcript.decode().rsplit('Execution plan:', 1)[-1]
         self.assertIn('Claude Code CLI', plan)
@@ -718,7 +718,7 @@ target.chmod(0o755)
         if scope == 'global':
             term.expect('Rules: choose agents')
             term.expect('Item 1/3')
-            for label in ['[x] Codex', '[x] Claude Code', '[ ] Pi']:
+            for label in ['[x] Codex', '[ ] Claude Code', '[ ] Pi']:
                 self.assertIn(label, term.transcript.decode())
             if agents == 'all':
                 term.send(b'a')
@@ -1047,12 +1047,35 @@ target.chmod(0o755)
         self.assertTrue((self.home / '.claude/rules/code-comments.md').exists())
         self.assertEqual(len((self.root / 'fetch.log').read_text().splitlines()), 4)
 
+    def test_all_agent_pickers_default_to_codex_only(self):
+        for page, title, size in [
+            ('agent_choices', 'Choose Agents', 3),
+            ('rule_targets', 'Rules: choose agents', 3),
+            ('targets', 'Install skills for', 2),
+            ('remove_agents', 'Remove: choose agents', 3),
+            ('list_agents', 'List: choose agents', 3),
+        ]:
+            with self.subTest(page=page):
+                command = ['bash', '-c', f'source {shlex.quote(str(SCRIPT))}\nLIST_SCOPE=global; LIST_RULES=1; interactive_setup {page}']
+                term = Terminal(self.env, cwd=self.root, command=command)
+                self.addCleanup(term.close)
+                term.expect(title)
+                term.expect(f'Item 1/{size}')
+                frame = term.transcript.decode().rsplit(title, 1)[-1]
+                self.assertIn('[x] Codex', frame)
+                self.assertIn('[ ] Claude Code', frame)
+                if size == 3:
+                    self.assertIn('[ ] Pi', frame)
+                term.send(b'q')
+                self.assertEqual(term.finish(), 0)
+        self.assertFalse(self.calls())
+
     def test_agent_flag_terminal_opens_agent_selection(self):
         term = Terminal(self.env, cwd=self.root, command=['bash', str(SCRIPT), '--agent'])
         self.addCleanup(term.close)
         term.expect('Choose Agents')
         term.expect('Item 1/3')
-        for label in ['[x] Codex', '[x] Claude Code (with statusline)', '[ ] Pi (with three packages)']:
+        for label in ['[x] Codex', '[ ] Claude Code (with statusline)', '[ ] Pi (with three packages)']:
             self.assertIn(label, term.transcript.decode())
         term.send(b'q')
         self.assertEqual(term.finish(), 0)
@@ -1193,7 +1216,7 @@ target.chmod(0o755)
                     term.send(b'\r')
                     term.expect('Rules: choose agents')
                     term.expect('Item 1/3')
-                    for label in ['[x] Codex', '[x] Claude Code', '[ ] Pi']:
+                    for label in ['[x] Codex', '[ ] Claude Code', '[ ] Pi']:
                         self.assertIn(label, term.transcript.decode())
                 if page == 'confirm':
                     term.send(b'\r')
@@ -1241,7 +1264,7 @@ target.chmod(0o755)
                     'pi': self.home / '.pi/agent/AGENTS.md',
                 }
                 frame = term.transcript.decode().rsplit('\x1b[H\x1b[2J', 1)[-1]
-                selected = {'codex', 'claude'} if agent == 'default' else {agent}
+                selected = {'codex'} if agent == 'default' else {agent}
                 for name, destination in destinations.items():
                     self.assertEqual(str(destination) in frame, name in selected)
                 term.send(b'\r')
@@ -1653,7 +1676,7 @@ main"""]
         term.send(b'\x1b[A\r')
         term.expect('Install skills for')
         term.expect('Item 1/2')
-        term.send(b' \r')
+        term.send(b'n\x1b[B \r')
         term.expect('Continue? [Y/n]')
         self.assertIn(b'\x1b[32m', term.transcript)
         term.send(b'y\n')
@@ -2106,22 +2129,23 @@ main"""]
         self.assertEqual(target.read_text(), personal)
         self.assertEqual(codex.read_text(), 'Codex notes.\n')
 
-    def test_global_removal_default_preserves_pi_rules(self):
+    def test_global_removal_default_preserves_claude_and_pi_rules(self):
         codex, claude, pi, _, _ = self.grouped_rule_fixture()
         before = pi.read_bytes()
+        claude_before = claude.read_bytes()
         term = self.removal_terminal(types=('Rules',), agents='default')
-        term.expect('one [Codex:block] [Claude:file]')
+        term.expect('one [Codex:block]')
         term.expect('Item 1/1')
         term.send(b'a\r')
         term.expect('Create backup? [y/N]')
         term.send(b'\n')
         term.expect('Confirm removal? [Y/n]')
         term.send(b'y\n')
-        term.expect('2 succeeded, 0 failed')
+        term.expect('1 succeeded, 0 failed')
         self.assertEqual(term.finish_action(), 0)
         self.assertEqual(pi.read_bytes(), before)
         self.assertEqual(codex.read_text(), 'Codex notes.\n')
-        self.assertFalse(claude.exists())
+        self.assertEqual(claude.read_bytes(), claude_before)
 
     def grouped_rule_fixture(self):
         pi, personal, blocks = self.pi_removal_fixture()
@@ -2694,7 +2718,7 @@ main"""]
         term.send(b'\r')
         term.expect('Remove: choose agents')
         term.expect('Item 1/3')
-        term.send(b'\r')
+        term.send(b'n\x1b[B \r')
         term.expect('new.md [Claude:file]')
         term.send(b'q')
         self.assertEqual(term.finish(), 0)
