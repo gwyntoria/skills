@@ -661,14 +661,12 @@ apply_rule() {
     rule_engine "$1" "$2" "$3" "${4:-install}" "$RESOURCE_PATH" "${5:-$2}"
 }
 
-# The rule engine owns its helpers and traps only inside this subshell.
+# The rule engine owns its helpers only inside this subshell.
 rule_engine() (
     set -euo pipefail
-    PROGRAM_NAME='setup-agents.sh'
     RULE="$1"; SCOPE="$2"; TARGET_OPT="$3"; MODE="${4:-install}"
     RULE_FILE="$RULE.md"; RULE_CLASSIFICATION="${6:-$SCOPE}"; RULE_SOURCE=""; RULE_TITLE=""
-    MARKER_PREFIX=gwyn-space-skills
-    MIGRATE_LEGACY=1; TARGETS=""; SCOPES=""; FAILURES=0; SCRATCH_DIR=""
+    TARGETS=""; SCOPES=""; FAILURES=0
     PROJECT_DIR=""
     case "$SCOPE" in global | project) ;; *) return 2 ;; esac
     if [[ ! "$RULE" =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]*$ ]]; then return 2; fi
@@ -700,14 +698,11 @@ error() {
 }
 
 
-RESOLVED_IS_LINK=0
 resolve_symlinks() {
     local path="$1"
     local directory
     local link
     local hops=0
-
-    RESOLVED_IS_LINK=0
 
     while [ -L "$path" ]; do
         if [ "$hops" -ge 8 ]; then
@@ -715,7 +710,6 @@ resolve_symlinks() {
             return 1
         fi
         hops=$((hops + 1))
-        RESOLVED_IS_LINK=1
         directory="$(cd -P "$(dirname "$path")" && pwd -P)" || return 1
         link="$(readlink "$directory/$(basename "$path")")" || return 1
         case "$link" in
@@ -828,7 +822,7 @@ codex_file_path() {
     esac
 }
 
-managed_file_path() {
+rule_file_path() {
     case "$1" in
         claude) claude_rule_path "$2" ;;
         codex) codex_file_path "$2" ;;
@@ -836,138 +830,6 @@ managed_file_path() {
             if [ "$2" = global ]; then pi_rule_path
             else printf '%s/AGENTS.md\n' "$PROJECT_DIR"; fi ;;
     esac
-}
-
-start_marker() {
-    printf '<!-- %s: %s:start -->\n' "$MARKER_PREFIX" "$RULE"
-}
-
-end_marker() {
-    printf '<!-- %s: %s:end -->\n' "$MARKER_PREFIX" "$RULE"
-}
-
-# GNU stat first, BSD second. `chmod --reference` is not an option: it is GNU
-# only, and this script runs on macOS.
-mode_of() {
-    local file="$1"
-    local mode=""
-
-    mode="$(stat -c '%a' "$file" 2>/dev/null)" || mode=""
-    if [ -z "$mode" ]; then
-        mode="$(stat -f '%Lp' "$file" 2>/dev/null)" || mode=""
-    fi
-    if [ -z "$mode" ]; then
-        mode="644"
-    fi
-
-    printf '%s\n' "$mode"
-}
-
-# ------------------------------------------------------------
-# Atomic writes
-# ------------------------------------------------------------
-
-# Replace $destination with $source in one rename: build the new bytes beside the
-# destination (so the rename stays on one filesystem), then swap. A partial write
-# can therefore never be observed at the destination path.
-atomic_write() {
-    local destination="$1"
-    local source="$2"
-    local directory
-    local base
-    local mode
-    local temporary
-
-    directory="$(dirname "$destination")"
-    base="$(basename "$destination")"
-
-    if [ -e "$destination" ]; then
-        mode="$(mode_of "$destination")"
-    else
-        mode="644"
-    fi
-
-    temporary="$(mktemp "$directory/.${base}.tmp.XXXXXX")" || return 1
-
-    if ! cat "$source" >"$temporary"; then
-        rm -f "$temporary"
-        return 1
-    fi
-    if ! chmod "$mode" "$temporary"; then
-        rm -f "$temporary"
-        return 1
-    fi
-    if ! mv -f "$temporary" "$destination"; then
-        rm -f "$temporary"
-        return 1
-    fi
-
-    return 0
-}
-
-# ------------------------------------------------------------
-# Marker blocks
-# ------------------------------------------------------------
-
-# Line endings are compared after stripping a trailing CR but printed unmodified,
-# so a file touched by a Windows editor still matches its own markers and keeps
-# its original bytes everywhere the block is not.
-count_marker_lines() {
-    local file="$1"
-    local marker="$2"
-
-    if [ ! -f "$file" ]; then
-        printf '0\n'
-        return 0
-    fi
-
-    awk -v marker="$marker" '
-        { line = $0; sub(/\r$/, "", line) }
-        line == marker { n++ }
-        END { print n + 0 }
-    ' "$file"
-}
-
-marker_line_numbers() {
-    local file="$1"
-    local marker="$2"
-
-    awk -v marker="$marker" '
-        { line = $0; sub(/\r$/, "", line) }
-        line == marker { printf "%d ", NR }
-        END { printf "\n" }
-    ' "$file"
-}
-
-# Refuse to guess when the markers do not pair up: a start with no end would
-# otherwise delete everything after it.
-assert_markers_balanced() {
-    local file="$1"
-    local start
-    local end
-    local starts
-    local ends
-
-    [ -f "$file" ] || return 0
-
-    start="$(start_marker)"
-    end="$(end_marker)"
-    starts="$(count_marker_lines "$file" "$start")"
-    ends="$(count_marker_lines "$file" "$end")"
-
-    if [ "$starts" -eq 0 ] && [ "$ends" -eq 0 ]; then
-        return 0
-    fi
-
-    if [ "$starts" -eq 1 ] && [ "$ends" -eq 1 ]; then
-        return 0
-    fi
-
-    error "unbalanced markers in $file"
-    printf '  start markers at lines: %s\n' "$(marker_line_numbers "$file" "$start")" >&2
-    printf '  end markers at lines:   %s\n' "$(marker_line_numbers "$file" "$end")" >&2
-    printf '  Fix the markers by hand, then re-run.\n' >&2
-    return 1
 }
 
 # Shift ATX headings relative to the rule title, leaving fenced/indented code alone.
@@ -1021,482 +883,51 @@ format_rule_headings() {
     ' "$body"
 }
 
-# Build the managed block: markers, a provenance line, then the rendered body.
-write_block() {
-    local output="$1"
-    local body="$2"
-    local eol="$3"
-    local start
-    local end
-    local line
-
-    start="$(start_marker)"
-    end="$(end_marker)"
-
-    {
-        printf '%s%s\n' "$start" "$eol"
-        if [ "$RULE_CLASSIFICATION" = waza ]; then
-            printf '<!-- Installed from https://github.com/tw93/Waza/blob/%s/rules/%s.md by %s. Edits inside this block are overwritten on reinstall. -->%s\n' \
-                "${WAZA_RULES_COMMIT:-main}" "${RULE#waza-}" "$PROGRAM_NAME" "$eol"
-        else
-            printf '<!-- Installed from rules/%s by %s. Edits inside this block are overwritten on reinstall. -->%s\n' \
-                "$RULE_FILE" "$PROGRAM_NAME" "$eol"
-        fi
-        while IFS= read -r line || [ -n "$line" ]; do
-            printf '%s%s\n' "$line" "$eol"
-        done <"$body"
-        printf '%s%s\n' "$end" "$eol"
-    } >"$output"
-
-    return 0
-}
-
-# Produce the file $destination should become: everything outside the block kept
-# byte-for-byte, the block replaced or appended. Trailing blank lines left behind
-# by a removed block are dropped by holding them back until a real line arrives.
-merge_block() {
-    local destination="$1"
-    local block_file="$2"
-    local output="$3"
-    local start
-    local end
-    local eol=""
-
-    start="$(start_marker)"
-    end="$(end_marker)"
-
-    if [ -f "$destination" ] && grep -qU $'\r' "$destination" 2>/dev/null; then
-        eol=$'\r'
-    fi
-
-    # Replacing an existing block in place keeps other blocks and separators
-    # stable, so repeated batch installations compare equal to the current file.
-    if [ -s "$block_file" ] && [ -f "$destination" ] &&
-       grep -qFx -e "$start" -e "$start"$'\r' -- "$destination"; then
-        awk -v start="$start" -v end="$end" '
-            NR == FNR { replacement = replacement $0 "\n"; next }
-            { line = $0; sub(/\r$/, "", line) }
-            line == start { printf "%s", replacement; replacing = 1; next }
-            replacing && line == end { replacing = 0; next }
-            !replacing { print }
-        ' "$block_file" "$destination" >"$output"
-        return $?
-    fi
-
-    if [ -f "$destination" ]; then
-        awk -v start="$start" -v end="$end" '
-            { line = $0; sub(/\r$/, "", line) }
-            line == start { removing = 1; next }
-            removing && line == end { removing = 0; next }
-            removing { next }
-            {
-                if ($0 ~ /^[ \t\r]*$/) {
-                    blanks = blanks $0 "\n"
-                } else {
-                    printf "%s", blanks
-                    blanks = ""
-                    print
-                }
-            }
-        ' "$destination" >"$output"
+# Append in place: existing bytes, including legacy markers, are user content.
+append_rule_file() {
+    local source_hashes="${RULE_TITLE%% *}"
+    local target="$1" scope="$2" destination resolved level="${#source_hashes}" eol="" last_byte
+    destination="$(rule_file_path "$target" "$scope")"
+    resolved="$(resolve_symlinks "$destination")" || return 1
+    mkdir -p "$(dirname "$resolved")" || return 1
+    if [ "$target" = claude ]; then
+        level=1
     else
-        : >"$output"
-    fi
-
-    # An empty block file means "remove the block and add nothing back", which is
-    # how --remove reuses this path. The strip above has already flushed every
-    # trailing blank line, so there is nothing left to append.
-    if [ ! -s "$block_file" ]; then
-        return 0
-    fi
-
-    # Use the file's own line ending for the separator too, or a CRLF file ends
-    # up with one bare-LF line in the middle.
-    if [ -s "$output" ]; then
-        printf '%s\n' "$eol" >>"$output"
-    fi
-    cat "$block_file" >>"$output"
-
-    return 0
-}
-
-# ------------------------------------------------------------
-# Legacy copies
-# ------------------------------------------------------------
-# Older config_agent.sh versions wrote global.md straight over CLAUDE.md and
-# AGENTS.md. The immediately previous setup-rule.sh version also installed a
-# duplicate at ~/.claude/rules/global.md.
-
-timestamp() {
-    date -u '+%Y%m%dT%H%M%SZ'
-}
-
-remove_legacy_claude_global_rule() {
-    local legacy="$HOME/.claude/rules/global.md"
-    local backup
-
-    [ "$RULE" = "agent-behavior" ] || return 0
-    [ -e "$legacy" ] || [ -L "$legacy" ] || return 0
-
-    if [ -L "$legacy" ]; then
-        warn "$legacy is a symlink; remove it manually before installing agent-behavior.md."
-        return 1
-    fi
-
-    if ! cmp -s "$legacy" "$RULE_SOURCE"; then
-        warn "$legacy differs from $RULE_FILE; it was left in place."
-        warn "Remove or reconcile it before installing agent-behavior.md into CLAUDE.md."
-        return 1
-    fi
-
-    backup="$HOME/.claude/global.md.pre-claude-md.bak-$(timestamp)"
-
-    if ! mv "$legacy" "$backup"; then
-        error "could not move obsolete $legacy aside"
-        return 1
-    fi
-
-    printf '\033[36mMoved obsolete Claude rule to %s\033[0m\n' "$backup"
-    printf '\033[36m  Restore with: mv "%s" "%s"\033[0m\n' "$backup" "$legacy"
-    return 0
-}
-
-# A byte-identical AGENTS.md has no markers, so appending would leave the rule in
-# the file twice. Refuse, unless migration was explicitly requested.
-adopt_legacy_managed_file() {
-    local destination="$1"
-    local stamp
-    local backup
-
-    [ -f "$destination" ] || return 1
-
-    if ! cmp -s "$destination" "$RULE_SOURCE"; then
-        if grep -qF -- "$RULE_TITLE" "$destination" 2>/dev/null; then
-            warn "$destination contains an unmanaged copy of $RULE_FILE; see lines $(marker_line_numbers "$destination" "$RULE_TITLE")."
+        if [ -f "$(dirname "$destination")/AGENTS.override.md" ]; then
+            warn "$(dirname "$destination")/AGENTS.override.md exists and takes precedence; $target will not read $(basename "$destination")."
         fi
-        return 1
+        if [ "$scope" = global ] || [ "$RULE_CLASSIFICATION" = project ]; then level=2; fi
     fi
+    if [ -f "$resolved" ] && LC_ALL=C grep -qU $'\r' "$resolved"; then eol=$'\r'; fi
 
-    if [ "$MIGRATE_LEGACY" -ne 1 ]; then
-        error "$destination is byte-identical to $RULE_FILE and has no managed block."
-        printf '  Appending would leave two copies in the file the agent loads every session.\n' >&2
-        printf '  Use the Rules installer to migrate the legacy copy with a backup.\n' >&2
-        return 2
-    fi
-
-    stamp="$(timestamp)"
-    backup="$destination.pre-rules.bak-$stamp"
-
-    if ! cp -p "$destination" "$backup"; then
-        error "could not back up $destination"
-        return 2
-    fi
-
-    printf '\033[36mBacked up the legacy copy to %s\033[0m\n' "$backup"
-    printf '\033[36m  Restore with: mv "%s" "%s"\033[0m\n' "$backup" "$destination"
-
-    # Tell the caller the current content should be discarded.
-    return 0
-}
-
-# ------------------------------------------------------------
-# Claude Code
-# ------------------------------------------------------------
-
-install_claude() {
-    local scope="$1"
-    local target
-    local destination
-    local resolved
-    local backup
-    local body="$SCRATCH_DIR/claude-body"
-    local title
-
-    format_rule_headings "$RULE_SOURCE" 1 >"$body"
-    IFS= read -r title <"$body" || true
-
-    if [ "$RULE" = "agent-behavior" ] && [ "$scope" = "global" ]; then
-        install_managed_file claude "$scope"
-        return $?
-    fi
-
-    if [ "$scope" = "global" ]; then
-        target="$HOME/.claude/rules"
-    else
-        target="$PROJECT_DIR/.claude/rules"
-    fi
-
-    mkdir -p "$target"
-
-    destination="$target/$RULE_FILE"
-
-    if ! resolved="$(resolve_symlinks "$destination")"; then
-        error "could not resolve $destination"
-        return 1
-    fi
-    if [ "$RESOLVED_IS_LINK" -eq 1 ]; then
-        printf '  %s is a symlink; writing through to %s\n' "$destination" "$resolved"
-    fi
-
-    if [ -e "$resolved" ] && ! cmp -s "$resolved" "$body"; then
-        if ! head -n 1 "$resolved" | grep -qF -- "$RULE_TITLE" &&
-           ! head -n 1 "$resolved" | grep -qF -- "$title"; then
-            # Not ours. Keep the bytes, but never leave a .md backup behind:
-            # Claude Code would load it as another rule.
-            backup="$resolved.bak-$(timestamp)"
-            if ! cp -p "$resolved" "$backup"; then
-                error "could not back up $resolved"
-                return 1
-            fi
-            warn "$resolved was replaced; the previous file is at $backup"
+    if [ -s "$resolved" ]; then
+        last_byte="$(tail -c 1 "$resolved" | od -An -tu1 | tr -d '[:space:]')"
+        if [ "$last_byte" != 10 ]; then
+            printf '%s\n%s\n' "$eol" "$eol" >>"$resolved" || return 1
+        elif [ -n "$(tail -n 1 "$resolved" | tr -d '\r\n')" ]; then
+            printf '%s\n' "$eol" >>"$resolved" || return 1
         fi
+    elif [ "$target" != claude ] && [ "$scope" = global ]; then
+        printf '# Global Rules%s\n%s\n' "$eol" "$eol" >>"$resolved" || return 1
     fi
-
-    if [ -e "$resolved" ] && cmp -s "$resolved" "$body"; then
-        printf '\033[1;33m✓ already installed (claude, %s): %s\033[0m\n' "$scope" "$resolved"
-        return 0
-    fi
-
-    if ! atomic_write "$resolved" "$body"; then
-        error "could not write $resolved"
+    if ! format_rule_headings "$RULE_SOURCE" "$level" |
+        awk -v eol="$eol" '{ sub(/\r$/, ""); printf "%s%s\n", $0, eol }' >>"$resolved"; then
+        error "could not append $resolved"
         return 1
     fi
-
-    printf '\033[1;34m✓ installation complete (claude, %s): %s\033[0m\n' "$scope" "$resolved"
-    return 0
-}
-
-remove_claude() {
-    local scope="$1"
-    local destination
-    local resolved
-
-    if [ "$RULE" = "agent-behavior" ] && [ "$scope" = "global" ]; then
-        remove_managed_file claude "$scope"
-        return $?
-    fi
-
-    destination="$(claude_rule_path "$scope")"
-
-    if [ ! -e "$destination" ] && [ ! -L "$destination" ]; then
-        printf '  not installed (claude, %s): %s\n' "$scope" "$destination"
-        return 0
-    fi
-
-    if [ -L "$destination" ] && [ ! -e "$destination" ]; then
-        rm -f "$destination"
-        success "removed dangling link (claude, $scope): $destination"
-        return 0
-    fi
-
-    if ! resolved="$(resolve_symlinks "$destination")"; then
-        error "could not resolve $destination"
-        return 1
-    fi
-
-    if [ "$RESOLVED_IS_LINK" -eq 1 ]; then
-        rm -f "$destination"
-        success "removed link (claude, $scope): $destination"
-        printf '  The linked target was left in place: %s\n' "$resolved"
-        return 0
-    fi
-
-    if ! head -n 1 "$resolved" | grep -qF -- "$RULE_TITLE"; then
-        warn "not managed by $PROGRAM_NAME, left alone: $resolved"
-        return 1
-    fi
-
-    rm -f "$resolved"
-    success "removed (claude, $scope): $resolved"
-    return 0
-}
-
-# ------------------------------------------------------------
-# Managed instruction files
-# ------------------------------------------------------------
-
-# $1 target, $2 scope, $3 1 when the destination's current content must be discarded
-# (legacy adoption).
-write_managed_block() {
-    local target="$1"
-    local scope="$2"
-    local discard_existing="$3"
-    local destination
-    local resolved
-    local directory
-    local block_file
-    local merged_file
-    local eol=""
-    local body="$RULE_SOURCE"
-
-    destination="$(managed_file_path "$target" "$scope")"
-
-    if ! resolved="$(resolve_symlinks "$destination")"; then
-        error "could not resolve $destination"
-        return 1
-    fi
-    if [ "$RESOLVED_IS_LINK" -eq 1 ]; then
-        printf '  %s is a symlink; writing through to %s\n' "$destination" "$resolved"
-    fi
-
-    directory="$(dirname "$resolved")"
-
-    if ! mkdir -p "$directory"; then
-        error "could not create $directory"
-        return 1
-    fi
-
-    mkdir -p "$SCRATCH_DIR"
-    block_file="$SCRATCH_DIR/block"
-    merged_file="$SCRATCH_DIR/merged"
-
-    if [ -f "$resolved" ] && grep -qU $'\r' "$resolved" 2>/dev/null; then
-        eol=$'\r'
-    fi
-
-    if [ "$target" != "claude" ] && [ "$scope" = "global" ]; then
-        body="$SCRATCH_DIR/codex-body"
-        format_rule_headings "$RULE_SOURCE" 2 >"$body"
-    elif [ "$target" = "codex" ] && [ "$RULE_CLASSIFICATION" = "project" ]; then
-        body="$SCRATCH_DIR/codex-body"
-        format_rule_headings "$RULE_SOURCE" 2 >"$body"
-    fi
-
-    write_block "$block_file" "$body" "$eol"
-
-    if [ "$discard_existing" -eq 1 ] && [ -f "$resolved" ]; then
-        : >"$merged_file"
-        cat "$block_file" >>"$merged_file"
-    else
-        merge_block "$resolved" "$block_file" "$merged_file"
-    fi
-
-    if [ "$target" != "claude" ] && [ "$scope" = "global" ] &&
-       [ "$(head -n 1 "$merged_file" | tr -d '\r')" != '# Global Rules' ]; then
-        { printf '# Global Rules%s\n%s\n' "$eol" "$eol"; cat "$merged_file"; } >"$SCRATCH_DIR/titled"
-        mv "$SCRATCH_DIR/titled" "$merged_file"
-    fi
-
-    if [ -f "$resolved" ] && cmp -s "$resolved" "$merged_file"; then
-        printf '\033[1;33m✓ already installed (%s, %s): %s\033[0m\n' "$target" "$scope" "$resolved"
-        return 0
-    fi
-
-    if ! atomic_write "$resolved" "$merged_file"; then
-        error "could not write $resolved"
-        return 1
-    fi
-
     printf '\033[1;34m✓ installation complete (%s, %s): %s\033[0m\n' "$target" "$scope" "$resolved"
-
-    return 0
 }
 
-install_managed_file() {
-    local target="$1"
-    local scope="$2"
+remove_rule_file() {
     local destination
-    local override
-    # Tri-state, and the initial value matters: 1 means "no legacy copy was
-    # involved", which must merge rather than discard. Reusing a two-state flag
-    # here would drop everything outside the block on an ordinary re-install.
-    #   1 = nothing to adopt, 0 = adopted, 2 = refused
-    local adopt_status=1
-
-    destination="$(managed_file_path "$target" "$scope")"
-
-    # Checked before the write decision, not after it: AGENTS.override.md wins
-    # over AGENTS.md, so the rule is inert even when nothing needed writing.
-    if [ "$target" != "claude" ]; then
-        override="$(dirname "$destination")/AGENTS.override.md"
-        if [ -f "$override" ]; then
-            warn "$override exists and takes precedence; $target will not read $(basename "$destination")."
-        fi
-    fi
-
-    if ! assert_markers_balanced "$destination"; then
-        return 1
-    fi
-
-    if [ "$scope" = "global" ] &&
-        [ "$(count_marker_lines "$destination" "$(start_marker)")" -eq 0 ]; then
-        # Not in a condition context, and the function returns non-zero for the
-        # ordinary "no legacy copy" case, so capture instead of letting set -e
-        # abort.
-        adopt_status=0
-        adopt_legacy_managed_file "$destination" || adopt_status=$?
-        if [ "$adopt_status" -eq 2 ]; then
-            return 1
-        fi
-    fi
-
-    if [ "$adopt_status" -eq 0 ]; then
-        write_managed_block "$target" "$scope" 1
-    else
-        write_managed_block "$target" "$scope" 0
-    fi
-}
-
-remove_managed_file() {
-    local target="$1"
-    local scope="$2"
-    local destination
-    local resolved
-    local rendered
-
-    destination="$(managed_file_path "$target" "$scope")"
-
-    if [ ! -f "$destination" ]; then
-        printf '  not installed (%s, %s): %s\n' "$target" "$scope" "$destination"
+    destination="$(rule_file_path "$1" "$2")"
+    if [ ! -e "$destination" ] && [ ! -L "$destination" ]; then
+        printf '  not installed (%s, %s): %s\n' "$1" "$2" "$destination"
         return 0
     fi
-
-    if ! assert_markers_balanced "$destination"; then
-        return 1
-    fi
-
-    if [ "$(count_marker_lines "$destination" "$(start_marker)")" -eq 0 ]; then
-        printf '  not installed (%s, %s): %s\n' "$target" "$scope" "$destination"
-        return 0
-    fi
-
-    if ! resolved="$(resolve_symlinks "$destination")"; then
-        error "could not resolve $destination"
-        return 1
-    fi
-
-    mkdir -p "$SCRATCH_DIR"
-    rendered="$SCRATCH_DIR/rendered"
-
-    # A block with no body: reusing the merge path keeps the surrounding bytes
-    # intact and drops the blank lines the block leaves behind.
-    : >"$SCRATCH_DIR/empty"
-    merge_block "$resolved" "$SCRATCH_DIR/empty" "$rendered"
-
-    if cmp -s "$resolved" "$rendered"; then
-        printf '  not installed (%s, %s): %s\n' "$target" "$scope" "$resolved"
-        return 0
-    fi
-
-    if ! atomic_write "$resolved" "$rendered"; then
-        error "could not write $resolved"
-        return 1
-    fi
-
-    success "removed ($target, $scope): $resolved"
-    return 0
-}
-
-# ------------------------------------------------------------
-# Codex
-# ------------------------------------------------------------
-
-install_codex() {
-    install_managed_file codex "$1"
-}
-
-remove_codex() {
-    remove_managed_file codex "$1"
+    # Unlink the selected path; never resolve a rule link for removal.
+    rm -f -- "$destination" || return 1
+    success "removed ($1, $2): $destination"
 }
 
 # ------------------------------------------------------------
@@ -1533,7 +964,7 @@ preflight() {
             ;;
         codex | pi)
             for scope in $SCOPES; do
-                directory="$(dirname "$(managed_file_path "$target" "$scope")")"
+                directory="$(dirname "$(rule_file_path "$target" "$scope")")"
                 if [ ! -d "$directory" ]; then
                     if ! mkdir -p "$directory"; then
                         error "cannot create $directory"
@@ -1553,15 +984,6 @@ preflight() {
 }
 
 
-# Invoked by the EXIT trap below.
-# shellcheck disable=SC2329
-cleanup_scratch() {
-    if [ -n "$SCRATCH_DIR" ] && [ -d "$SCRATCH_DIR" ]; then
-        rm -rf "$SCRATCH_DIR"
-    fi
-    return 0
-}
-
 run() {
     local target
     local scope
@@ -1577,27 +999,12 @@ run() {
         SCOPES="$SCOPE"
     fi
 
-    SCRATCH_DIR="$(mktemp -d)" || return 1
-    trap cleanup_scratch EXIT
-    trap 'exit 130' INT
-    trap 'exit 143' TERM
-
     resolve_targets || return 1
 
     if [ "$MODE" = "install" ]; then
         preflight || return 1
 
         log "Installing $RULE_FILE"
-
-        case " $TARGETS " in
-        *" claude "*)
-            if { [ "$SCOPE" = "everywhere" ] || [ "$SCOPE" = "global" ]; } &&
-                ! remove_legacy_claude_global_rule; then
-                error "obsolete Claude rule must be resolved before installation."
-                return 1
-            fi
-            ;;
-        esac
     else
         log "Removing $RULE_FILE"
     fi
@@ -1605,29 +1012,11 @@ run() {
     for target in $TARGETS; do
         for scope in $SCOPES; do
             status=0
-            case "$target" in
-            claude)
-                if [ "$MODE" = "install" ]; then
-                    install_claude "$scope" || status=1
-                else
-                    remove_claude "$scope" || status=1
-                fi
-                ;;
-            codex)
-                if [ "$MODE" = "install" ]; then
-                    install_codex "$scope" || status=1
-                else
-                    remove_codex "$scope" || status=1
-                fi
-                ;;
-            pi)
-                if [ "$MODE" = "install" ]; then
-                    install_managed_file pi "$scope" || status=1
-                else
-                    remove_managed_file pi "$scope" || status=1
-                fi
-                ;;
-            esac
+            if [ "$MODE" = install ]; then
+                append_rule_file "$target" "$scope" || status=1
+            else
+                remove_rule_file "$target" "$scope" || status=1
+            fi
             if [ "$status" -ne 0 ]; then
                 FAILURES=$((FAILURES + 1))
             fi
@@ -2027,14 +1416,6 @@ function row(name, origin, file) {
     if (fs.lstatSync(file).isSymbolicLink()) link = ` -> ${display(fs.readlinkSync(file))}`;
     console.log(`      ${display(name)} [${display(origin)}]\n        ${display(file)}${link}`);
 }
-function blocks(file) {
-    if (!stat(file)?.isFile()) return 0;
-    const text = fs.readFileSync(file, 'utf8');
-    const pattern = /^<!-- gwyn-space-skills: ([\w.-]+):start -->\r?\n([\s\S]*?)^<!-- gwyn-space-skills: \1:end -->/gm;
-    let match, count = 0;
-    while ((match = pattern.exec(text))) { row(match[1], source(match[2]), file); count++; }
-    return count;
-}
 function ruleFiles(directory, ancestors = new Set()) {
     const info = stat(directory);
     if (!info) {
@@ -2069,7 +1450,7 @@ for (const [label, root] of [['global', home], ['project', project]]) {
             if (kind === 'Rules') {
                 const file = agent === 'Codex' ? path.join(root, label === 'global' ? '.codex/AGENTS.md' : 'AGENTS.md') :
                     agent === 'Pi' ? piPath : path.join(root, '.claude/CLAUDE.md');
-                count += blocks(file);
+                if (agent !== 'Claude' || label === 'global') count += ruleFiles(file);
                 if (agent === 'Claude') count += ruleFiles(path.join(root, '.claude/rules'));
             } else {
                 const directories = agent === 'Codex' ? ['.agents/skills', ...(label === 'global' ? ['.codex/skills'] : [])] : ['.claude/skills'];
@@ -2179,26 +1560,6 @@ function fingerprint(relative) {
     walk(full(relative));
     return hash.digest('hex');
 }
-function markers(text) {
-    const lines = text.match(/[^\n]*\n|[^\n]+$/g) || [];
-    let offset = 0, opened = null;
-    const result = [], names = new Set();
-    for (const line of lines) {
-        const start = line.replace(/[\r\n]+$/, '').match(/^<!-- gwyn-space-skills: ([a-zA-Z0-9][a-zA-Z0-9._-]*):start -->$/);
-        const end = line.replace(/[\r\n]+$/, '').match(/^<!-- gwyn-space-skills: ([a-zA-Z0-9][a-zA-Z0-9._-]*):end -->$/);
-        if (start) {
-            if (opened || names.has(start[1])) throw Error('Duplicate or nested managed rule markers');
-            opened = {name: start[1], start: offset}; names.add(start[1]);
-        }
-        if (end) {
-            if (!opened || opened.name !== end[1]) throw Error('Unbalanced managed rule markers');
-            result.push({...opened, end: offset + line.length}); opened = null;
-        }
-        offset += line.length;
-    }
-    if (opened) throw Error('Unbalanced managed rule markers');
-    return result;
-}
 const lockPath = scope === 'project' ? 'skills-lock.json' : '.agents/.skill-lock.json';
 function readLock() {
     const info = stat(full(lockPath));
@@ -2218,21 +1579,12 @@ function repository(record) {
     const match = source.replace(/^https?:\/\/github.com\//, '').replace(/^git@github.com:/, '').match(/^([\w.-]+)\/([\w.-]+)(?:\/|$)/);
     return match ? `${match[1]}/${match[2].replace(/\.git$/, '')}`.toLowerCase() : 'Unknown / local';
 }
-function ruleTitle(text) {
-    return text.match(/^#{1,6}[ \t]+(.+?)[ \t]*\r?$/m)?.[1] || null;
-}
 function ruleGroups(entries) {
-    const groups = new Map();
-    for (const e of entries.filter(e => e.kind === 'rules')) {
-        const key = e.ruleName ? `rule:${e.ruleName}` : `entry:${e.id}`;
-        if (!groups.has(key)) groups.set(key, {name: e.ruleName || e.name, entries: []});
-        groups.get(key).entries.push(e);
-    }
-    return [...groups.values()];
+    return entries.filter(e => e.kind === 'rules').map(e => ({name: e.name, entries: [e]}));
 }
 const agentName = agent => ({codex: 'Codex', claude: 'Claude', pi: 'Pi'}[agent]);
 const ruleLabel = group => `${display(group.name)} ${group.entries.map(e => `[${agentName(e.agent)}:${e.type}]`).join(' ')}`;
-const targetLabel = e => display(full(e.relative)) + (e.type === 'block' ? ` # ${display(e.name)}` : '');
+const targetLabel = e => display(full(e.relative));
 function linkDestination(p) {
     const destination = path.resolve(path.dirname(p), fs.readlinkSync(p));
     if (scope !== 'global') return destination;
@@ -2271,14 +1623,7 @@ function scan(codex, claude, rules, skills, pi = false) {
                 agent === 'pi' ? piRelative : (scope === 'global' ? '.claude/CLAUDE.md' : null);
             const info = relative ? stat(full(relative)) : null;
             if (info?.isSymbolicLink()) add({kind: 'rules', type: 'link', agent, relative, name: path.basename(relative)});
-            else if (info?.isFile()) {
-                parents(relative);
-                const text = fs.readFileSync(full(relative), 'latin1');
-                for (const block of markers(text)) {
-                    add({kind: 'rules', type: 'block', agent, relative, name: block.name,
-                        ruleTitle: ruleTitle(text.slice(block.start, block.end))});
-                }
-            }
+            else if (info?.isFile()) add({kind: 'rules', type: 'file', agent, relative, name: path.basename(relative)});
             if (agent === 'claude') {
                 const walk = relative => {
                     const info = stat(full(relative));
@@ -2317,15 +1662,6 @@ function scan(codex, claude, rules, skills, pi = false) {
                 }
             }
         }
-    }
-    const blocks = entries.filter(e => e.kind === 'rules' && e.type === 'block');
-    for (const e of blocks) e.ruleName = e.name;
-    for (const e of entries.filter(e => e.kind === 'rules' && e.type === 'file')) {
-        // Claude files have no managed marker. Require both the installer's exact
-        // top-level filename and a matching heading before linking to a block.
-        const title = ruleTitle(fs.readFileSync(full(e.relative), 'latin1'));
-        const block = blocks.find(b => e.name === `rules/${b.name}.md` && title && title === b.ruleTitle);
-        if (block) e.ruleName = block.name;
     }
     if (skills && !lock.valid) console.error(yellow('Skill lock is unreadable; skills are grouped under Unknown / local. Codex deletion requires a valid lock.'));
     return {scope, root: path.resolve(root), rootIdentity: [rootInfo.dev, rootInfo.ino],
@@ -2465,31 +1801,19 @@ if (action === 'scan') {
             } else console.log('No backup will be created.');
             verify(data, items);
             let succeeded = 0, failed = 0;
-            const removedSkills = [], handled = new Set(), outcomes = new Map();
+            const removedSkills = [], outcomes = new Map();
             for (const item of items) {
-                if (handled.has(item.id)) continue;
-                const batch = item.type === 'block' ? items.filter(e => e.type === 'block' && e.relative === item.relative) : [item];
-                for (const e of batch) handled.add(e.id);
                 try {
                     parents(item.relative);
-                    if (item.type === 'block') {
-                        const text = fs.readFileSync(full(item.relative), 'latin1'), names = new Set(batch.map(e => e.name));
-                        let next = text;
-                        for (const block of markers(text).filter(b => names.has(b.name)).reverse()) next = next.slice(0, block.start) + next.slice(block.end);
-                        atomicWrite(item.relative, Buffer.from(next, 'latin1'));
-                    } else fs.rmSync(full(item.relative), {recursive: true});
-                    for (const e of batch) {
-                        succeeded++;
-                        outcomes.set(e.id, null);
-                        if (e.kind === 'skills') console.log(`  OK removed ${e.agent} / ${display(e.name)}: ${red(targetLabel(e))}`);
-                        if (e.kind === 'skills' && e.agent === 'codex') removedSkills.push(e.name);
-                    }
+                    fs.rmSync(full(item.relative), {recursive: item.kind === 'skills'});
+                    succeeded++;
+                    outcomes.set(item.id, null);
+                    if (item.kind === 'skills') console.log(`  OK removed ${item.agent} / ${display(item.name)}: ${red(targetLabel(item))}`);
+                    if (item.kind === 'skills' && item.agent === 'codex') removedSkills.push(item.name);
                 } catch (error) {
-                    failed += batch.length;
-                    for (const e of batch) {
-                        outcomes.set(e.id, error.message);
-                        if (e.kind === 'skills') console.error(red(`  FAIL ${e.agent} / ${display(e.name)}: ${display(full(e.relative))}: ${error.message}`));
-                    }
+                    failed++;
+                    outcomes.set(item.id, error.message);
+                    if (item.kind === 'skills') console.error(red(`  FAIL ${item.agent} / ${display(item.name)}: ${display(full(item.relative))}: ${error.message}`));
                 }
             }
             const groups = ruleGroups(items);

@@ -403,7 +403,7 @@ target.chmod(0o755)
                 result = self.source('REMOVE_RULES=1\nscan_removal_inventory\n'
                                      'printf "%s\\n" "${REMOVAL_RULE_LABELS[@]}"')
                 self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertIn('agent-behavior [Codex:block]', result.stdout)
+                self.assertIn('AGENTS.md [Codex:file]', result.stdout)
 
     def test_node_bootstrap_reports_missing_nvm_or_default(self):
         nvm = self.node_bootstrap_fixture()
@@ -516,7 +516,7 @@ target.chmod(0o755)
         result = self.inventory('remove', '1', scope='project', cwd=project)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('4 succeeded, 0 failed', result.stdout)
-        self.assertEqual((project / 'AGENTS.md').read_bytes(), b'personal\r\nend\r\n')
+        self.assertFalse((project / 'AGENTS.md').exists())
         self.assertFalse((project / '.agents/skills/existing').exists())
         self.assertFalse((project / '.claude/skills/existing').is_symlink())
         remaining = json.loads((project / 'skills-lock.json').read_text())
@@ -767,7 +767,8 @@ target.chmod(0o755)
                 self.assertFalse(Path(cache).exists())
         installed = (self.home / '.pi/agent/AGENTS.md').read_text()
         self.assertIn('Upstream chinese body.', installed)
-        self.assertIn('/blob/' + commit + '/rules/chinese.md', installed)
+        self.assertNotIn('Installed from', installed)
+        self.assertEqual(installed.count('Upstream chinese body.'), 3)
         self.assertEqual(len((self.root / 'git.log').read_text().splitlines()), 3)
         self.assertNotIn('raw.githubusercontent', (self.root / 'fetch.log').read_text())
 
@@ -868,9 +869,9 @@ target.chmod(0o755)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('2 succeeded, 1 failed', result.stdout)
         self.assertIn('Personal notes.', old.read_text())
-        self.assertIn('waza-chinese:start', old.read_text())
-        self.assertIn('code-comments:start', old.read_text())
-        self.assertNotIn('waza-english:start', old.read_text())
+        self.assertIn('Upstream chinese body.', old.read_text())
+        self.assertIn('## Code Comment Guidelines', old.read_text())
+        self.assertNotIn('Upstream english body.', old.read_text())
         self.assertFalse((self.home / '.claude/rules/waza-english.md').exists())
 
     def test_waza_engine_formats_claude_h2_and_keeps_codex_project_body(self):
@@ -917,6 +918,7 @@ target.chmod(0o755)
                         '```md\n# In code\n~~~\n```\n'
                         '   ~~~~ markdown\n## Also code\n~~~\n~~~~\n'
                         '    # Indented code\n')
+                shutil.rmtree(self.home / '.claude', ignore_errors=True)
                 source = fixture / 'waza-example.md'
                 source.write_text(body)
                 destination = self.home / '.codex/AGENTS.md'
@@ -929,26 +931,32 @@ target.chmod(0o755)
                 result = self.source(command)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 text = destination.read_text()
-                self.assertTrue(text.startswith('# Global Rules\n\n' + personal))
-                self.assertEqual(text.count('# Global Rules\n'), 1)
+                self.assertTrue(text.startswith(personal))
+                self.assertEqual(text.count('# Global Rules\n'), 0)
                 self.assertIn('\n## Example\n\n### Details\n', text)
                 unchanged = body[body.index('Text # stays.'):]
                 self.assertIn(unchanged, text)
                 self.assertNotIn(b'\n', destination.read_bytes().replace(b'\r\n', b''))
                 claude = self.home / '.claude/rules/waza-example.md'
-                self.assertEqual(claude.read_text(), '# Example\n\n## Details\n' + unchanged)
+                self.assertEqual(claude.read_text().count('# Example\n'), 1)
+                self.assertTrue(claude.read_text().endswith('# Example\n\n## Details\n' + unchanged))
                 before = destination.read_bytes()
                 result = self.source(command)
                 self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertEqual(destination.read_bytes(), before)
-                self.assertIn('already installed (claude, global)', result.stdout)
+                self.assertTrue(destination.read_bytes().startswith(before))
+                self.assertEqual(destination.read_text().count('## Example\n'), 2)
+                self.assertNotIn('already installed', result.stdout)
                 result = self.source('rule_engine waza-example global codex remove')
                 self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertEqual(destination.read_text(), '# Global Rules\n\n' + personal)
+                self.assertFalse(destination.exists())
 
-    def test_repeated_rule_batch_is_already_installed_without_rewriting_shared_files(self):
+    def test_repeated_rule_batch_appends_in_place_without_backups_or_temp_files(self):
         self.waza_bundle(('chinese', 'clarity', 'english'))
-        command = '\n'.join(f'apply_rule waza-{name} global "codex claude pi" install waza'
+        fixture = self.root / 'append-rules'
+        fixture.mkdir()
+        for name in ('chinese', 'clarity', 'english'):
+            (fixture / f'waza-{name}.md').write_text(f'# {name}\nRule body.\n')
+        command = '\n'.join(f'rule_engine waza-{name} global "codex claude pi" install {shlex.quote(str(fixture))} waza'
                             for name in ('chinese', 'clarity', 'english'))
         for eol in ('\n', '\r\n'):
             with self.subTest(eol=repr(eol)):
@@ -957,52 +965,79 @@ target.chmod(0o755)
                 shared = [self.home / '.codex/AGENTS.md', self.home / '.pi/agent/AGENTS.md']
                 for target in shared:
                     target.parent.mkdir(parents=True)
-                    target.write_bytes(('# Global Rules\n\nPersonal notes.\n').replace('\n', eol).encode())
+                    target.write_bytes(('Personal notes.\n').replace('\n', eol).encode())
+                    target.chmod(0o640)
+                # Any attempt to create a replacement or backup must fail the test.
+                for command_name in ('mktemp', 'cp', 'mv'):
+                    self.stub(command_name, '#!/bin/sh\necho forbidden >&2\nexit 99\n')
                 first = self.source(command)
                 self.assertEqual(first.returncode, 0, first.stderr)
-                self.assertEqual(first.stdout.count('installation complete ('), 9)
                 targets = shared + list((self.home / '.claude/rules').glob('*.md'))
-                before = {target: (target.read_bytes(), target.stat().st_ino, target.stat().st_mtime_ns)
-                          for target in targets}
+                before = {t: (t.read_bytes(), t.stat().st_ino, t.stat().st_mode) for t in targets}
                 second = self.source(command)
                 self.assertEqual(second.returncode, 0, second.stderr)
-                self.assertEqual(second.stdout.count('already installed ('), 9, second.stdout)
-                for target, state in before.items():
-                    self.assertEqual((target.read_bytes(), target.stat().st_ino, target.stat().st_mtime_ns), state)
+                self.assertEqual(second.stdout.count('installation complete ('), 9)
+                for target, (content, inode, mode) in before.items():
+                    self.assertTrue(target.read_bytes().startswith(content))
+                    self.assertGreater(target.stat().st_size, len(content))
+                    self.assertEqual(target.stat().st_ino, inode)
+                    self.assertEqual(target.stat().st_mode, mode)
+                    self.assertNotIn(b'gwyn-space-skills:', target.read_bytes())
+                    self.assertNotIn(b'Installed from', target.read_bytes())
 
-    def test_updating_middle_rule_preserves_order_separators_and_personal_text(self):
-        for eol in (b'\n', b'\r\n'):
-            with self.subTest(eol=eol):
-                self.waza_bundle(('chinese', 'clarity', 'english'))
-                for folder in ('.codex', '.claude', '.pi'):
-                    shutil.rmtree(self.home / folder, ignore_errors=True)
-                targets = [self.home / '.codex/AGENTS.md', self.home / '.pi/agent/AGENTS.md']
-                for target in targets:
-                    target.parent.mkdir(parents=True)
-                    target.write_bytes(b'# Global Rules' + eol + eol + b'Personal notes.' + eol)
-                command = '\n'.join(f'apply_rule waza-{name} global "codex claude pi" install waza'
-                                    for name in ('chinese', 'clarity', 'english'))
-                result = self.source(command)
+    def test_changed_rule_appends_after_previous_version_and_personal_text(self):
+        self.waza_bundle(('clarity',))
+        target = self.home / '.codex/AGENTS.md'
+        command = 'apply_rule waza-clarity global codex install waza'
+        self.assertEqual(self.source(command).returncode, 0)
+        with target.open('a') as output:
+            output.write('\nPersonal text after rules.')
+        before = target.read_bytes()
+        source = Path(self.env['WAZA_FILES']) / 'clarity.md'
+        source.write_text('# clarity\nUpdated clarity body.\n')
+        # Use a new process so the changed upstream body is downloaded again.
+        result = self.source(command)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(target.read_bytes(), before + b'\n\n## clarity\nUpdated clarity body.\n')
+        self.assertIn(b'Upstream clarity body.', target.read_bytes())
+
+    def test_rule_append_preserves_existing_endings_and_link_target_inode(self):
+        target = self.root / 'external-rules.md'
+        link = self.home / '.claude/rules/code-comments.md'
+        link.parent.mkdir(parents=True)
+        link.symlink_to(target)
+        for old in (b'', b'Personal', b'Personal\n', b'Personal\n\n', b'Personal\r\n'):
+            with self.subTest(old=old):
+                target.write_bytes(old)
+                inode = target.stat().st_ino
+                result = self.source('apply_rule code-comments global claude install project')
                 self.assertEqual(result.returncode, 0, result.stderr)
-                before = {}
-                for target in targets:
-                    content = target.read_bytes().replace(
-                        b'<!-- gwyn-space-skills: waza-clarity:end -->' + eol,
-                        b'<!-- gwyn-space-skills: waza-clarity:end -->' + eol + eol
-                        + b'Personal text between rules.' + eol + eol)
-                    content += eol + eol
-                    target.write_bytes(content)
-                    before[target] = content
-                source = Path(self.env['WAZA_FILES']) / 'clarity.md'
-                source.write_text('# clarity\nUpdated clarity body.\n')
-                result = self.source('apply_rule waza-clarity global "codex claude pi" install waza')
-                self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertEqual(result.stdout.count('installation complete ('), 3)
-                for target, content in before.items():
-                    self.assertEqual(target.read_bytes(), content.replace(b'Upstream clarity body.', b'Updated clarity body.'))
-                repeated = self.source(command)
-                self.assertEqual(repeated.returncode, 0, repeated.stderr)
-                self.assertEqual(repeated.stdout.count('already installed ('), 9, repeated.stdout)
+                content = target.read_bytes()
+                self.assertTrue(link.is_symlink())
+                self.assertEqual(target.stat().st_ino, inode)
+                self.assertTrue(content.startswith(old))
+                eol = b'\r\n' if b'\r' in old else b'\n'
+                if old:
+                    self.assertIn(b'Personal' + eol + eol + b'# Code Comment Guidelines', content)
+                else:
+                    self.assertTrue(content.startswith(b'# Code Comment Guidelines'))
+                self.assertNotIn(b'Installed from', content)
+
+    def test_rule_engine_remove_unlinks_files_and_dangling_links(self):
+        for agent, relative in [('codex', '.codex/AGENTS.md'), ('pi', '.pi/agent/AGENTS.md'),
+                                ('claude', '.claude/rules/code-comments.md')]:
+            destination = self.home / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            for linked in (False, True):
+                with self.subTest(agent=agent, linked=linked):
+                    if linked:
+                        destination.symlink_to(self.root / 'absent-target')
+                    else:
+                        destination.write_text('Personal rules without markers.')
+                    result = self.source(f'rule_engine code-comments global {agent} remove')
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertFalse(destination.exists())
+                    self.assertFalse(destination.is_symlink())
 
     def test_global_local_rule_keeps_title_and_project_behavior(self):
         result = self.source('apply_rule code-comments global both install project', cwd=self.root)
@@ -1022,8 +1057,8 @@ target.chmod(0o755)
         before = (self.root / 'AGENTS.md').read_bytes()
         repeated = self.source('apply_rule code-comments project codex', cwd=self.root)
         self.assertEqual(repeated.returncode, 0, repeated.stderr)
-        self.assertEqual((self.root / 'AGENTS.md').read_bytes(), before)
-        self.assertIn('already installed (codex, project)', repeated.stdout)
+        self.assertTrue((self.root / 'AGENTS.md').read_bytes().startswith(before))
+        self.assertEqual((self.root / 'AGENTS.md').read_text().count('## Code Comment Guidelines'), 2)
 
     def test_waza_snapshot_dynamic_names_collision_and_additive_update(self):
         self.waza_bundle(('code-comments', 'new-rule'))
@@ -1043,12 +1078,13 @@ target.chmod(0o755)
             'execute_plan')
         self.assertEqual(result.returncode, 0, result.stderr)
         text = old.read_text()
-        for name in ('code-comments', 'waza-code-comments', 'waza-new-rule', 'agent-behavior'):
-            self.assertEqual(text.count(f'gwyn-space-skills: {name}:start'), 1)
+        self.assertEqual(text.count('gwyn-space-skills: agent-behavior:start'), 1)
+        self.assertEqual(text.count('Upstream code-comments body.'), 2)
+        self.assertNotIn('gwyn-space-skills: waza-', text)
         self.assertIn('Personal', text)
         self.assertIn('Legacy', text)
         self.assertEqual((self.home / '.claude/rules/waza-code-comments.md').read_text(),
-                         '# code-comments\nUpstream code-comments body.\n')
+                         '# code-comments\nUpstream code-comments body.\n\n# code-comments\nUpstream code-comments body.\n')
         self.assertTrue((self.home / '.claude/rules/code-comments.md').exists())
         self.assertEqual(len((self.root / 'fetch.log').read_text().splitlines()), 4)
 
@@ -1123,9 +1159,9 @@ target.chmod(0o755)
         text = (self.root / 'AGENTS.md').read_text()
         for name in ('waza-anti-patterns', 'waza-chinese', 'waza-code-comments',
                      'code-comments', 'chinese-punctuation', 'writing-repo'):
-            self.assertEqual(text.count(f'gwyn-space-skills: {name}:start'), 1)
+            self.assertNotIn(f'gwyn-space-skills: {name}:start', text)
         self.assertIn('Upstream code-comments body.', text)
-        self.assertIn('Installed from rules/code-comments.md', text)
+        self.assertNotIn('Installed from', text)
 
     def test_rule_tree_children_partial_state_and_group_toggle(self):
         self.waza_bundle(('anti-patterns', 'chinese', 'clarity'))
@@ -1201,13 +1237,14 @@ target.chmod(0o755)
         self.assertEqual(term.finish_action(), 0)
         text = (nested / 'AGENTS.md').read_text()
         self.assertIn(personal, text)
-        self.assertEqual(text.count('<!-- gwyn-space-skills: code-comments:start -->'), 1)
-        self.assertIn('Installed from rules/code-comments.md by setup-agents.sh', text)
+        self.assertNotIn('<!-- gwyn-space-skills: code-comments:start -->', text)
+        self.assertNotIn('Installed from', text)
         self.assertEqual((project / 'AGENTS.md').read_text(), 'root must stay unchanged\n')
         self.assertFalse((nested / '.claude').exists())
         result = self.source('apply_rule code-comments project codex', cwd=nested)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual((nested / 'AGENTS.md').read_text(), text)
+        self.assertTrue((nested / 'AGENTS.md').read_text().startswith(text))
+        self.assertEqual((nested / 'AGENTS.md').read_text().count('## Code Comment Guidelines'), 2)
 
     def test_rule_pages_q_defaults_and_scope_selection_preserved(self):
         for page in ['rules', 'scope', 'agents', 'confirm']:
@@ -1278,31 +1315,20 @@ target.chmod(0o755)
                 for name, destination in destinations.items():
                     self.assertEqual(destination.exists(), name in selected)
 
-    def test_pi_global_engine_custom_directory_updates_and_preserves_content(self):
+    def test_pi_global_engine_custom_directory_appends_and_preserves_content(self):
         self.env['PI_CODING_AGENT_DIR'] = '~/custom pi'
         destination = self.home / 'custom pi/AGENTS.md'
         destination.parent.mkdir()
-        personal = 'Personal notes.\n'
+        personal = 'Personal notes.\n<!-- gwyn-space-skills: broken:start -->\n'
         destination.write_text(personal)
         command = 'apply_rule code-comments global pi install project'
-        result = self.source(command)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        text = destination.read_text()
-        self.assertTrue(text.startswith('# Global Rules\n\n' + personal))
-        self.assertIn('## Code Comment Guidelines', text)
-        source = (SCRIPT.parents[1] / 'rules/code-comments.md').read_text()
-        self.assertIn(source.split('\n', 1)[1], text)
+        for count in (1, 2):
+            result = self.source(command)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            text = destination.read_text()
+            self.assertTrue(text.startswith(personal))
+            self.assertEqual(text.count('## Code Comment Guidelines'), count)
         self.assertFalse((self.home / '.pi').exists())
-        result = self.source(command)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(destination.read_text(), text)
-        self.assertIn('already installed (pi, global)', result.stdout)
-        destination.write_text(personal + '<!-- gwyn-space-skills: code-comments:start -->\n')
-        before = destination.read_bytes()
-        result = self.source(command)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn('unbalanced markers', result.stderr)
-        self.assertEqual(destination.read_bytes(), before)
 
     def test_pi_global_preflight_failure_prevents_other_agent_writes(self):
         blocked = self.home / 'not-a-directory'
@@ -1330,10 +1356,10 @@ target.chmod(0o755)
                 self.assertEqual(term.finish_action(), 0)
                 codex = project / 'AGENTS.md' if scope == 'project' else self.home / '.codex/AGENTS.md'
                 text = codex.read_text()
-                self.assertIn('https://github.com/tw93/Waza/blob/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/rules/anti-patterns.md', text)
-                self.assertIn('Installed from rules/code-comments.md', text)
-                self.assertEqual(text.count('waza-anti-patterns:start'), 1)
-                self.assertEqual(text.count('code-comments:start'), 1)
+                self.assertIn('Upstream anti-patterns body.', text)
+                self.assertNotIn('Installed from', text)
+                self.assertNotIn('waza-anti-patterns:start', text)
+                self.assertNotIn('code-comments:start', text)
                 if scope == 'project':
                     self.assertNotIn('Rules: choose agents', term.transcript.decode())
                     self.assertFalse((project / '.claude').exists())
@@ -1345,40 +1371,34 @@ target.chmod(0o755)
                     pi = self.home / '.pi/agent/AGENTS.md'
                     self.assertEqual(pi.read_text(), codex.read_text())
 
-    def test_rule_engine_preserves_old_markers_and_rejects_conflicts(self):
+    def test_rule_engine_preserves_old_and_unbalanced_markers_while_appending(self):
         project = self.root / 'project'
         project.mkdir()
         destination = project / 'AGENTS.md'
-        destination.write_text('Personal\n\n<!-- gwyn-space-skills: code-comments:start -->\n'
-                               '<!-- Installed from instructions/project/code-comments.md by agent-install-rule.sh. -->\n'
-                               'old body\n<!-- gwyn-space-skills: code-comments:end -->\n')
-        result = self.source('apply_rule code-comments project codex', cwd=project)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        text = destination.read_text()
-        self.assertIn('Personal', text)
-        self.assertNotIn('old body', text)
-        self.assertEqual(text.count('code-comments:start'), 1)
-        destination.write_text('Personal\n<!-- gwyn-space-skills: code-comments:start -->\nkeep\n')
-        before = destination.read_bytes()
-        result = self.source('apply_rule code-comments project codex', cwd=project)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn('unbalanced markers', result.stderr)
-        self.assertEqual(destination.read_bytes(), before)
+        for old in ('Personal\n<!-- gwyn-space-skills: code-comments:start -->\nold body\n'
+                    '<!-- gwyn-space-skills: code-comments:end -->\n',
+                    'Personal\n<!-- gwyn-space-skills: code-comments:start -->\nkeep\n'):
+            destination.write_text(old)
+            result = self.source('apply_rule code-comments project codex', cwd=project)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue(destination.read_text().startswith(old))
+            self.assertEqual(destination.read_text().count('code-comments:start'), 1)
+            self.assertIn('## Code Comment Guidelines', destination.read_text())
 
-    def test_legacy_global_copy_migrates_with_restore_backup(self):
-        destination = self.home / '.codex/AGENTS.md'
-        destination.parent.mkdir()
-        original = b'# Legacy behavior\nLegacy rule\n'
+    def test_legacy_global_copy_is_kept_without_backup_or_migration(self):
         fixture = self.root / 'legacy'
         fixture.mkdir()
-        (fixture / 'agent-behavior.md').write_bytes(original)
-        destination.write_bytes(original)
-        result = self.source(f'rule_engine agent-behavior global codex install {shlex.quote(str(fixture))} global')
-        self.assertEqual(result.returncode, 0, result.stderr)
-        backups = list(destination.parent.glob('AGENTS.md.pre-rules.bak-*'))
-        self.assertEqual(len(backups), 1)
-        self.assertEqual(backups[0].read_bytes(), original)
-        self.assertIn('agent-behavior:start', destination.read_text())
+        original = '# Legacy behavior\nLegacy rule\n'
+        (fixture / 'agent-behavior.md').write_text(original)
+        for agent, relative in [('codex', '.codex/AGENTS.md'), ('claude', '.claude/CLAUDE.md')]:
+            destination = self.home / relative
+            destination.parent.mkdir(exist_ok=True)
+            destination.write_text(original)
+            result = self.source(f'rule_engine agent-behavior global {agent} install {shlex.quote(str(fixture))} global')
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue(destination.read_text().startswith(original))
+            self.assertEqual(destination.read_text().count('Legacy rule'), 2)
+            self.assertEqual(list(destination.parent.iterdir()), [destination])
 
     def test_standalone_agent_install_downloads_once_and_cleans_resources(self):
         self.remote_bundle()
@@ -2047,30 +2067,31 @@ main"""]
         self.assertTrue(self.old.exists())
         self.assertEqual(json.loads(lock.read_text()), original)
 
-    def test_rule_inventory_and_selective_blocks_preserve_personal_bytes(self):
-        personal = '个人文字\r\n'.encode()
-        a = b'<!-- gwyn-space-skills: one:start -->\r\none\r\n<!-- gwyn-space-skills: one:end -->\r\n'
-        b = b'<!-- gwyn-space-skills: two:start -->\r\ntwo\r\n<!-- gwyn-space-skills: two:end -->\r\n'
+    def test_rule_inventory_selects_whole_files_and_backs_up_personal_bytes(self):
         target = self.home / '.codex/AGENTS.md'
         target.parent.mkdir()
-        target.write_bytes(personal + a + b + b'last\r\n')
+        original = '个人文字\r\nNo managed markers.\r\n'.encode()
+        target.write_bytes(original)
         custom = self.home / '.claude/rules/nested/.custom.md'
         custom.parent.mkdir(parents=True)
         custom.write_text('custom content')
         kept = custom.parent / 'keep.md'
         kept.write_text('keep')
+        main = self.home / '.claude/CLAUDE.md'
+        main.write_text('Claude personal rules.')
         entries = self.scan_entries(skills=False)
-        self.assertEqual({e['type'] for e in entries}, {'block', 'file'})
-        self.select_entries([e for e in entries if e['name'] in ['one', 'rules/nested/.custom.md']])
+        self.assertEqual({e['type'] for e in entries}, {'file'})
+        self.select_entries([e for e in entries if e['name'] != 'rules/nested/keep.md'])
         result = self.inventory('remove', '1')
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(target.read_bytes(), personal + b + b'last\r\n')
+        self.assertFalse(target.exists())
         self.assertFalse(custom.exists())
+        self.assertFalse(main.exists())
         self.assertEqual(kept.read_text(), 'keep')
         backup, = self.home.glob('.agent-rules-backup-*/removal.tar')
         with tarfile.open(backup) as tar:
-            self.assertIn('.codex/AGENTS.md', tar.getnames())
-            self.assertIn('.claude/rules/nested/.custom.md', tar.getnames())
+            self.assertEqual(tar.extractfile('.codex/AGENTS.md').read(), original)
+            self.assertIn('.claude/CLAUDE.md', tar.getnames())
 
     def pi_removal_fixture(self, directory=None):
         directory = directory or self.home / '.pi/agent'
@@ -2094,9 +2115,8 @@ main"""]
         claude.parent.mkdir(parents=True)
         claude.write_text('Claude user rules.\n')
         term = self.removal_terminal(types=('Rules',), agents='pi')
-        term.expect('one [Pi:block]')
-        term.expect('two [Pi:block]')
-        term.expect('Item 1/2')
+        term.expect('AGENTS.md [Pi:file]')
+        term.expect('Item 1/1')
         frame = term.transcript.decode().rsplit('\x1b[H\x1b[2J', 1)[-1]
         self.assertNotIn('Codex /', frame)
         self.assertNotIn('Claude /', frame)
@@ -2109,7 +2129,7 @@ main"""]
         term.send(b'y\n')
         term.expect('1 succeeded, 0 failed')
         self.assertEqual(term.finish_action(), 0)
-        self.assertEqual(target.read_text(), personal + blocks['two'])
+        self.assertFalse(target.exists())
         self.assertEqual(settings.read_text(), '{"keep": true}')
         self.assertEqual(codex.read_text(), 'Codex user rules.\n')
         self.assertEqual(claude.read_text(), 'Claude user rules.\n')
@@ -2122,25 +2142,25 @@ main"""]
         codex.write_text('Codex notes.\n' + blocks['one'])
         term = self.removal_terminal(types=('Rules',))
         self.assertIn('[ ] Pi (rules only)', term.transcript.decode())
-        term.expect('one [Codex:block] [Pi:block]')
-        term.expect('two [Pi:block]')
+        term.expect('AGENTS.md [Codex:file]')
+        term.expect('AGENTS.md [Pi:file]')
         term.expect('Item 1/2')
         term.send(b'a\r')
         term.expect('Create backup? [y/N]')
         term.send(b'\n')
         term.expect('Confirm removal? [Y/n]')
         term.send(b'y\n')
-        term.expect('3 succeeded, 0 failed')
+        term.expect('2 succeeded, 0 failed')
         self.assertEqual(term.finish_action(), 0)
-        self.assertEqual(target.read_text(), personal)
-        self.assertEqual(codex.read_text(), 'Codex notes.\n')
+        self.assertFalse(target.exists())
+        self.assertFalse(codex.exists())
 
     def test_global_removal_default_preserves_claude_and_pi_rules(self):
         codex, claude, pi, _, _ = self.grouped_rule_fixture()
         before = pi.read_bytes()
         claude_before = claude.read_bytes()
         term = self.removal_terminal(types=('Rules',), agents='default')
-        term.expect('one [Codex:block]')
+        term.expect('AGENTS.md [Codex:file]')
         term.expect('Item 1/1')
         term.send(b'a\r')
         term.expect('Create backup? [y/N]')
@@ -2150,7 +2170,7 @@ main"""]
         term.expect('1 succeeded, 0 failed')
         self.assertEqual(term.finish_action(), 0)
         self.assertEqual(pi.read_bytes(), before)
-        self.assertEqual(codex.read_text(), 'Codex notes.\n')
+        self.assertFalse(codex.exists())
         self.assertEqual(claude.read_bytes(), claude_before)
 
     def grouped_rule_fixture(self):
@@ -2163,60 +2183,53 @@ main"""]
         claude.write_text('# one\nBody.\n')
         return codex, claude, pi, personal, blocks
 
-    def test_rule_group_recognizes_installer_generated_waza_files_in_both_scopes(self):
+    def test_rule_inventory_lists_plain_installed_files_in_both_scopes(self):
         for scope in ('global', 'project'):
             with self.subTest(scope=scope):
                 result = self.source(f'apply_rule waza-anti-patterns {scope} both install waza', cwd=self.root)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 if scope == 'global':
-                    result = self.source('apply_rule waza-anti-patterns global pi install waza')
-                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(self.source('apply_rule waza-anti-patterns global pi install waza').returncode, 0)
                 result = self.inventory('scan', 1, 1, 1, 0, int(scope == 'global'), scope=scope, cwd=self.root)
                 self.assertEqual(result.returncode, 0, result.stderr)
-                result = self.inventory('rows', scope=scope, cwd=self.root)
-                self.assertEqual(result.returncode, 0, result.stderr)
-                rows = result.stdout.splitlines()
-                self.assertEqual(len(rows), 1)
-                self.assertIn('waza-anti-patterns [Codex:block] [Claude:file]', rows[0])
-                self.assertEqual('[Pi:block]' in rows[0], scope == 'global')
+                rows = self.inventory('rows', scope=scope, cwd=self.root).stdout.splitlines()
+                self.assertEqual(len(rows), 3 if scope == 'global' else 2)
+                self.assertTrue(any('AGENTS.md [Codex:file]' in row for row in rows))
+                self.assertTrue(any('rules/waza-anti-patterns.md [Claude:file]' in row for row in rows))
 
-    def test_rule_group_ui_expands_one_choice_to_all_agents(self):
-        codex, claude, pi, personal, blocks = self.grouped_rule_fixture()
+    def test_rule_file_ui_selects_only_one_agent_file(self):
+        codex, claude, pi, _, _ = self.grouped_rule_fixture()
+        before = {target: target.read_bytes() for target in (claude, pi)}
         term = self.removal_terminal(types=('Rules',))
-        label = 'one [Codex:block] [Claude:file] [Pi:block]'
-        term.expect(label)
-        term.expect('two [Pi:block]')
-        term.expect('Item 1/2')
-        frame = term.transcript.decode().rsplit('\x1b[H\x1b[2J', 1)[-1]
-        self.assertEqual(frame.count(label), 1)
+        term.expect('AGENTS.md [Codex:file]')
+        term.expect('rules/one.md [Claude:file]')
+        term.expect('AGENTS.md [Pi:file]')
+        term.expect('Item 1/3')
         term.send(b' \r')
         term.expect('Removal targets:')
-        term.expect(label)
-        for target in (codex, claude, pi):
-            term.expect(str(target))
+        term.expect(str(codex))
         term.expect('Create backup? [y/N]')
         term.send(b'\n')
         term.expect('Confirm removal? [Y/n]')
         term.send(b'y\n')
-        term.expect('OK removed ' + label)
         term.expect('Rules: 1 removed, 0 partial, 0 failed')
-        term.expect('3 succeeded, 0 failed (installation targets)')
+        term.expect('1 succeeded, 0 failed (installation targets)')
         self.assertEqual(term.finish_action(), 0)
-        self.assertEqual(codex.read_text(), 'Codex notes.\n')
-        self.assertFalse(claude.exists())
-        self.assertEqual(pi.read_text(), personal + blocks['two'])
+        self.assertFalse(codex.exists())
+        for target, content in before.items():
+            self.assertEqual(target.read_bytes(), content)
 
-    def test_rule_group_back_and_explicit_cancel_preserve_all_copies(self):
+    def test_rule_file_back_and_explicit_cancel_preserve_all_files(self):
         codex, claude, pi, _, _ = self.grouped_rule_fixture()
         before = {target: target.read_bytes() for target in (codex, claude, pi)}
         term = self.removal_terminal(types=('Rules',))
-        label = 'one [Codex:block] [Claude:file] [Pi:block]'
-        term.expect('Item 1/2')
+        label = 'AGENTS.md [Codex:file]'
+        term.expect('Item 1/3')
         term.send(b' \r')
         term.expect('Create backup? [y/N]')
         term.send(b'b\n')
         term.expect('[x] ' + label)
-        term.expect('Item 1/2')
+        term.expect('Item 1/3')
         term.send(b'\r')
         term.expect('Create backup? [y/N]')
         term.send(b'y\n')
@@ -2228,48 +2241,41 @@ main"""]
             self.assertEqual(target.read_bytes(), content)
         self.assertFalse(list(self.home.glob('.agent-*-backup-*')))
 
-    def test_rule_group_respects_agent_filter_and_keeps_links_and_custom_files_separate(self):
+    def test_rule_file_rows_respect_agent_filter_and_keep_links_separate(self):
         codex, claude, pi, _, _ = self.grouped_rule_fixture()
         nested = claude.parent / 'nested/one.md'
         nested.parent.mkdir()
         nested.write_text(claude.read_text())
         linked = claude.parent / 'linked.md'
         linked.symlink_to(claude)
-        self.scan_entries(codex=False, skills=False, pi=True)
+        entries = self.scan_entries(codex=False, skills=False, pi=True)
         rows = self.inventory('rows')
-        self.assertEqual(rows.returncode, 0, rows.stderr)
-        self.assertIn('one [Claude:file] [Pi:block]', rows.stdout)
         self.assertNotIn('Codex', rows.stdout)
-        self.assertIn('rules/nested/one.md [Claude:file]', rows.stdout)
-        self.assertIn('rules/linked.md [Claude:link]', rows.stdout)
-        row = next(line for line in rows.stdout.splitlines() if 'one [Claude:file] [Pi:block]' in line)
-        self.assertEqual(self.inventory('select', row.split('\t')[0]).returncode, 0)
+        for label in ('AGENTS.md [Pi:file]', 'rules/one.md [Claude:file]',
+                      'rules/nested/one.md [Claude:file]', 'rules/linked.md [Claude:link]'):
+            self.assertIn(label, rows.stdout)
+        self.select_entries([e for e in entries if e['agent'] == 'pi' or e['name'] == 'rules/one.md'])
         result = self.inventory('remove')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(codex.exists())
-        self.assertIn('## one', codex.read_text())
         self.assertFalse(claude.exists())
-        self.assertNotIn('## one', pi.read_text())
+        self.assertFalse(pi.exists())
         self.assertTrue(nested.exists())
         self.assertTrue(linked.is_symlink())
 
-    def test_rule_group_does_not_merge_same_filename_with_different_heading(self):
+    def test_rule_files_are_independent_of_headings_and_managed_markers(self):
         _, claude, _, _, _ = self.grouped_rule_fixture()
         claude.write_text('# Personal rule\nKeep me.\n')
-        self.scan_entries(skills=False, pi=True)
-        rows = self.inventory('rows')
-        self.assertIn('one [Codex:block] [Pi:block]', rows.stdout)
-        self.assertIn('rules/one.md [Claude:file]', rows.stdout)
-        self.assertNotIn('one [Codex:block] [Claude:file]', rows.stdout)
+        entries = self.scan_entries(skills=False, pi=True)
+        self.assertEqual(len(entries), 3)
+        self.assertTrue(all(e['type'] == 'file' for e in entries))
+        self.assertTrue(all('ruleName' not in e for e in entries))
 
-    def test_rule_group_backup_contains_all_selected_agents_and_restores(self):
+    def test_rule_file_backup_contains_all_selected_agents_and_restores(self):
         codex, claude, pi, _, _ = self.grouped_rule_fixture()
         before = {target: target.read_bytes() for target in (codex, claude, pi)}
-        self.scan_entries(skills=False, pi=True)
-        rows = self.inventory('rows')
-        group_id = next(line.split('\t')[0] for line in rows.stdout.splitlines()
-                        if 'one [Codex:block]' in line)
-        self.assertEqual(self.inventory('select', group_id).returncode, 0)
+        entries = self.scan_entries(skills=False, pi=True)
+        self.select_entries(entries)
         result = self.inventory('remove', '1')
         self.assertEqual(result.returncode, 0, result.stderr)
         backup, = self.home.glob('.agent-rules-backup-*/removal.tar')
@@ -2279,13 +2285,10 @@ main"""]
         for target, content in before.items():
             self.assertEqual(target.read_bytes(), content)
 
-    def test_rule_group_changed_copy_aborts_before_any_deletion(self):
+    def test_rule_file_change_aborts_before_any_deletion(self):
         codex, claude, pi, _, _ = self.grouped_rule_fixture()
-        self.scan_entries(skills=False, pi=True)
-        rows = self.inventory('rows')
-        group_id = next(line.split('\t')[0] for line in rows.stdout.splitlines()
-                        if 'one [Codex:block]' in line)
-        self.assertEqual(self.inventory('select', group_id).returncode, 0)
+        entries = self.scan_entries(skills=False, pi=True)
+        self.select_entries(entries)
         claude.write_text('# one\nUser edit during confirmation.\n')
         before = {target: target.read_bytes() for target in (codex, claude, pi)}
         result = self.inventory('remove')
@@ -2294,29 +2297,26 @@ main"""]
         for target, content in before.items():
             self.assertEqual(target.read_bytes(), content)
 
-    def test_rule_group_partial_failure_reports_each_target_and_continues(self):
+    def test_rule_file_failure_reports_each_target_and_continues(self):
         codex, claude, pi, personal, blocks = self.grouped_rule_fixture()
-        self.scan_entries(skills=False, pi=True)
-        rows = self.inventory('rows')
-        group_id = next(line.split('\t')[0] for line in rows.stdout.splitlines()
-                        if 'one [Codex:block]' in line)
-        self.assertEqual(self.inventory('select', group_id).returncode, 0)
+        entries = self.scan_entries(skills=False, pi=True)
+        self.select_entries(entries)
         preload = self.root / 'fail-rule.cjs'
         preload.write_text('const fs=require("fs");const original=fs.rmSync;fs.rmSync=function(p,...args){if(p==='
                            + json.dumps(str(claude)) + ') throw Error("fixture rule removal failed");return original.call(this,p,...args);};')
         self.env['NODE_OPTIONS'] = f'--require={preload}'
         result = self.inventory('remove')
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn('PARTIAL one [Codex:block] [Claude:file] [Pi:block]', result.stdout)
-        self.assertIn('Rules: 0 removed, 1 partial, 0 failed', result.stdout)
+        self.assertIn('FAIL rules/one.md [Claude:file]', result.stdout)
+        self.assertIn('Rules: 2 removed, 0 partial, 1 failed', result.stdout)
         self.assertIn('2 succeeded, 1 failed (installation targets)', result.stdout)
-        self.assertIn('OK [Codex:block] ' + str(codex), result.stdout)
-        self.assertIn('OK [Pi:block] ' + str(pi), result.stdout)
+        self.assertIn('OK [Codex:file] ' + str(codex), result.stdout)
+        self.assertIn('OK [Pi:file] ' + str(pi), result.stdout)
         self.assertIn('FAIL [Claude:file] ' + str(claude), result.stderr)
         self.assertIn('fixture rule removal failed', result.stderr)
-        self.assertEqual(codex.read_text(), 'Codex notes.\n')
+        self.assertFalse(codex.exists())
         self.assertTrue(claude.exists())
-        self.assertEqual(pi.read_text(), personal + blocks['two'])
+        self.assertFalse(pi.exists())
 
     def test_pi_removal_scope_switch_keeps_project_two_agent_menu(self):
         term = self.removal_terminal(types=('Rules',), agents='pi')
@@ -2344,20 +2344,20 @@ main"""]
         term.send(b'q')
         self.assertEqual(term.finish(), 0)
 
-    def test_pi_removal_selected_block_backup_and_user_content(self):
+    def test_pi_removal_whole_file_backup_includes_user_content(self):
         target, personal, blocks = self.pi_removal_fixture()
         before = target.read_bytes()
         entries = self.scan_entries(codex=False, claude=False, skills=False, pi=True)
-        self.assertEqual([(e['agent'], e['name']) for e in entries], [('pi', 'one'), ('pi', 'two')])
+        self.assertEqual([(e['agent'], e['name']) for e in entries], [('pi', 'AGENTS.md')])
         rows = self.inventory('rows')
-        self.assertIn('one [Pi:block]', rows.stdout)
+        self.assertIn('AGENTS.md [Pi:file]', rows.stdout)
         self.select_entries([entries[0]])
         preview = self.inventory('preview')
         self.assertEqual(preview.returncode, 0, preview.stderr)
         self.assertIn(str(target), preview.stdout)
         result = self.inventory('remove', '1')
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(target.read_text(), personal + blocks['two'])
+        self.assertFalse(target.exists())
         backup, = self.home.glob('.agent-rules-backup-*/removal.tar')
         with tarfile.open(backup) as archive:
             self.assertEqual(archive.extractfile('.pi/agent/AGENTS.md').read(), before)
@@ -2367,7 +2367,7 @@ main"""]
         target, _, _ = self.pi_removal_fixture(self.home / 'custom pi')
         self.env['PI_CODING_AGENT_DIR'] = '~/custom pi'
         entries = self.scan_entries(codex=False, claude=False, skills=False, pi=True)
-        self.assertEqual(len(entries), 2)
+        self.assertEqual(len(entries), 1)
         self.assertEqual(entries[0]['relative'], 'custom pi/AGENTS.md')
         self.select_entries(entries)
         before = target.read_bytes()
@@ -2408,13 +2408,12 @@ main"""]
         self.assertFalse(link.is_symlink())
         self.assertEqual(target.read_bytes(), before)
 
-    def test_pi_removal_rejects_broken_markers_changed_files_and_backup_failure(self):
+    def test_pi_removal_accepts_broken_markers_but_rejects_changes_and_backup_failure(self):
         target, _, _ = self.pi_removal_fixture()
         before = target.read_bytes()
         target.write_text('<!-- gwyn-space-skills: broken:start -->\n')
         result = self.inventory('scan', 0, 0, 1, 0, 1)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn('Unbalanced managed rule markers', result.stderr)
+        self.assertEqual(result.returncode, 0, result.stderr)
         target.write_bytes(before)
         entries = self.scan_entries(codex=False, claude=False, skills=False, pi=True)
         self.select_entries(entries)
@@ -2440,7 +2439,7 @@ main"""]
         entries = self.scan_entries(codex=False, claude=False, rules=False, skills=True, pi=True)
         self.assertEqual(entries, [])
 
-    def test_multiple_blocks_in_same_file_remove_together(self):
+    def test_multiple_legacy_blocks_are_one_file_removal(self):
         target = self.home / '.codex/AGENTS.md'
         target.parent.mkdir()
         target.write_text('personal\n' + ''.join(f'<!-- gwyn-space-skills: {n}:start -->\n{n}\n<!-- gwyn-space-skills: {n}:end -->\n' for n in ['one', 'two']))
@@ -2448,8 +2447,8 @@ main"""]
         self.select_entries(entries)
         result = self.inventory('remove')
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn('2 succeeded, 0 failed', result.stdout)
-        self.assertEqual(target.read_text(), 'personal\n')
+        self.assertIn('1 succeeded, 0 failed', result.stdout)
+        self.assertFalse(target.exists())
 
     def test_rules_and_skills_backup_failure_prevents_entire_batch(self):
         target = self.home / '.claude/rules/custom.md'
@@ -2514,7 +2513,7 @@ main"""]
         subprocess.run(['tar', '-xf', str(backup), '-C', str(self.home)], check=True)
         self.assertTrue(rules.is_symlink() and skills.is_symlink())
 
-    def test_scan_rejects_symlinked_parents_and_unbalanced_blocks(self):
+    def test_scan_rejects_symlinked_parents_but_accepts_unbalanced_legacy_markers(self):
         directory = self.home / '.claude'
         directory.symlink_to(self.root)
         result = self.inventory('scan', 1, 1, 1, 1)
@@ -2524,8 +2523,7 @@ main"""]
         target.parent.mkdir()
         target.write_text('<!-- gwyn-space-skills: broken:start -->\nkeep\n')
         result = self.inventory('scan', 1, 1, 1, 1)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn('Unbalanced', result.stderr)
+        self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(self.old.exists())
 
     def test_invalid_lock_refuses_codex_but_allows_claude_link_removal(self):
@@ -3093,8 +3091,7 @@ main"""]
                 self.assertFalse(rule.exists())
                 self.assertFalse((root / '.agents/skills/existing').exists())
                 self.assertNotIn('existing', json.loads(lock.read_text())['skills'])
-                self.assertEqual(main_rule.read_text().splitlines()[0], 'personal')
-                self.assertNotIn('gwyn-space-skills:', main_rule.read_text())
+                self.assertFalse(main_rule.exists())
                 self.assertFalse(list(self.home.glob('.agent-*-backup-*')))
 
     def test_local_list_defaults_order_and_read_only(self):
