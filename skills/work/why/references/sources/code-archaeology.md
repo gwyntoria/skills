@@ -3,7 +3,7 @@
 ## What this source contains
 
 - Commit history (messages, dates, authors, diffs)
-- PR descriptions, review comments, and discussion threads (via `gh`)
+- PR descriptions, review comments, and discussion threads (via available GitHub connector or MCP tools, or `gh` as a fallback)
 - Inline code comments, TODOs, FIXMEs, deprecation notes
 - ADRs (architectural decision records) if the repo keeps them
 - Tests, whose names and assertions often encode the edge cases that motivated a change
@@ -15,7 +15,7 @@ The most trustworthy source, tied directly to the code, and the most complete. E
 
 ## How to search it
 
-Expand the seed commit list:
+Use the available repository history. Missing git metadata, shallow history, unavailable PR access, and authentication failures are coverage gaps, not evidence that no rationale exists. Expand the seed commit list where local git history is accessible:
 
 ```bash
 # History through renames

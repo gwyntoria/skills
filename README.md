@@ -22,6 +22,8 @@
 | [`daily-weekly-reporting`](skills/work/daily-weekly-reporting/SKILL.md) | 根据 Git 记录编写中文日报、周报或工作总结 | 区分已提交成果、未提交进展和待验证事项的工作报告 |
 | [`maintain-changelog`](skills/work/maintain-changelog/SKILL.md) | 按 Keep a Changelog 规范编写、更新或审核版本记录 | 有证据支撑的版本条目或分级审核结果 |
 | [`scan-codebase`](skills/work/scan-codebase/SKILL.md) | 阅读实现代码前，先从 Git 历史判断仓库阶段与风险区域 | 当前阶段判断、风险地图和代码阅读顺序 |
+| [`how`](skills/work/how/SKILL.md) | 理解代码如何运作、模块归属和架构分层 | 代码运行流程、关键概念、文件地图和注意事项 |
+| [`why`](skills/work/why/SKILL.md) | 追查代码设计动机、历史决策和取舍 | 带来源引用和置信度分级的调查结果，区分证据、推断和未知 |
 
 ### writing
 
@@ -31,33 +33,44 @@
 | --- | --- | --- |
 | [`review-chinese-writing`](skills/writing/review-chinese-writing/SKILL.md) | 审读面向普通读者的中文非虚构稿件，判断能否发布 | 两阶段评审报告：合格判定、必须修改项和按收益排序的提升建议 |
 
-### 使用示例
+<details>
+<summary>使用示例</summary>
 
 在支持 Skills 的 Agent 中，可以直调用：
 
 ```text
-使用 $wangshuo 分析这个决策，区分事实、推论、风险和未知。
+$wangshuo 分析这个决策，区分事实、推论、风险和未知
 ```
 
 ```text
-使用 $hecaitou 把这件日常小事写成一篇中文随笔，保留不确定性。
+$hecaitou 把这上述的日常小事写成一篇中文随笔
 ```
 
 ```text
-使用 $scan-codebase 扫描当前仓库，先不要读取实现代码。
+$scan-codebase
 ```
 
 ```text
-使用 $daily-weekly-reporting，根据今天所有分支的 Git 记录写一份日报。
+$how 解释这个子系统的入口、数据流和模块分工
 ```
 
 ```text
-使用 $maintain-changelog 根据 v1.2.0 到 HEAD 的变化更新 Unreleased，并审核现有条目。
+$why 这个超时阈值被设为当前值？
 ```
 
 ```text
-使用 $review-chinese-writing 审读这篇稿子，先判断是否合格，再给修改建议。
+$daily-weekly-reporting 日报/周报
 ```
+
+```text
+根据 v1.2.0 到 当前的修改 $maintain-changelog
+```
+
+```text
+$review-chinese-writing 审查刚才编辑的文章
+```
+
+</details>
 
 ### Skills 安装
 
@@ -88,11 +101,14 @@ claude plugin install gwyn-space-skills-writing@gwyn-space
 
 安装或更新插件后，新建会话以加载最新的 skill。
 
+> 使用 Claude Code 的插件形式，单纯是为了在 npx skills 安装的时候能提供分类信息。
+
 ### 补充说明
 
 - `hecaitou` 与 `wangshuo` 是使用 [distilly](https://github.com/titanwings/distilly) 从公开材料中提炼的写作和分析方法。输出具有一定启发性，但与本人仍有不少差别，感兴趣的可以阅读他们的文章，再用相同的话题提问 AI。
-- `maintain-changelog` 参考[keep a changelog](https://keepachangelog.com/en/1.1.0/)中的编写规则。
+- `maintain-changelog` 参考 [keep a changelog](https://keepachangelog.com/en/1.1.0/) 中的编写规则。
 - `scan-codebase` 参考 [The Git Commands I Run Before Reading Any Code](https://piechowski.io/post/git-commands-before-reading-code/) 中提到的 git 命令，适合接手新代码库时运行，了解仓库现状。
+- `how` 与 `why` 参考 [poteto](https://x.com/poteto) 为 Cursor 创建的 [pstack](https://github.com/cursor/plugins/tree/main/pstack) 中的 `how` 与 `why`。
 
 ## Rules
 
