@@ -163,7 +163,7 @@ class Terminal:
             raise AssertionError('Installer exited before returning home')
         self.send(b'\r')
         self.expect('Agent setup')
-        self.expect('Item 1/5')
+        self.expect('Item 1/6')
 
     def exit_home(self):
         self.send(b'\x1b[A\r')  # wrap from Install / Update to Exit
@@ -242,7 +242,7 @@ class AgentSetupTests(unittest.TestCase):
         self.assertFalse(self.calls())
 
     def test_pipe_list_is_read_only(self):
-        result = self.run_piped('--list')
+        result = self.run_piped('--list-skill', '--remote')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('gwyntoria-first', result.stdout)
         self.assertTrue(self.calls())
@@ -273,7 +273,7 @@ class AgentSetupTests(unittest.TestCase):
         term = Terminal(self.env, cwd=self.root, command=['python3', '-c', launcher])
         self.addCleanup(term.close)
         term.expect('Agent setup')
-        term.expect('Item 1/5')
+        term.expect('Item 1/6')
         term.send(b'\r')
         term.expect('Choose installation tasks')
         term.expect('Item 1/3')
@@ -422,7 +422,7 @@ target.chmod(0o755)
         terminal = Terminal(self.env, cwd=cwd)
         self.addCleanup(terminal.close)
         terminal.expect('Agent setup')
-        terminal.expect('Item 1/5')
+        terminal.expect('Item 1/6')
         return terminal
 
     def removal_terminal(self, types=('Skills',), agents='all', scope='global', cwd=None):
@@ -702,7 +702,7 @@ target.chmod(0o755)
     def rule_terminal(self, cwd=None, script=SCRIPT):
         term = Terminal(self.env, script=script, cwd=cwd)
         self.addCleanup(term.close)
-        term.expect('Item 1/5')
+        term.expect('Item 1/6')
         term.send(b'\r')
         term.expect('Choose installation tasks')
         term.expect('Item 1/3')
@@ -1062,7 +1062,7 @@ target.chmod(0o755)
         self.env['FAIL_DOWNLOAD'] = '1'
         term = Terminal(self.env, cwd=self.root)
         self.addCleanup(term.close)
-        term.expect('Item 1/5')
+        term.expect('Item 1/6')
         term.send(b'\r')
         term.expect('Choose installation tasks')
         term.expect('Item 1/3')
@@ -1445,7 +1445,7 @@ target.chmod(0o755)
         self.env['REMOTE_SCRIPT'] = str(remote)
         term = Terminal(self.env, script=installed, cwd=self.root)
         self.addCleanup(term.close)
-        term.expect('Item 1/5')
+        term.expect('Item 1/6')
         term.send(b'\x1b[B' * 3 + b'\r')
         term.expect('Update this command?')
         term.expect('Continue? [Y/n]')
@@ -1477,7 +1477,7 @@ target.chmod(0o755)
                     term.send(answer)
                     if answer == b'b\n':
                         term.expect('Agent setup')
-                        term.expect('Item 4/5')
+                        term.expect('Item 4/6')
                         term.send(b'q')
                         self.assertEqual(term.finish(), 0)
                     elif answer == b'q\n':
@@ -1566,7 +1566,7 @@ require_command() {{
 main"""]
         term = Terminal(self.env, command=command)
         self.addCleanup(term.close)
-        term.expect('Item 1/5')
+        term.expect('Item 1/6')
         term.send(b'\r')
         term.expect('Item 1/3')
         term.send(b'\x1b[B \r')
@@ -1583,7 +1583,7 @@ main"""]
         self.env['FAIL_DOWNLOAD'] = '1'
         term = Terminal(self.env, script=script)
         self.addCleanup(term.close)
-        term.expect('Item 1/5')
+        term.expect('Item 1/6')
         term.send(b'\r')
         term.expect('Item 1/3')
         term.send(b' \r')
@@ -1599,7 +1599,7 @@ main"""]
         script = self.standalone()
         term = Terminal(self.env, script=script)
         self.addCleanup(term.close)
-        term.expect('Item 1/5')
+        term.expect('Item 1/6')
         for _ in range(2):
             term.send(b'\r')
             term.expect('Choose installation tasks')
@@ -2663,7 +2663,7 @@ main"""]
         term.expect('[x] Rules')
         term.expect('Item 1/2')
         term.send(b'b')
-        term.expect('Item 2/5')
+        term.expect('Item 2/6')
         term.send(b'\r')
         term.expect('Remove: choose content')
         term.expect('Item 1/2')
@@ -2819,7 +2819,7 @@ main"""]
         term.expect('[x] Skills')
         term.send(b'\x1b')
         term.expect('Agent setup')
-        term.expect('Item 2/5')
+        term.expect('Item 2/6')
         term.send(b'q')
         self.assertEqual(term.finish(), 0)
         self.assertTrue(self.old.exists())
@@ -2832,7 +2832,7 @@ main"""]
         start = time.monotonic()
         term.send(b'\x1b')
         term.expect('Agent setup')
-        term.expect('Item 2/5')
+        term.expect('Item 2/6')
         elapsed = time.monotonic() - start
         self.assertLess(elapsed, 0.5, f'Esc Back took {elapsed:.3f}s')
         term.send(b'q')
@@ -2857,11 +2857,11 @@ main"""]
         term = self.terminal()
         term.send(b'\x1b')
         term.expect('Agent setup')
-        term.expect('Item 1/5')
+        term.expect('Item 1/6')
         term.send(b'\x1bOB')
-        term.expect('Item 2/5')
+        term.expect('Item 2/6')
         term.send(b'\x1b[A')
-        term.expect('Item 1/5')
+        term.expect('Item 1/6')
         self.assertEqual(term.exit_home(), 0)
 
     def test_escape_in_removal_prompts_discards_pending_yes_without_deleting(self):
@@ -2893,7 +2893,7 @@ main"""]
         term.expect('Continue? [Y/n]')
         term.send(b'\x1b')
         term.expect('Agent setup')
-        term.expect('Item 4/5')
+        term.expect('Item 4/6')
         term.send(b'q')
         self.assertEqual(term.finish(), 0)
         self.assertFalse((self.home / '.local/bin/agent-setup').exists())
@@ -2906,7 +2906,7 @@ main"""]
         term.expect('Press Enter to return to the main menu')
         term.send(b'\x1b')
         term.expect('Agent setup')
-        term.expect('Item 1/5')
+        term.expect('Item 1/6')
         self.assertEqual(term.exit_home(), 0)
 
     def test_escape_at_install_confirmation_returns_to_agent_choices(self):
@@ -3067,6 +3067,114 @@ main"""]
                 self.assertNotIn('gwyn-space-skills:', main_rule.read_text())
                 self.assertFalse(list(self.home.glob('.agent-*-backup-*')))
 
+    def test_local_list_defaults_order_and_read_only(self):
+        project, _ = self.project_removal_fixture()
+        self.lock_fixture()
+        shared = self.home / '.claude/skills'
+        shared.parent.mkdir(exist_ok=True)
+        shared.symlink_to(self.home / '.agents/skills', target_is_directory=True)
+        before = {p: p.read_bytes() for p in self.home.rglob('*') if p.is_file()}
+        outputs = []
+        for args in [('--list',), ('--local', '--list'), ('--list', '--local')]:
+            result = subprocess.run(['bash', str(SCRIPT), *args], env=self.env, cwd=project,
+                                    capture_output=True, text=True, timeout=20)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            outputs.append(result.stdout)
+        self.assertEqual(outputs[0], outputs[1])
+        self.assertEqual(outputs[1], outputs[2])
+        for text in ['Global (', 'Project (', 'Rules:', 'Skills:', 'Codex:', 'Claude:', 'Pi:',
+                     'owner/repo', 'project/repo', 'existing', 'None']:
+            self.assertIn(text, outputs[0])
+        self.assertFalse(self.calls())
+        self.assertFalse((self.root / 'fetch.log').exists())
+        self.assertEqual(before, {p: p.read_bytes() for p in self.home.rglob('*') if p.is_file()})
+
+    def test_local_list_filters_broken_links_and_unreadable_lock(self):
+        broken = self.home / '.agents/skills/broken'
+        broken.symlink_to('missing')
+        (self.home / '.agents/.skill-lock.json').write_text('invalid')
+        result = self.run_script('--global', '--list-skill')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('broken', result.stdout)
+        self.assertIn('Unknown / local', result.stdout)
+        self.assertIn('unreadable skill lock', result.stderr)
+        self.assertNotIn('Project (', result.stdout)
+        self.assertNotIn('Rules:', result.stdout)
+        result = self.run_script('--list-rule', '--project')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn('Global (', result.stdout)
+        self.assertNotIn('Skills:', result.stdout)
+
+    def test_local_rule_sources_require_install_provenance(self):
+        directory = self.home / '.claude/rules'
+        directory.mkdir(parents=True)
+        (directory / 'manual.md').write_text('# Manual\nSee https://github.com/unrelated/reference\n')
+        (directory / 'managed.md').write_text('<!-- Installed from https://github.com/owner/repo/blob/main/rules/a.md by setup-agents.sh. -->\n# Managed\n')
+        (directory / 'broken.md').symlink_to('missing')
+        (directory / 'cycle').symlink_to(directory, target_is_directory=True)
+        result = self.run_script('--list-rule', '--global')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('manual.md [Unknown / local]', result.stdout)
+        self.assertIn('managed.md [owner/repo]', result.stdout)
+        self.assertIn('broken.md [Unknown / local (broken link)]', result.stdout)
+        self.assertNotIn('unrelated/reference', result.stdout)
+
+    def test_list_argument_conflicts_and_union(self):
+        for args in [('--list', '--local', '--remote'), ('--list-rule', '--agent'),
+                     ('--list', '--global', '--project'), ('--remote', '--list', '--global')]:
+            result = self.run_script(*args)
+            self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        all_content = self.run_script('--list', '--global')
+        union = self.run_script('--list-rule', '--global', '--list-skill')
+        self.assertEqual(all_content.stdout, union.stdout)
+        result = self.source('parse_args --remote --local; printf "%s/%s" "$LIST_RULES" "$LIST_SKILLS"')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, '0/0')
+        self.assertFalse(self.calls())
+
+    def test_remote_rule_and_combined_catalogs(self):
+        self.remote_bundle()
+        for args in [('--list-rule', '--remote'), ('--remote', '--list-rule'), ('--list', '--remote')]:
+            result = self.run_script(*args)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            for text in ['Remote available content:', 'Rules:', 'Gwyntoria', 'Waza', 'waza-anti-patterns']:
+                self.assertIn(text, result.stdout)
+            self.assertEqual('Skills:' in result.stdout, '--list' in args)
+        self.assertEqual(list(self.home.rglob('SKILL.md')), [self.old])
+
+    def test_list_ui_local_back_and_remote(self):
+        term = self.terminal(cwd=self.root)
+        term.send(b'\x1b[B' * 4 + b'\r')
+        term.expect('List: choose content')
+        term.send(b'\r')
+        term.expect('List: choose location')
+        term.send(b'\r')
+        term.expect('List: choose scope')
+        term.send(b'\r')
+        term.expect('List: choose agents')
+        term.send(b'\x1b')
+        term.expect('List: choose scope')
+        term.send(b'\r')
+        term.expect('List: choose agents')
+        term.send(b'\r')
+        term.expect('Global (')
+        term.expect('existing')
+        self.assertEqual(term.finish_action(), 0)
+        self.assertFalse(self.calls())
+
+    def test_list_ui_remote_skips_scope_and_agents(self):
+        term = self.terminal()
+        term.send(b'\x1b[B' * 4 + b'\r')
+        term.expect('List: choose content')
+        term.send(b' \r')  # skills only
+        term.expect('List: choose location')
+        term.send(b'\x1b[B\r')
+        term.expect('Remote available content:')
+        term.expect('Distilly')
+        self.assertEqual(term.finish_action(), 0)
+        self.assertNotIn(b'List: choose scope', term.transcript)
+        self.assertNotIn(b'List: choose agents', term.transcript)
+
     def test_cli_help_invalid_and_nonterminal(self):
         self.assertEqual(self.run_script('--help').returncode, 0)
         self.assertEqual(self.run_script('--unknown').returncode, 2)
@@ -3077,7 +3185,7 @@ main"""]
         self.assertFalse(self.calls())
 
     def test_list_is_read_only_and_has_all_sources(self):
-        result = self.run_script('--list')
+        result = self.run_script('--list-skill', '--remote')
         self.assertEqual(result.returncode, 0, result.stderr)
         for name in ['Waza', 'Kami', 'Matt Pocock', 'HumanLayer', 'show-me',
                      'Gwyntoria', 'gwyntoria-first', 'gwyntoria-last',
@@ -3126,13 +3234,13 @@ execute_plan''')
         self.assertTrue((self.home / '.agents/skills/kami/SKILL.md').exists())
         self.assertTrue((self.home / '.agents/skills/show-me/SKILL.md').exists())
         self.assertEqual(self.old.read_text(), 'keep me')
-        result = self.run_script('--list')
+        result = self.run_script('--list-skill', '--remote')
         self.assertEqual(result.returncode, 1)
         self.assertIn('HumanLayer', result.stdout)
 
     def test_unrecognised_catalog_is_reported(self):
         self.env['BAD_CATALOG'] = '1'
-        result = self.run_script('--list')
+        result = self.run_script('--list-skill', '--remote')
         self.assertEqual(result.returncode, 1)
         self.assertIn('no recognisable skill names', result.stderr)
         self.assertIn('Catalog: Waza', result.stderr)

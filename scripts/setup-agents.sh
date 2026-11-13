@@ -6,6 +6,12 @@ PROGRAM_NAME="setup-agents.sh"
 INSTALL_AGENT=0
 INSTALL_SKILLS=0
 LIST_SKILLS=0
+LIST_RULES=0
+LIST_MODE=local
+LIST_SCOPE=both
+LIST_CODEX=1
+LIST_CLAUDE=1
+LIST_PI=1
 
 # Resolve the script itself, independently of the caller's project directory.
 resolve_script_path() {
@@ -92,12 +98,18 @@ log() { printf '\n==> %s\n' "$1"; }
 
 usage() {
     cat <<EOF
-Usage: $PROGRAM_NAME [--agent] [--skill] | --list
+Usage: $PROGRAM_NAME [--agent] [--skill] | {--list|--list-skill|--list-rule} [--local|--remote] [--global|--project]
 
 No arguments: open the interactive menu (requires a terminal).
   --agent     Choose Codex and Claude Code by default; Pi is optional, with bundled components
   --skill     Install/update all configured skills; preserve existing skills
-  --list      List available skills by source without installing
+  --list      List installed rules and skills (default: --local)
+  --list-skill List skills only
+  --list-rule  List rules only
+  --local     Show installed content, without network access
+  --remote    Show available content by source
+  --global    Limit local listing to global installations
+  --project   Limit local listing to the current project
   -h, --help  Show help
 
 The menu also provides a separate, confirmed removal action with an optional backup (default: no).
@@ -105,20 +117,37 @@ EOF
 }
 
 parse_args() {
+    local local_mode=0 remote_mode=0 global_scope=0 project_scope=0
     while [ "$#" -gt 0 ]; do
         case "$1" in
             --agent) INSTALL_AGENT=1 ;;
             --skill) INSTALL_SKILLS=1 ;;
-            --list) LIST_SKILLS=1 ;;
+            --list) LIST_SKILLS=1; LIST_RULES=1 ;;
+            --list-skill) LIST_SKILLS=1 ;;
+            --list-rule) LIST_RULES=1 ;;
+            --local) local_mode=1 ;;
+            --remote) remote_mode=1 ;;
+            --global) global_scope=1 ;;
+            --project) project_scope=1 ;;
             -h | --help) usage; return 1 ;;
             *) printf 'Error: unknown option: %s\n' "$1" >&2; return 2 ;;
         esac
         shift
     done
-    if [ "$LIST_SKILLS" -eq 1 ] && [ "$((INSTALL_AGENT + INSTALL_SKILLS))" -gt 0 ]; then
+    if [ "$((LIST_SKILLS + LIST_RULES))" -eq 0 ]; then return 0; fi
+    if [ "$((INSTALL_AGENT + INSTALL_SKILLS))" -gt 0 ]; then
         printf 'Error: --list cannot be combined with installation options.\n' >&2
         return 2
     fi
+    if [ "$((local_mode + remote_mode))" -gt 1 ] || [ "$((global_scope + project_scope))" -gt 1 ]; then
+        printf 'Error: conflicting list modes or scopes.\n' >&2; return 2
+    fi
+    [ "$remote_mode" -eq 0 ] || LIST_MODE=remote
+    if [ "$LIST_MODE" = remote ] && [ "$((global_scope + project_scope))" -gt 0 ]; then
+        printf 'Error: --global/--project require local listing.\n' >&2; return 2
+    fi
+    [ "$global_scope" -eq 0 ] || LIST_SCOPE=global
+    [ "$project_scope" -eq 0 ] || LIST_SCOPE=project
 }
 
 require_command() {
@@ -1980,6 +2009,130 @@ choose_skill_repositories_page() {
     done
 }
 
+# Listing follows links for inspection only; it never uses removal manifests or writes installations.
+print_installed_content() {
+    require_node || return 1
+    node - "$HOME" "$PROJECT_TARGET" "$LIST_SCOPE" "$LIST_RULES" "$LIST_SKILLS" "$LIST_CODEX" "$LIST_CLAUDE" "$LIST_PI" "$(pi_rule_path)" <<'JS'
+const fs = require('fs');
+const path = require('path');
+const [home, project, scope, rules, skills, codex, claude, pi, piPath] = process.argv.slice(2);
+const display = value => JSON.stringify(String(value)).slice(1, -1);
+function stat(file) {
+    try { return fs.statSync(file); }
+    catch (error) {
+        if (['ENOENT', 'ENOTDIR', 'ELOOP'].includes(error.code)) return null;
+        throw error;
+    }
+}
+function source(text) {
+    if (/<!-- Installed from rules\//.test(text)) return 'gwyntoria/skills';
+    return text.match(/<!-- Installed from https:\/\/github\.com\/([\w.-]+\/[\w.-]+)/)?.[1] || 'Unknown / local';
+}
+function row(name, origin, file) {
+    let link = '';
+    if (fs.lstatSync(file).isSymbolicLink()) link = ` -> ${display(fs.readlinkSync(file))}`;
+    console.log(`      ${display(name)} [${display(origin)}]\n        ${display(file)}${link}`);
+}
+function blocks(file) {
+    if (!stat(file)?.isFile()) return 0;
+    const text = fs.readFileSync(file, 'utf8');
+    const pattern = /^<!-- gwyn-space-skills: ([\w.-]+):start -->\r?\n([\s\S]*?)^<!-- gwyn-space-skills: \1:end -->/gm;
+    let match, count = 0;
+    while ((match = pattern.exec(text))) { row(match[1], source(match[2]), file); count++; }
+    return count;
+}
+function ruleFiles(directory, ancestors = new Set()) {
+    const info = stat(directory);
+    if (!info) {
+        if (fs.existsSync(path.dirname(directory)) && fs.lstatSync(directory, {throwIfNoEntry: false})?.isSymbolicLink()) {
+            row(path.basename(directory), 'Unknown / local (broken link)', directory); return 1;
+        }
+        return 0;
+    }
+    if (info.isFile()) { row(path.basename(directory), source(fs.readFileSync(directory, 'utf8')), directory); return 1; }
+    if (!info.isDirectory()) return 0;
+    const real = fs.realpathSync(directory);
+    if (ancestors.has(real)) return 0;
+    const next = new Set([...ancestors, real]);
+    return fs.readdirSync(directory).sort().reduce((n, name) => n + ruleFiles(path.join(directory, name), next), 0);
+}
+for (const [label, root] of [['global', home], ['project', project]]) {
+    if (scope !== 'both' && scope !== label) continue;
+    console.log(`\n${label === 'global' ? 'Global' : 'Project'} (${display(root)}):`);
+    let records = {};
+    if (skills === '1') {
+        const lock = path.join(root, label === 'global' ? '.agents/.skill-lock.json' : 'skills-lock.json');
+        try { records = JSON.parse(fs.readFileSync(lock, 'utf8')).skills || {}; }
+        catch (error) { if (error.code !== 'ENOENT') console.error(`Warning: unreadable skill lock: ${display(lock)}`); }
+    }
+    for (const kind of ['Rules', 'Skills']) {
+        if ((kind === 'Rules' ? rules : skills) !== '1') continue;
+        console.log(`  ${kind}:`);
+        for (const [agent, enabled] of [['Codex', codex], ['Claude', claude], ['Pi', pi]]) {
+            if (enabled !== '1' || (agent === 'Pi' && (kind === 'Skills' || label === 'project'))) continue;
+            console.log(`    ${agent}:`);
+            let count = 0;
+            if (kind === 'Rules') {
+                const file = agent === 'Codex' ? path.join(root, label === 'global' ? '.codex/AGENTS.md' : 'AGENTS.md') :
+                    agent === 'Pi' ? piPath : path.join(root, '.claude/CLAUDE.md');
+                count += blocks(file);
+                if (agent === 'Claude') count += ruleFiles(path.join(root, '.claude/rules'));
+            } else {
+                const directories = agent === 'Codex' ? ['.agents/skills', ...(label === 'global' ? ['.codex/skills'] : [])] : ['.claude/skills'];
+                for (const relative of directories) {
+                    const directory = path.join(root, relative);
+                    if (!stat(directory)?.isDirectory()) continue;
+                    const names = fs.readdirSync(directory).sort().flatMap(name => name === '.system' && stat(path.join(directory, name))?.isDirectory()
+                        ? fs.readdirSync(path.join(directory, name)).sort().map(child => `${name}/${child}`) : [name]);
+                    for (const name of names) {
+                        const file = path.join(directory, name);
+                        let canonical = name, record = records[name];
+                        try {
+                            const resolved = fs.realpathSync(file);
+                            if (path.dirname(resolved) === path.join(root, '.agents/skills')) {
+                                canonical = path.basename(resolved); record = records[canonical];
+                            }
+                        } catch (error) { if (!['ENOENT', 'ENOTDIR', 'ELOOP'].includes(error.code)) throw error; }
+                        const origin = record?.source || record?.sourceUrl || 'Unknown / local';
+                        row(name === canonical ? name : `${name} (${canonical})`, origin, file); count++;
+                    }
+                }
+            }
+            if (!count) console.log('      None');
+        }
+    }
+}
+JS
+}
+
+list_content() (
+    if [ "$LIST_MODE" = local ]; then print_installed_content; exit $?; fi
+    local name failed=0
+    trap cleanup_setup_resources EXIT
+    printf '\nRemote available content:\n'
+    if [ "$LIST_RULES" -eq 1 ]; then
+        printf '\nRules:\n'
+        # Remote means the published catalog, even when invoked from a checkout.
+        REPO=""
+        if RULE_SCOPE=global load_rule_catalog; then
+            printf '  Gwyntoria (%s):\n' "$GWYNTORIA_SKILLS_URL"
+            for name in "${RULE_NAMES_GLOBAL[@]+"${RULE_NAMES_GLOBAL[@]}"}"; do printf '    %s\n' "$name"; done
+        else failed=1; fi
+        if load_waza_rules; then
+            printf '  Waza (%s):\n' "$WAZA_SKILLS_URL"
+            for name in "${RULE_NAMES_WAZA[@]+"${RULE_NAMES_WAZA[@]}"}"; do printf '    %s\n' "$name"; done
+        else failed=1; fi
+    fi
+    if [ "$LIST_SKILLS" -eq 1 ]; then
+        printf '\nSkills:\n'
+        preflight 4 || exit 1
+        load_catalog
+        print_catalog
+        [ "${#FAILED[@]}" -eq 0 ] || failed=1
+    fi
+    exit "$failed"
+)
+
 # The private manifest binds selection IDs to scanned paths and content hashes.
 # No source checkout or network access is required to remove installed content.
 removal_inventory() {
@@ -2620,14 +2773,58 @@ interactive_setup() {
     while :; do
         case "$page" in
             main)
-                choose_items 0 'Agent setup' 0 0 'Install / Update' 'Remove' 'Remove all backups' 'Install / Update this command' 'Exit' || return "$session_status"
+                choose_items 0 'Agent setup' 0 0 'Install / Update' 'Remove' 'Remove all backups' 'Install / Update this command' 'List' 'Exit' || return "$session_status"
                 case "${MENU_SELECTED[0]}" in
                     0) page=tasks ;;
                     1) removal_scanned=0; page=remove_categories ;;
                     2) run_interactive_task confirm_backup_removal; page=complete ;;
                     3) page=command_confirm ;;
-                    4) return "$session_status" ;;
+                    4) page=list_categories ;;
+                    5) return "$session_status" ;;
                 esac ;;
+            list_categories)
+                choose_items 15 'List: choose content' 1 '1 1' Rules Skills || {
+                    [ "$?" -eq 2 ] || return "$session_status"
+                    page=main; continue
+                }
+                [ "${#MENU_SELECTED[@]}" -gt 0 ] || { page=main; continue; }
+                LIST_RULES=0; LIST_SKILLS=0
+                for i in "${MENU_SELECTED[@]}"; do
+                    if [ "$i" -eq 0 ]; then LIST_RULES=1; else LIST_SKILLS=1; fi
+                done
+                page=list_mode ;;
+            list_mode)
+                choose_items 16 'List: choose location' 0 0 Local Remote || {
+                    [ "$?" -eq 2 ] || return "$session_status"
+                    page=list_categories; continue
+                }
+                if [ "${MENU_SELECTED[0]}" -eq 0 ]; then
+                    LIST_MODE=local; page=list_scope
+                else
+                    LIST_MODE=remote; run_interactive_task list_content; page=complete
+                fi ;;
+            list_scope)
+                choose_items 17 'List: choose scope' 0 0 Global Project || {
+                    [ "$?" -eq 2 ] || return "$session_status"
+                    page=list_mode; continue
+                }
+                if [ "${MENU_SELECTED[0]}" -eq 0 ]; then LIST_SCOPE=global; else LIST_SCOPE=project; fi
+                page=list_agents ;;
+            list_agents)
+                local list_agent_labels=(Codex 'Claude Code') list_agent_defaults='1 1'
+                if [ "$LIST_SCOPE" = global ] && [ "$LIST_RULES" -eq 1 ]; then
+                    list_agent_labels+=(Pi); list_agent_defaults+=' 1'
+                elif [ "${MENU_CURSORS[18]:-0}" -gt 1 ]; then MENU_CURSORS[18]=1; fi
+                choose_items 18 'List: choose agents' 1 "$list_agent_defaults" "${list_agent_labels[@]}" || {
+                    [ "$?" -eq 2 ] || return "$session_status"
+                    page=list_scope; continue
+                }
+                [ "${#MENU_SELECTED[@]}" -gt 0 ] || { page=list_scope; continue; }
+                LIST_CODEX=0; LIST_CLAUDE=0; LIST_PI=0
+                for i in "${MENU_SELECTED[@]}"; do
+                    case "$i" in 0) LIST_CODEX=1 ;; 1) LIST_CLAUDE=1 ;; 2) LIST_PI=1 ;; esac
+                done
+                run_interactive_task list_content; page=complete ;;
             command_confirm)
                 command_action=Install
                 if [ -e "$HOME/.local/bin/agent-setup" ] || [ -L "$HOME/.local/bin/agent-setup" ]; then
@@ -2965,6 +3162,8 @@ interactive_setup() {
                 REMOVAL_RULE_SELECTION=(); REMOVAL_SKILL_SELECTION=(); removal_scanned=0
                 if [ -n "$REMOVAL_TEMP" ]; then rm -rf -- "$REMOVAL_TEMP"; REMOVAL_TEMP=""; fi
                 INTERACTIVE_RESULT=0; show_summary=0; INSTALL_SKILLS=0
+                LIST_RULES=0; LIST_SKILLS=0; LIST_MODE=local; LIST_SCOPE=both
+                LIST_CODEX=1; LIST_CLAUDE=1; LIST_PI=1
                 page=main ;;
         esac
     done
@@ -2994,6 +3193,10 @@ main() {
         [ "$parse_status" -ne 1 ] || return 0
         return "$parse_status"
     }
+    if [ "$((LIST_SKILLS + LIST_RULES))" -gt 0 ]; then
+        list_content
+        return $?
+    fi
     if [ "$INSTALL_AGENT" -eq 1 ]; then
         AGENT_ITEMS=(0 1 5); SELECTED_RULES=(); SELECTED_RULE_SOURCES=()
         if [ -t 0 ] && [ -t 1 ]; then
@@ -3004,14 +3207,9 @@ main() {
         printf 'No terminal available; installing all Agents and bundled components.\n'
     fi
     preflight "${AGENT_ITEMS[@]+"${AGENT_ITEMS[@]}"}"
-    if [ "$INSTALL_SKILLS" -eq 1 ] || [ "$LIST_SKILLS" -eq 1 ]; then
+    if [ "$INSTALL_SKILLS" -eq 1 ]; then
         preflight 4
         load_catalog
-        if [ "$LIST_SKILLS" -eq 1 ]; then
-            print_catalog
-            [ "${#FAILED[@]}" -eq 0 ]
-            return $?
-        fi
         for ((i=0; i<${#SKILL_NAMES[@]}; i++)); do SELECTED_SKILLS+=("$i"); done
     fi
     execute_plan
