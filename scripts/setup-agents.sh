@@ -3014,7 +3014,7 @@ interactive_setup() {
                 REPO_ITEM_LABELS=("${rule_labels[@]}"); REPO_ITEM_GROUPS=(); REPO_SELECTED=()
                 for ((i=0; i<${#rule_names[@]}; i++)); do
                     source_scope="${rule_sources[i]}"
-                    if [ "$source_scope" = waza ]; then REPO_ITEM_GROUPS+=(Waza); else REPO_ITEM_GROUPS+=("$source_scope"); fi
+                    if [ "$source_scope" = waza ]; then REPO_ITEM_GROUPS+=(Waza); else REPO_ITEM_GROUPS+=(Gwyntoria); fi
                     for ((selected_rule=0; selected_rule<${#SELECTED_RULES[@]}; selected_rule++)); do
                         if [ "${SELECTED_RULES[selected_rule]}" = "${rule_names[i]}" ] &&
                            [ "${SELECTED_RULE_SOURCES[selected_rule]}" = "$source_scope" ]; then REPO_SELECTED+=("$i"); break; fi
