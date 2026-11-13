@@ -1,5 +1,7 @@
 # Project Agent Rules
 
+This repo mainly contains personal rules and skills used by agents, as well as some common scripts.
+
 ## Folder Structure
 
 Skill source documents are organized into bucket folders under `skills/` and are used by the `npx skills` and Claude marketplace installation paths.
