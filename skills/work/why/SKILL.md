@@ -7,15 +7,17 @@ description: "Investigate code design rationale, historical decisions, tradeoffs
 
 Investigate the motivation and intent behind code. The companion `how` skill answers what the code does and how it works. `why` answers what forces led to its shape.
 
-## Codex execution
+## Agent execution
 
 Resolve reference paths relative to this skill directory, not the target repository.
 
-Use the subagent tools exposed by the current Codex session to spawn investigators and the synthesizer, wait for their results, and release finished agents. Leave model, reasoning, and speed overrides unset so each role inherits the current session configuration. Pass each role its complete assignment and repository location. Verify that its assigned tools are available to the child; discover deferred tools there if needed. Report access gaps rather than assuming parent tool access carries over.
+If subagent tools are unavailable, report that the required workflow is blocked; do not treat this as grounds for an inline answer.
+
+Use the subagent tools exposed by the current session to spawn investigators and the synthesizer, wait for their results, and release finished agents. Leave model, reasoning, and speed overrides unset so each role inherits the current session configuration. Pass each role its complete assignment and repository location. Verify that its assigned tools are available to the child; discover deferred tools there if needed. Report access gaps rather than assuming parent tool access carries over.
 
 All roles may read the repository and query evidence sources but must not edit files, commit, or modify external state. Keep tool access needed for investigation; enforce read-only behavior through the assignment rather than platform-specific mode parameters.
 
-Run independent investigators in parallel within the session's concurrency limit. If necessary, use batches and release finished agents before starting more. Collect every investigator's findings or access failure before spawning the synthesizer. If subagent tools are unavailable, report that the required workflow is blocked; do not treat this as grounds for an inline answer.
+Run independent investigators in parallel within the session's concurrency limit. If necessary, use batches and release finished agents before starting more. Collect every investigator's findings or access failure before spawning the synthesizer.
 
 ## Operating Posture
 
