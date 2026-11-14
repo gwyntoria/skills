@@ -811,24 +811,24 @@ claude_rule_path() {
             printf '%s\n' "$HOME/.claude/rules/$RULE_FILE"
         fi
         ;;
-    project) printf '%s\n' "$PROJECT_DIR/.claude/rules/$RULE_FILE" ;;
     esac
 }
 
 codex_file_path() {
     case "$1" in
     global) printf '%s\n' "$HOME/.codex/AGENTS.md" ;;
-    project) printf '%s\n' "$PROJECT_DIR/AGENTS.md" ;;
     esac
 }
 
 rule_file_path() {
+    if [ "$2" = project ]; then
+        printf '%s/docs/rules/%s\n' "$PROJECT_DIR" "$RULE_FILE"
+        return 0
+    fi
     case "$1" in
         claude) claude_rule_path "$2" ;;
         codex) codex_file_path "$2" ;;
-        pi)
-            if [ "$2" = global ]; then pi_rule_path
-            else printf '%s/AGENTS.md\n' "$PROJECT_DIR"; fi ;;
+        pi) pi_rule_path ;;
     esac
 }
 
@@ -893,7 +893,7 @@ append_rule_file() {
     if [ "$target" = claude ]; then
         level=1
     else
-        if [ -f "$(dirname "$destination")/AGENTS.override.md" ]; then
+        if [ "$scope" = global ] && [ -f "$(dirname "$destination")/AGENTS.override.md" ]; then
             warn "$(dirname "$destination")/AGENTS.override.md exists and takes precedence; $target will not read $(basename "$destination")."
         fi
         if [ "$scope" = global ] || [ "$RULE_CLASSIFICATION" = project ]; then level=2; fi
@@ -962,7 +962,7 @@ preflight() {
                 fi
             done
             ;;
-        codex | pi)
+        codex | pi | project)
             for scope in $SCOPES; do
                 directory="$(dirname "$(rule_file_path "$target" "$scope")")"
                 if [ ! -d "$directory" ]; then
@@ -1000,6 +1000,8 @@ run() {
     fi
 
     resolve_targets || return 1
+    # Project rules are shared files, so multiple selected agents write only once.
+    if [ "$SCOPE" = project ]; then TARGETS=project; fi
 
     if [ "$MODE" = "install" ]; then
         preflight || return 1
@@ -1443,12 +1445,29 @@ for (const [label, root] of [['global', home], ['project', project]]) {
     for (const kind of ['Rules', 'Skills']) {
         if ((kind === 'Rules' ? rules : skills) !== '1') continue;
         console.log(`  ${kind}:`);
+        if (kind === 'Rules' && label === 'project') {
+            console.log('    Shared project rules:');
+            const directory = path.join(root, 'docs/rules');
+            let count = 0;
+            if (stat(directory)?.isDirectory()) {
+                for (const name of fs.readdirSync(directory).sort()) {
+                    const file = path.join(directory, name), info = fs.lstatSync(file);
+                    if (!name.endsWith('.md') || (!info.isFile() && !info.isSymbolicLink())) continue;
+                    const target = stat(file);
+                    const origin = target?.isFile() ? source(fs.readFileSync(file, 'utf8')) :
+                        target ? 'Unknown / local' : 'Unknown / local (broken link)';
+                    row(name, origin, file); count++;
+                }
+            }
+            if (!count) console.log('      None');
+            continue;
+        }
         for (const [agent, enabled] of [['Codex', codex], ['Claude', claude], ['Pi', pi]]) {
             if (enabled !== '1' || (agent === 'Pi' && (kind === 'Skills' || label === 'project'))) continue;
             console.log(`    ${agent}:`);
             let count = 0;
             if (kind === 'Rules') {
-                const file = agent === 'Codex' ? path.join(root, label === 'global' ? '.codex/AGENTS.md' : 'AGENTS.md') :
+                const file = agent === 'Codex' ? path.join(root, '.codex/AGENTS.md') :
                     agent === 'Pi' ? piPath : path.join(root, '.claude/CLAUDE.md');
                 if (agent !== 'Claude' || label === 'global') count += ruleFiles(file);
                 if (agent === 'Claude') count += ruleFiles(path.join(root, '.claude/rules'));
@@ -1582,7 +1601,7 @@ function repository(record) {
 function ruleGroups(entries) {
     return entries.filter(e => e.kind === 'rules').map(e => ({name: e.name, entries: [e]}));
 }
-const agentName = agent => ({codex: 'Codex', claude: 'Claude', pi: 'Pi'}[agent]);
+const agentName = agent => ({codex: 'Codex', claude: 'Claude', pi: 'Pi', project: 'Project'}[agent]);
 const ruleLabel = group => `${display(group.name)} ${group.entries.map(e => `[${agentName(e.agent)}:${e.type}]`).join(' ')}`;
 const targetLabel = e => display(full(e.relative));
 function linkDestination(p) {
@@ -1609,18 +1628,34 @@ function skillGroups(entries) {
 function scan(codex, claude, rules, skills, pi = false) {
     const piRelative = pi && rules && scope === 'global' ? path.relative(root, path.resolve(piRulePath)) : null;
     if (piRelative !== null) full(piRelative); // Preserve the HOME boundary for custom Pi paths.
-    for (const directory of [...(skills && (codex || claude) ? ['.agents'] : []), ...(claude ? ['.claude'] : []), ...(rules && codex && scope === 'global' ? ['.codex'] : [])]) {
+    for (const directory of [...(skills && (codex || claude) ? ['.agents'] : []), ...(claude && (skills || scope === 'global') ? ['.claude'] : []), ...(rules && codex && scope === 'global' ? ['.codex'] : [])]) {
         if (stat(full(directory))?.isSymbolicLink()) throw Error(`Refusing symlinked directory: ${full(directory)}`);
     }
     const entries = [], lock = skills && (codex || claude) ? readLock() : {valid: true};
     const add = entry => {
         entries.push({...entry, id: entries.length, snapshot: fingerprint(entry.relative), parents: parents(entry.relative)});
     };
+    if (rules && scope === 'project') {
+        const directory = 'docs/rules';
+        const info = stat(full(directory));
+        if (info?.isSymbolicLink()) throw Error(`Refusing symlinked directory: ${full(directory)}`);
+        if (info?.isDirectory()) {
+            parents(path.join(directory, 'entry'));
+            for (const name of fs.readdirSync(full(directory)).sort()) {
+                if (!name.endsWith('.md')) continue;
+                const relative = path.join(directory, name), info = stat(full(relative));
+                if (info.isSymbolicLink() || info.isFile()) {
+                    add({kind: 'rules', type: info.isSymbolicLink() ? 'link' : 'file',
+                        agent: 'project', relative, name});
+                }
+            }
+        }
+    }
     for (const agent of ['codex', 'claude', 'pi']) {
         if (!({codex, claude, pi}[agent]) || (agent === 'pi' && scope !== 'global')) continue;
-        if (rules) {
-            const relative = agent === 'codex' ? (scope === 'project' ? 'AGENTS.md' : '.codex/AGENTS.md') :
-                agent === 'pi' ? piRelative : (scope === 'global' ? '.claude/CLAUDE.md' : null);
+        if (rules && scope === 'global') {
+            const relative = agent === 'codex' ? '.codex/AGENTS.md' :
+                agent === 'pi' ? piRelative : '.claude/CLAUDE.md';
             const info = relative ? stat(full(relative)) : null;
             if (info?.isSymbolicLink()) add({kind: 'rules', type: 'link', agent, relative, name: path.basename(relative)});
             else if (info?.isFile()) add({kind: 'rules', type: 'file', agent, relative, name: path.basename(relative)});
@@ -2038,8 +2073,8 @@ print_install_plan() {
                 printf '  Rule source: %s/%s.md\n' "$RESOURCE_PATH" "$i"
             fi
             if [ "$RULE_SCOPE" = project ]; then
-                printf '  \033[32mproject / %s -> AGENTS.md\033[0m\n' "$i"
-                printf '    \033[32m%s/AGENTS.md\033[0m\n' "$PROJECT_TARGET"
+                printf '  \033[32mproject / %s -> docs/rules/%s.md\033[0m\n' "$i" "$i"
+                printf '    \033[32m%s/docs/rules/%s.md\033[0m\n' "$PROJECT_TARGET" "$i"
             else
                 printf '  \033[32m%s / %s -> %s\033[0m\n' "$RULE_SCOPE" "$i" "$RULE_TARGETS"
                 rule_targets="$RULE_TARGETS"

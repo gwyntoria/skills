@@ -479,7 +479,9 @@ target.chmod(0o755)
         project.mkdir()
         files = {
             'AGENTS.md': 'personal\r\n<!-- gwyn-space-skills: one:start -->\r\nrule\r\n<!-- gwyn-space-skills: one:end -->\r\nend\r\n',
-            '.claude/rules/nested/.custom.md': 'custom rule',
+            '.claude/rules/nested/.custom.md': 'legacy Claude rule',
+            'docs/rules/one.md': 'project rule',
+            'docs/rules/.custom.md': 'custom rule',
             '.claude/CLAUDE.md': '<!-- gwyn-space-skills: ignored:start -->\nkeep\n<!-- gwyn-space-skills: ignored:end -->\n',
             '.codex/AGENTS.md': '<!-- gwyn-space-skills: ignored:start -->\nkeep\n<!-- gwyn-space-skills: ignored:end -->\n',
             '.agents/skills/existing/SKILL.md': 'project skill',
@@ -507,7 +509,7 @@ target.chmod(0o755)
         project, files = self.project_removal_fixture()
         entries = self.project_entries(project)
         self.assertEqual({e['relative'] for e in entries}, {
-            'AGENTS.md', '.claude/rules/nested/.custom.md',
+            'docs/rules/one.md', 'docs/rules/.custom.md',
             '.agents/skills/existing', '.claude/skills/existing'})
         self.assertTrue(all(e['group'] == 'project/repo' for e in entries if e['kind'] == 'skills'))
         self.assertEqual(self.inventory('select', *(e['id'] for e in entries), scope='project', cwd=project).returncode, 0)
@@ -516,7 +518,9 @@ target.chmod(0o755)
         result = self.inventory('remove', '1', scope='project', cwd=project)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('4 succeeded, 0 failed', result.stdout)
-        self.assertFalse((project / 'AGENTS.md').exists())
+        self.assertEqual((project / 'AGENTS.md').read_bytes(), files['AGENTS.md'].encode())
+        self.assertEqual((project / '.claude/rules/nested/.custom.md').read_text(), 'legacy Claude rule')
+        self.assertFalse((project / 'docs/rules/one.md').exists())
         self.assertFalse((project / '.agents/skills/existing').exists())
         self.assertFalse((project / '.claude/skills/existing').is_symlink())
         remaining = json.loads((project / 'skills-lock.json').read_text())
@@ -528,7 +532,8 @@ target.chmod(0o755)
             self.assertEqual((project / name).read_bytes(), files[name].encode())
         backup, = self.home.glob('.agent-rules-backup-*/removal.tar')
         with tarfile.open(backup) as archive:
-            self.assertIn('AGENTS.md', archive.getnames())
+            self.assertIn('docs/rules/one.md', archive.getnames())
+            self.assertNotIn('AGENTS.md', archive.getnames())
             self.assertIn('skills-lock.json', archive.getnames())
         plain = re.sub(r'\x1b\[[0-9;]*m', '', result.stdout)
         recovery = next(line.removeprefix('Restore: ') for line in plain.splitlines() if line.startswith('Restore: '))
@@ -631,8 +636,8 @@ target.chmod(0o755)
         term.expect('Item 2/2')
         term.send(b'\r')
         term.expect('Choose installed rules to remove')
-        term.expect('.custom.md [Claude:file]')
-        term.expect('Item 1/1')
+        term.expect('.custom.md [Project:file]')
+        term.expect('Item 1/2')
         term.send(b' \r')
         term.expect('Removal scope: project')
         term.expect('Create backup? [y/N]')
@@ -642,7 +647,8 @@ target.chmod(0o755)
         term.expect('1 succeeded, 0 failed')
         self.assertEqual(term.finish_action(), 0)
         self.assertTrue(global_rule.exists())
-        self.assertFalse((project / '.claude/rules/nested/.custom.md').exists())
+        self.assertFalse((project / 'docs/rules/.custom.md').exists())
+        self.assertTrue((project / '.claude/rules/nested/.custom.md').exists())
 
     def install_skill_terminal(self, repos=(0,)):
         """Choose skill repositories on the first page, then land on the picker.
@@ -874,7 +880,7 @@ target.chmod(0o755)
         self.assertNotIn('Upstream english body.', old.read_text())
         self.assertFalse((self.home / '.claude/rules/waza-english.md').exists())
 
-    def test_waza_engine_formats_claude_h2_and_keeps_codex_project_body(self):
+    def test_waza_engine_keeps_project_source_heading_in_shared_file(self):
         fixture = self.root / 'waza-h2'
         fixture.mkdir()
         content = '## English Coaching\n\nOriginal body.\n'
@@ -883,9 +889,7 @@ target.chmod(0o755)
             f'rule_engine waza-english project both install {shlex.quote(str(fixture))} waza',
             cwd=self.root)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual((self.root / '.claude/rules/waza-english.md').read_text(),
-                         content.replace('## English Coaching', '# English Coaching'))
-        self.assertIn(content, (self.root / 'AGENTS.md').read_text())
+        self.assertIn(content, (self.root / 'docs/rules/waza-english.md').read_text())
 
     def test_waza_api_pins_commit_and_formats_selected_h2(self):
         self.waza_bundle(('chinese', 'english'))
@@ -897,9 +901,9 @@ target.chmod(0o755)
             'export WAZA_COMMIT=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n'
             'apply_rule waza-chinese project both install waza', cwd=self.root)
         self.assertEqual(result.returncode, 0, result.stderr)
-        installed = self.root / '.claude/rules/waza-chinese.md'
-        self.assertEqual(installed.read_text(), content.replace('## Chinese', '# Chinese'))
-        self.assertIn(content, (self.root / 'AGENTS.md').read_text())
+        installed = self.root / 'docs/rules/waza-chinese.md'
+        self.assertEqual(installed.read_text(), content)
+        self.assertIn(content, (self.root / 'docs/rules/waza-chinese.md').read_text())
         fetches = (self.root / 'fetch.log').read_text()
         self.assertIn('/contents/rules?ref=' + 'a' * 40, fetches)
         self.assertIn('/' + 'a' * 40 + '/rules/chinese.md', fetches)
@@ -1039,6 +1043,86 @@ target.chmod(0o755)
                     self.assertFalse(destination.exists())
                     self.assertFalse(destination.is_symlink())
 
+    def test_project_rules_use_shared_files_without_changing_legacy_instructions(self):
+        legacy = {'AGENTS.md': b'User instructions.\r\n',
+                  'AGENTS.override.md': b'Override instructions.\n',
+                  '.claude/rules/code-comments.md': b'Claude rules.\n'}
+        for relative, content in legacy.items():
+            target = self.root / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(content)
+        command = 'apply_rule code-comments project "codex claude pi" install project'
+        for count in (1, 2):
+            result = self.source(command, cwd=self.root)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            rule = self.root / 'docs/rules/code-comments.md'
+            self.assertTrue(rule.is_file())
+            self.assertEqual(rule.read_text().count('## Code Comment Guidelines'), count)
+            self.assertEqual(result.stdout.count('installation complete ('), 1)
+            self.assertNotIn('takes precedence', result.stderr)
+            for relative, content in legacy.items():
+                self.assertEqual((self.root / relative).read_bytes(), content)
+        self.assertFalse((self.home / '.codex').exists())
+        self.assertFalse((self.home / '.pi').exists())
+
+    def test_project_rule_list_and_remove_preserve_legacy_files_and_link_targets(self):
+        project, files = self.project_removal_fixture()
+        outside = self.root / 'external-rule.md'
+        outside.write_text('External rules.')
+        link = project / 'docs/rules/linked.md'
+        link.symlink_to(outside)
+        broken = project / 'docs/rules/broken.md'
+        broken.symlink_to(self.root / 'absent.md')
+        other = project / 'docs/rules/notes.txt'
+        other.write_text('Keep non-rule file.')
+        nested = project / 'docs/rules/nested/keep.md'
+        nested.parent.mkdir()
+        nested.write_text('Keep nested document.')
+        for codex, claude in ((True, False), (False, True), (True, True)):
+            entries = self.project_entries(project, codex=codex, claude=claude, skills=False)
+            self.assertEqual(len(entries), 4)
+            self.assertEqual({e['agent'] for e in entries}, {'project'})
+            self.assertTrue(all(e['relative'].startswith('docs/rules/') for e in entries))
+        result = subprocess.run(['bash', str(SCRIPT), '--list-rule', '--project'],
+                                env=self.env, cwd=project, capture_output=True, text=True, timeout=20)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('Shared project rules:', result.stdout)
+        self.assertIn('linked.md', result.stdout)
+        self.assertIn('broken.md [Unknown / local (broken link)]', result.stdout)
+        self.assertNotIn('AGENTS.md', result.stdout)
+        self.assertNotIn('.claude/rules', result.stdout)
+        self.assertNotIn('notes.txt', result.stdout)
+        self.assertNotIn('keep.md', result.stdout)
+        self.assertEqual(self.inventory('select', *(e['id'] for e in entries), scope='project', cwd=project).returncode, 0)
+        result = self.inventory('remove', scope='project', cwd=project)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(link.is_symlink())
+        self.assertFalse(broken.is_symlink())
+        self.assertEqual(outside.read_text(), 'External rules.')
+        self.assertEqual(other.read_text(), 'Keep non-rule file.')
+        self.assertEqual(nested.read_text(), 'Keep nested document.')
+        for relative in ('AGENTS.md', '.claude/rules/nested/.custom.md', '.claude/CLAUDE.md'):
+            self.assertEqual((project / relative).read_bytes(), files[relative].encode())
+
+    def test_project_rule_removal_rejects_symlinked_rule_directory_and_parent(self):
+        project = self.root / 'project'
+        project.mkdir()
+        outside = self.root / 'outside-docs'
+        (outside / 'rules').mkdir(parents=True)
+        target = outside / 'rules/keep.md'
+        target.write_text('External rules.')
+        (project / 'docs').symlink_to(outside, target_is_directory=True)
+        result = self.inventory('scan', 1, 0, 1, 0, scope='project', cwd=project)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Unsafe parent directory', result.stderr)
+        (project / 'docs').unlink()
+        (project / 'docs').mkdir()
+        (project / 'docs/rules').symlink_to(outside / 'rules', target_is_directory=True)
+        result = self.inventory('scan', 1, 0, 1, 0, scope='project', cwd=project)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Refusing symlinked directory', result.stderr)
+        self.assertEqual(target.read_text(), 'External rules.')
+
     def test_global_local_rule_keeps_title_and_project_behavior(self):
         result = self.source('apply_rule code-comments global both install project', cwd=self.root)
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -1050,15 +1134,15 @@ target.chmod(0o755)
         self.assertEqual((self.home / '.claude/rules/code-comments.md').read_text(), source)
         result = self.source('apply_rule code-comments project codex', cwd=self.root)
         self.assertEqual(result.returncode, 0, result.stderr)
-        project = (self.root / 'AGENTS.md').read_text()
+        project = (self.root / 'docs/rules/code-comments.md').read_text()
         self.assertNotIn('# Global Rules', project)
         self.assertIn('## Code Comment Guidelines\n', project)
         self.assertIn(source.split('\n', 1)[1], project)
-        before = (self.root / 'AGENTS.md').read_bytes()
+        before = (self.root / 'docs/rules/code-comments.md').read_bytes()
         repeated = self.source('apply_rule code-comments project codex', cwd=self.root)
         self.assertEqual(repeated.returncode, 0, repeated.stderr)
-        self.assertTrue((self.root / 'AGENTS.md').read_bytes().startswith(before))
-        self.assertEqual((self.root / 'AGENTS.md').read_text().count('## Code Comment Guidelines'), 2)
+        self.assertTrue((self.root / 'docs/rules/code-comments.md').read_bytes().startswith(before))
+        self.assertEqual((self.root / 'docs/rules/code-comments.md').read_text().count('## Code Comment Guidelines'), 2)
 
     def test_waza_snapshot_dynamic_names_collision_and_additive_update(self):
         self.waza_bundle(('code-comments', 'new-rule'))
@@ -1156,7 +1240,7 @@ target.chmod(0o755)
         term.send(b'\r')
         term.expect('6 succeeded, 0 failed')
         self.assertEqual(term.finish_action(), 0)
-        text = (self.root / 'AGENTS.md').read_text()
+        text = '\n'.join(file.read_text() for file in (self.root / 'docs/rules').glob('*.md'))
         for name in ('waza-anti-patterns', 'waza-chinese', 'waza-code-comments',
                      'code-comments', 'chinese-punctuation', 'writing-repo'):
             self.assertNotIn(f'gwyn-space-skills: {name}:start', text)
@@ -1207,18 +1291,21 @@ target.chmod(0o755)
         (project / 'AGENTS.md').write_text('root must stay unchanged\n')
         personal = 'Personal project notes.\n'
         (nested / 'AGENTS.md').write_text(personal)
+        rule = nested / 'docs/rules/code-comments.md'
+        rule.parent.mkdir(parents=True)
+        rule.write_text('Existing rule notes.\n')
         term = self.rule_terminal(cwd=nested)
         self.assertIn('[ ] Waza', re.sub(r'\x1b\[[0-9;]*m', '', term.transcript.decode()))
         self.assertIn('[ ] Gwyntoria', re.sub(r'\x1b\[[0-9;]*m', '', term.transcript.decode()))
         term.send(b'\x1b[B\r\x1b[B \r\x1b[B\r')
         self.rule_agents_and_scope(term)
-        self.assertIn(str(nested / 'AGENTS.md'), term.transcript.decode())
+        self.assertIn(str(rule), term.transcript.decode())
         self.assertNotIn('Rules: choose agents', term.transcript.decode())
         self.assertIn('Rule source:', term.transcript.decode())
         frame = term.transcript.decode().rsplit('\x1b[H\x1b[2J', 1)[-1]
-        self.assertIn(str(nested / 'AGENTS.md'), frame)
+        self.assertIn(str(rule), frame)
         self.assertIn('Execution plan:', frame)
-        self.assertIn('project / code-comments -> AGENTS.md', frame)
+        self.assertIn('project / code-comments -> docs/rules/code-comments.md', frame)
         term.send(b'b')
         term.expect('Rules: choose scope')
         term.expect('> Project')
@@ -1235,16 +1322,17 @@ target.chmod(0o755)
         term.send(b'\r')
         term.expect('1 succeeded, 0 failed')
         self.assertEqual(term.finish_action(), 0)
-        text = (nested / 'AGENTS.md').read_text()
-        self.assertIn(personal, text)
+        text = rule.read_text()
+        self.assertEqual((nested / 'AGENTS.md').read_text(), personal)
+        self.assertIn('Existing rule notes.', text)
         self.assertNotIn('<!-- gwyn-space-skills: code-comments:start -->', text)
         self.assertNotIn('Installed from', text)
         self.assertEqual((project / 'AGENTS.md').read_text(), 'root must stay unchanged\n')
         self.assertFalse((nested / '.claude').exists())
         result = self.source('apply_rule code-comments project codex', cwd=nested)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertTrue((nested / 'AGENTS.md').read_text().startswith(text))
-        self.assertEqual((nested / 'AGENTS.md').read_text().count('## Code Comment Guidelines'), 2)
+        self.assertTrue(rule.read_text().startswith(text))
+        self.assertEqual(rule.read_text().count('## Code Comment Guidelines'), 2)
 
     def test_rule_pages_q_defaults_and_scope_selection_preserved(self):
         for page in ['rules', 'scope', 'agents', 'confirm']:
@@ -1354,13 +1442,15 @@ target.chmod(0o755)
                 term.send(b'\r')
                 term.expect('2 succeeded, 0 failed')
                 self.assertEqual(term.finish_action(), 0)
-                codex = project / 'AGENTS.md' if scope == 'project' else self.home / '.codex/AGENTS.md'
+                codex = project / 'docs/rules/waza-anti-patterns.md' if scope == 'project' else self.home / '.codex/AGENTS.md'
                 text = codex.read_text()
                 self.assertIn('Upstream anti-patterns body.', text)
                 self.assertNotIn('Installed from', text)
                 self.assertNotIn('waza-anti-patterns:start', text)
                 self.assertNotIn('code-comments:start', text)
                 if scope == 'project':
+                    self.assertTrue((project / 'docs/rules/code-comments.md').exists())
+                    self.assertFalse((project / 'AGENTS.md').exists())
                     self.assertNotIn('Rules: choose agents', term.transcript.decode())
                     self.assertFalse((project / '.claude').exists())
                     self.assertFalse((self.home / '.pi').exists())
@@ -1374,7 +1464,8 @@ target.chmod(0o755)
     def test_rule_engine_preserves_old_and_unbalanced_markers_while_appending(self):
         project = self.root / 'project'
         project.mkdir()
-        destination = project / 'AGENTS.md'
+        destination = project / 'docs/rules/code-comments.md'
+        destination.parent.mkdir(parents=True)
         for old in ('Personal\n<!-- gwyn-space-skills: code-comments:start -->\nold body\n'
                     '<!-- gwyn-space-skills: code-comments:end -->\n',
                     'Personal\n<!-- gwyn-space-skills: code-comments:start -->\nkeep\n'):
@@ -1450,12 +1541,13 @@ target.chmod(0o755)
         term.send(b'\x1b[B\r \r\x1b[B\r')
         self.rule_agents_and_scope(term, agents='codex')
         frame = term.transcript.decode().rsplit('\x1b[H\x1b[2J', 1)[-1]
-        self.assertIn(str(project / 'AGENTS.md'), frame)
+        self.assertIn(str(project / 'docs/rules/chinese-punctuation.md'), frame)
         self.assertIn('GitHub gwyntoria/skills @ main', frame)
         term.send(b'\r')
         term.expect('1 succeeded, 0 failed')
         self.assertEqual(term.finish_action(), 0)
-        self.assertTrue((project / 'AGENTS.md').exists())
+        self.assertTrue((project / 'docs/rules/chinese-punctuation.md').exists())
+        self.assertFalse((project / 'AGENTS.md').exists())
         self.assertFalse((project / '.claude').exists())
         self.assertFalse((script.parent / 'AGENTS.md').exists())
         self.assertEqual(len((self.root / 'fetch.log').read_text().splitlines()), 3)
@@ -1478,7 +1570,7 @@ target.chmod(0o755)
         link.symlink_to(SCRIPT)
         result = self.source('apply_rule code-comments project codex', link, cwd=self.root)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertTrue((self.root / 'AGENTS.md').exists())
+        self.assertTrue((self.root / 'docs/rules/code-comments.md').exists())
         self.assertFalse((self.root / 'fetch.log').exists())
 
     def test_command_install_from_repository_and_remote_update(self):
@@ -2193,9 +2285,12 @@ main"""]
                 result = self.inventory('scan', 1, 1, 1, 0, int(scope == 'global'), scope=scope, cwd=self.root)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 rows = self.inventory('rows', scope=scope, cwd=self.root).stdout.splitlines()
-                self.assertEqual(len(rows), 3 if scope == 'global' else 2)
-                self.assertTrue(any('AGENTS.md [Codex:file]' in row for row in rows))
-                self.assertTrue(any('rules/waza-anti-patterns.md [Claude:file]' in row for row in rows))
+                self.assertEqual(len(rows), 3 if scope == 'global' else 1)
+                if scope == 'global':
+                    self.assertTrue(any('AGENTS.md [Codex:file]' in row for row in rows))
+                    self.assertTrue(any('rules/waza-anti-patterns.md [Claude:file]' in row for row in rows))
+                else:
+                    self.assertIn('waza-anti-patterns.md [Project:file]', rows[0])
 
     def test_rule_file_ui_selects_only_one_agent_file(self):
         codex, claude, pi, _, _ = self.grouped_rule_fixture()
@@ -3071,8 +3166,8 @@ main"""]
                     root, _ = self.project_removal_fixture()
                     lock = root / 'skills-lock.json'
                     entries = self.project_entries(root)
-                    rule = root / '.claude/rules/nested/.custom.md'
-                    main_rule = root / 'AGENTS.md'
+                    rule = root / 'docs/rules/.custom.md'
+                    main_rule = root / 'docs/rules/one.md'
                 else:
                     root = self.home
                     lock, _ = self.lock_fixture()
@@ -3092,6 +3187,9 @@ main"""]
                 self.assertFalse((root / '.agents/skills/existing').exists())
                 self.assertNotIn('existing', json.loads(lock.read_text())['skills'])
                 self.assertFalse(main_rule.exists())
+                if scope == 'project':
+                    self.assertTrue((root / 'AGENTS.md').exists())
+                    self.assertTrue((root / '.claude/rules/nested/.custom.md').exists())
                 self.assertFalse(list(self.home.glob('.agent-*-backup-*')))
 
     def test_local_list_defaults_order_and_read_only(self):
