@@ -631,8 +631,8 @@ install_setup_command() (
     [ -s "$temporary" ] || { printf 'Downloaded script is empty.\n' >&2; return 1; }
     bash -n "$temporary"
     chmod 0755 "$temporary"
-    mv -f "$temporary" "$directory/agent-setup"
-    printf '\033[32mInstalled: %s/agent-setup (used on next launch)\033[0m\n' "$directory"
+    mv -f "$temporary" "$directory/setup-agents"
+    printf '\033[32mInstalled: %s/setup-agents (used on next launch)\033[0m\n' "$directory"
     # Print the PATH command literally for the user.
     # shellcheck disable=SC2016
     case ":$PATH:" in
@@ -2186,10 +2186,10 @@ interactive_setup() {
                 run_interactive_task list_content; page=complete ;;
             command_confirm)
                 command_action=Install
-                if [ -e "$HOME/.local/bin/agent-setup" ] || [ -L "$HOME/.local/bin/agent-setup" ]; then
+                if [ -e "$HOME/.local/bin/setup-agents" ] || [ -L "$HOME/.local/bin/setup-agents" ]; then
                     command_action=Update
                 fi
-                printf '\n%s this command?\nTarget: \033[32m%s/.local/bin/agent-setup\033[0m\n' "$command_action" "$HOME"
+                printf '\n%s this command?\nTarget: \033[32m%s/.local/bin/setup-agents\033[0m\n' "$command_action" "$HOME"
                 printf 'Continue? [Y/n] (b/Esc: back | q: exit) '
                 read_back_answer || return "$session_status"
                 case "$REPLY" in

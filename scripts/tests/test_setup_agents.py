@@ -1651,7 +1651,7 @@ target.chmod(0o755)
     def test_command_install_from_repository_and_remote_update(self):
         result = self.source('install_setup_command')
         self.assertEqual(result.returncode, 0, result.stderr)
-        installed = self.home / '.local/bin/agent-setup'
+        installed = self.home / '.local/bin/setup-agents'
         self.assertEqual(installed.read_bytes(), SCRIPT.read_bytes())
         self.assertTrue(installed.stat().st_mode & 0o111)
         self.assertIn('Add this directory to PATH', result.stdout)
@@ -1677,7 +1677,7 @@ target.chmod(0o755)
         self.assertEqual(result.stdout, 'new version\n')
 
     def test_command_confirmation_install_update_cancel_back_and_exit(self):
-        destination = self.home / '.local/bin/agent-setup'
+        destination = self.home / '.local/bin/setup-agents'
         for installed in (False, True):
             if installed:
                 destination.parent.mkdir(parents=True)
@@ -1708,7 +1708,7 @@ target.chmod(0o755)
                     self.assertFalse((self.root / 'fetch.log').exists())
 
     def test_command_confirmation_installs_after_yes_or_enter(self):
-        destination = self.home / '.local/bin/agent-setup'
+        destination = self.home / '.local/bin/setup-agents'
         for answer in (b'y\n', b'Y\n', b'\n'):
             with self.subTest(answer=answer):
                 term = self.terminal()
@@ -1724,7 +1724,7 @@ target.chmod(0o755)
 
     def test_command_update_failure_keeps_existing_bytes(self):
         script = self.standalone()
-        destination = self.home / '.local/bin/agent-setup'
+        destination = self.home / '.local/bin/setup-agents'
         destination.parent.mkdir(parents=True)
         destination.write_text('old command\n')
         bad = self.root / 'invalid.sh'
@@ -3171,7 +3171,7 @@ main"""]
         term.expect('Item 4/6')
         term.send(b'q')
         self.assertEqual(term.finish(), 0)
-        self.assertFalse((self.home / '.local/bin/agent-setup').exists())
+        self.assertFalse((self.home / '.local/bin/setup-agents').exists())
 
     def test_escape_on_completion_returns_home(self):
         term = self.terminal()
@@ -3226,7 +3226,7 @@ main"""]
         term.send(b'y\x7fn\n')
         term.expect('Cancelled.')
         self.assertEqual(term.finish_action(), 0)
-        self.assertFalse((self.home / '.local/bin/agent-setup').exists())
+        self.assertFalse((self.home / '.local/bin/setup-agents').exists())
 
     def test_removal_confirmation_back_preserves_selection_and_q_exits(self):
         term = self.removal_terminal()
