@@ -1310,10 +1310,10 @@ choose_skill_repositories_page() {
         printf '\033[H\033[2J%s\n' "$title"
         [ -z "$notice" ] || printf '%s\n' "$notice"
         if [ "$child" -lt 0 ]; then
-            printf 'Up/Down: move | Space: select %s | Enter: open / Continue | a: all | n: none | b/Esc: back | q: exit\n\n' "$group_word"
+            printf 'Up/Down: move | Space: select %s | Enter: open / continue | c: continue | a: all | n: none | b/Esc: back | q: exit\n\n' "$group_word"
             total=$((${#groups[@]} + 1)); MENU_CURSORS[page]="$cursor"
         else
-            printf '%s: %s\nUp/Down: move | Space: select | a: all | n: none | Enter/b/Esc: %s | q: exit\n\n' "$group_heading" "${groups[child]}" "$group_list"
+            printf '%s: %s\nUp/Down: move | Space: select | a: all | n: none | Enter/b/Esc: %s | c: continue | q: exit\n\n' "$group_heading" "${groups[child]}" "$group_list"
             children=()
             for ((i=0; i<${#selected[@]}; i++)); do [ "${item_groups[i]}" -ne "$child" ] || children+=("$i"); done
             total="${#children[@]}"; key_page=$((100 + page * 100 + child)); MENU_CURSORS[key_page]="$cursor"
@@ -1387,6 +1387,7 @@ choose_skill_repositories_page() {
                 if [ "$child" -ge 0 ]; then child=-1; cursor="${MENU_CURSORS[page]}";
                 elif [ "$cursor" -eq "${#groups[@]}" ]; then return 0;
                 else child="$cursor"; key_page=$((100 + page * 100 + child)); cursor="${MENU_CURSORS[key_page]:-0}"; fi ;;
+            c) return 0 ;;
             b | B | $'\e')
                 if [ "$child" -ge 0 ]; then child=-1; cursor="${MENU_CURSORS[page]}"; else return 2; fi ;;
             q | Q) return 1 ;;

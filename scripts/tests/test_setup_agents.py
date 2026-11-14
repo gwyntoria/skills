@@ -1226,6 +1226,33 @@ target.chmod(0o755)
         self.assertEqual(term.finish(), 0)
         self.assertFalse((self.home / '.codex').exists())
 
+    def test_rule_picker_c_continues_from_both_levels_preserving_selection(self):
+        for child in (False, True):
+            for selected in (False, True):
+                with self.subTest(child=child, selected=selected):
+                    term = self.rule_terminal(cwd=self.root)
+                    self.assertIn(b'c: continue', term.transcript)
+                    if child:
+                        term.send(b'\r')
+                        term.expect('Source: Waza')
+                        term.expect('c: continue')
+                        term.expect('Item 1/1')
+                    if selected:
+                        term.send(b' ')
+                    term.send(b'c')
+                    if selected:
+                        term.expect('Rules: choose scope')
+                        term.expect('Item 1/2')
+                        term.send(b'b')
+                        term.expect('Choose rules')
+                        term.expect('[x] Waza')
+                    else:
+                        term.expect('Confirm installation')
+                        term.expect('Item 1/2')
+                    term.send(b'q')
+                    self.assertEqual(term.finish(), 0)
+        self.assertFalse((self.home / '.codex/AGENTS.md').exists())
+
     def test_rule_tree_group_selection_installs_every_rule_with_correct_source(self):
         self.waza_bundle(('anti-patterns', 'chinese', 'code-comments'))
         term = self.rule_terminal(cwd=self.root)
@@ -1829,6 +1856,52 @@ main"""]
         term.send(b'q')
         self.assertEqual(term.finish(), 0)
         self.assertTrue(all('--list' in call for call in self.calls()))
+
+    def test_skill_picker_c_continues_from_both_levels_preserving_selection(self):
+        for child in (False, True):
+            for selected in (False, True):
+                with self.subTest(child=child, selected=selected):
+                    term = self.install_skill_terminal()
+                    self.assertIn(b'c: continue', term.transcript)
+                    if child:
+                        term.send(b'\r')
+                        term.expect('Repository: tw93/waza')
+                        term.expect('c: continue')
+                        term.expect('Item 1/3')
+                    term.send(b'n')
+                    if selected:
+                        term.send(b' ')
+                    term.send(b'c')
+                    if selected:
+                        term.expect('Install skills for')
+                        term.expect('Item 1/2')
+                        term.send(b'b')
+                        term.expect('Install skills by repository')
+                        term.expect('(1/3)' if child else '(3/3)')
+                    else:
+                        term.expect('Results: 0 succeeded, 0 failed')
+                        term.expect('Press Enter to return to the main menu')
+                    term.send(b'q')
+                    self.assertEqual(term.finish(), 0)
+        self.assertTrue(all('--list' in call for call in self.calls()))
+
+    def test_skill_picker_c_preserves_dependencies_through_installation(self):
+        self.env['MATT_SKILLS'] = 'implement tdd codebase-design code-review independent'
+        term = self.install_skill_terminal(repos=(2,))
+        term.send(b'\r')
+        term.expect('Repository: mattpocock/skills')
+        term.expect('Item 1/5')
+        term.send(b'n c')
+        term.expect('Install skills for')
+        term.expect('Item 1/2')
+        term.send(b'\r')
+        term.expect('Continue? [Y/n]')
+        term.send(b'y\r')
+        term.expect('1 succeeded, 0 failed')
+        self.assertEqual(term.finish_action(), 0)
+        for name in ('implement', 'tdd', 'codebase-design', 'code-review'):
+            self.assertEqual((self.home / '.agents/skills' / name / 'SKILL.md').read_text(), name)
+        self.assertFalse((self.home / '.agents/skills/independent').exists())
 
     def test_matt_dependency_selection_and_cascade(self):
         self.env['MATT_SKILLS'] = 'implement tdd codebase-design code-review'
@@ -2684,6 +2757,35 @@ main"""]
         backup, = self.home.glob('.agent-rules-backup-*/removal.tar')
         self.assertEqual(backup.parent.stat().st_mode & 0o777, 0o700)
 
+    def test_removal_picker_c_continues_from_both_levels_without_confirming_removal(self):
+        for child in (False, True):
+            for selected in (False, True):
+                with self.subTest(child=child, selected=selected):
+                    term = self.removal_terminal()
+                    term.expect('Remove skills by repository')
+                    term.expect('c: continue')
+                    term.expect('Item 1/2')
+                    if child:
+                        term.send(b'\r')
+                        term.expect('Repository: Unknown / local')
+                        term.expect('c: continue')
+                        term.expect('Item 1/1')
+                    if selected:
+                        term.send(b' ')
+                    term.send(b'c')
+                    if selected:
+                        term.expect('Create backup? [y/N]')
+                        self.assertTrue(self.old.exists())
+                        term.send(b'\r')
+                        term.expect('Confirm removal? [Y/n]')
+                        self.assertTrue(self.old.exists())
+                        term.send(b'n\r')
+                        term.expect('Cancelled.')
+                    else:
+                        term.expect('No removal targets selected.')
+                    self.assertEqual(term.finish_action(), 0)
+                    self.assertTrue(self.old.exists())
+
     def test_removal_repository_child_counts_and_removes_one_skill_across_agents(self):
         self.lock_fixture()
         link = self.home / '.claude/skills/existing'
@@ -2702,7 +2804,7 @@ main"""]
         term.expect('Item 1/3')
         term.send(b'\r')
         term.expect('owner/repo (1/2)')
-        term.send(b'\x1b[A\r')
+        term.send(b'c')
         term.expect('Create backup? [y/N]')
         self.assertNotIn(b'Also remove these Claude links?', term.transcript)
         term.send(b'\n')
