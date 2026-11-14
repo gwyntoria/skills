@@ -145,3 +145,7 @@ curl -fsSL https://raw.githubusercontent.com/gwyntoria/skills/refs/heads/main/sc
 ```bash
 curl -fsSL https://raw.githubusercontent.com/gwyntoria/skills/refs/heads/main/scripts/setup-ubuntu.sh | bash
 ```
+
+## License
+
+本项目采用 [MIT License](LICENSE)。
