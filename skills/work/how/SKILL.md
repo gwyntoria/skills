@@ -7,15 +7,17 @@ description: 'Use for "how does X work", code walkthroughs before changing somet
 
 Explore the codebase to answer "how does X work?" questions. Produce architectural explanations at the level of a senior engineer onboarding onto a subsystem, enough to build a working mental model, not so much that it reads like annotated source code.
 
-## Codex execution
+## Agent execution
 
 Resolve reference paths relative to this skill directory, not the target repository.
 
-Use the subagent tools exposed by the current Codex session to spawn explorers and explainers, wait for their results, and release finished agents. Leave model, reasoning, and speed overrides unset so each role inherits the current session configuration. Include the question, assigned role, relevant prompt template, repository location, and read-only constraint in every assignment. Give the explainer the explorer findings when applicable.
+If subagent tools are unavailable, report that the required workflow is blocked; do not replace it with an inline answer.
+
+Use the subagent tools exposed by the current session to spawn explorers and explainers, wait for their results, and release finished agents. Leave model, reasoning, and speed overrides unset so each role inherits the current session configuration. Include the question, assigned role, relevant prompt template, repository location, and read-only constraint in every assignment. Give the explainer the explorer findings when applicable.
 
 All roles may read and search the repository but must not edit files, commit, or modify external state. This is a behavioral constraint, not a tool parameter.
 
-Keep independent explorers parallel within the session's concurrency limit. If necessary, run them in batches and release finished agents before starting more. Collect every explorer's result before spawning the explainer. If subagent tools are unavailable, report that the required workflow is blocked; do not replace it with an inline answer.
+Keep independent explorers parallel within the session's concurrency limit. If necessary, run them in batches and release finished agents before starting more. Collect every explorer's result before spawning the explainer.
 
 ## 1. Assess complexity
 
