@@ -1180,7 +1180,9 @@ choose_items_page() {
             if [ "$multiple" -eq 1 ]; then printf '[%s] ' "$mark"; fi
             printf '%s\n' "${options[i]}"
         done
-        printf '\nItem %s/%s\n' "$((cursor + 1))" "${#options[@]}"
+        printf '\nItem %s/%s' "$((cursor + 1))" "${#options[@]}"
+        if [ "$multiple" -eq 1 ]; then printf ' | Selected: %s' "${#MENU_SELECTED[@]}"; fi
+        printf '\n'
         read_key || return 1
         case "$KEY" in
             $'\e[A' | $'\eOA') cursor=$(((cursor + ${#options[@]} - 1) % ${#options[@]})) ;;
@@ -1285,7 +1287,7 @@ choose_skill_repositories() {
 }
 
 choose_skill_repositories_page() {
-    local page="$1" title="$2" color="$3" cursor=0 child=-1 i j group found start end total chosen mark row key_page
+    local page="$1" title="$2" color="$3" cursor=0 child=-1 i j group found start end total chosen mark row key_page selected_count
     local groups=() item_groups=() selected=() children=()
     local group_word=repository group_list=repositories group_heading=Repository
     if [ "$page" -eq 9 ]; then group_word=source; group_list=sources; group_heading=Source; fi
@@ -1306,6 +1308,7 @@ choose_skill_repositories_page() {
     while :; do
         REPO_SELECTED=()
         for ((i=0; i<${#selected[@]}; i++)); do [ "${selected[i]}" -eq 0 ] || REPO_SELECTED+=("$i"); done
+        selected_count="${#REPO_SELECTED[@]}"
         if [ "$dependency_mode" -eq 1 ]; then REPO_EXPLICIT=("${explicit[@]}"); fi
         printf '\033[H\033[2J%s\n' "$title"
         [ -z "$notice" ] || printf '%s\n' "$notice"
@@ -1316,6 +1319,8 @@ choose_skill_repositories_page() {
             printf '%s: %s\nUp/Down: move | Space: select | a: all | n: none | Enter/b/Esc: %s | c: continue | q: exit\n\n' "$group_heading" "${groups[child]}" "$group_list"
             children=()
             for ((i=0; i<${#selected[@]}; i++)); do [ "${item_groups[i]}" -ne "$child" ] || children+=("$i"); done
+            selected_count=0
+            for i in "${children[@]}"; do selected_count=$((selected_count + selected[i])); done
             total="${#children[@]}"; key_page=$((100 + page * 100 + child)); MENU_CURSORS[key_page]="$cursor"
         fi
         if [ "$cursor" -ge "$total" ]; then cursor=0; fi
@@ -1344,7 +1349,7 @@ choose_skill_repositories_page() {
                 fi
             fi
         done
-        printf '\nItem %s/%s\n' "$((cursor + 1))" "$total"
+        printf '\nItem %s/%s | Selected: %s\n' "$((cursor + 1))" "$total" "$selected_count"
         read_key || return 1
         case "$KEY" in
             $'\e[A' | $'\eOA') cursor=$(((cursor + total - 1) % total)) ;;

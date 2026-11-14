@@ -1172,6 +1172,54 @@ target.chmod(0o755)
         self.assertTrue((self.home / '.claude/rules/code-comments.md').exists())
         self.assertEqual(len((self.root / 'fetch.log').read_text().splitlines()), 4)
 
+    def test_flat_picker_selected_count_updates_and_restores(self):
+        command = ['bash', '-c', f'source {shlex.quote(str(SCRIPT))}\n'
+                   'choose_items_page 1 Multi 1 "1 0 0" One Two Three || test "$?" -eq 2\n'
+                   'choose_items_page 1 Restored 1 0 One Two Three\n'
+                   'choose_items_page 2 Single 0 0 One Two Three']
+        term = Terminal(self.env, cwd=self.root, command=command)
+        self.addCleanup(term.close)
+        term.expect('Item 1/3 | Selected: 1')
+        for key, count in [(b' ', 0), (b'a', 3), (b'n', 0), (b' ', 1)]:
+            term.send(key)
+            term.expect(f'Item 1/3 | Selected: {count}')
+        term.send(b'b')
+        term.expect('Restored')
+        term.expect('Item 1/3 | Selected: 1')
+        term.send(b'\r')
+        term.expect('Single')
+        term.expect('Item 1/3\r\n')
+        term.send(b'\r')
+        self.assertEqual(term.finish(), 0)
+
+    def test_grouped_picker_selected_count_is_local_across_pagination(self):
+        command = ['bash', '-c', f'source {shlex.quote(str(SCRIPT))}\n'
+                   'REPO_ITEM_LABELS=(One Two Three Four Five Six Seven Eight Nine Ten Other)\n'
+                   'REPO_ITEM_GROUPS=(first first first first first first first first first first second)\n'
+                   'REPO_SELECTED=(0 8 10)\n'
+                   'choose_skill_repositories_page 2 Groups 32']
+        term = Terminal(self.env, cwd=self.root, command=command)
+        self.addCleanup(term.close)
+        term.expect('Item 1/3 | Selected: 3')
+        term.send(b'\r')
+        term.expect('Item 1/10 | Selected: 2')
+        term.send(b'\x1b[B' * 8)
+        term.expect('Item 9/10 | Selected: 2')
+        term.send(b' ')
+        term.expect('Item 9/10 | Selected: 1')
+        term.send(b'a')
+        term.expect('Item 9/10 | Selected: 10')
+        term.send(b'n')
+        term.expect('Item 9/10 | Selected: 0')
+        term.send(b'b')
+        term.expect('Item 1/3 | Selected: 1')
+        term.send(b'\x1b[B\r')
+        term.expect('Item 1/1 | Selected: 1')
+        term.send(b'b\x1b[A\r')
+        term.expect('Item 9/10 | Selected: 0')
+        term.send(b'q')
+        self.assertEqual(term.finish(), 1)
+
     def test_all_agent_pickers_default_to_codex_only(self):
         for page, title, size in [
             ('agent_choices', 'Choose Agents', 3),
@@ -1915,12 +1963,14 @@ main"""]
         term.expect('[dependency: implement]')
         term.expect('[x] codebase-design')
         term.expect('[dependency: implement]')
+        term.expect('Item 1/4 | Selected: 4')
         term.send(b'\x1b[B ')
         term.expect('Also deselected implement.')
         term.expect('[ ] implement')
         term.expect('[ ] tdd')
         term.expect('[ ] codebase-design')
         term.expect('[ ] code-review')
+        term.expect('Item 2/4 | Selected: 0')
         self.assertIn(b'Also deselected \x1b[32mimplement\x1b[0m.', term.transcript)
         self.assertIn(b'Deselected \x1b[32mcodebase-design\x1b[0m.', term.transcript)
         self.assertIn(b'[dependency: \x1b[32mimplement\x1b[0m]', term.transcript)
