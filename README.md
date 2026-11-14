@@ -79,13 +79,13 @@ $review-chinese-writing 审查刚才编辑的文章
 安装前需要本地已有 Node.js 与 npm。运行下面的命令，从仓库中选择需要的 skill 和目标 Agent：
 
 ```bash
-npx skills add gwyntoria/skills -g -y
+npx skills add gwyntoria/skills -g
 ```
 
 也可以直接安装指定的 skill：
 
 ```bash
-npx skills add gwyntoria/skills -g --skill scan-codebase
+npx skills add gwyntoria/skills -g --skill how
 ```
 
 #### Claude Code marketplace
