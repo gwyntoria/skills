@@ -16,9 +16,11 @@
       "category": "productivity",
       "strict": false,
       "skills": [
+        "./skills/work/how",
+        "./skills/work/why",
         "./skills/work/maintain-changelog",
-        "./skills/work/daily-weekly-reporting",
-        "./skills/work/scan-codebase"
+        "./skills/work/scan-codebase",
+        "./skills/work/daily-weekly-reporting"
       ]
     },
     {
