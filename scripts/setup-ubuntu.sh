@@ -30,6 +30,12 @@ SYSTEM_NODE_DIR="/usr/bin"
 NODESOURCE_LIST="/etc/apt/sources.list.d/nodesource.list"
 NODESOURCE_KEY="/usr/share/keyrings/nodesource.gpg"
 NODESOURCE_PIN="/etc/apt/preferences.d/nodesource"
+TEXTLINT_PACKAGES=(
+    textlint
+    textlint-rule-ja-space-between-half-and-full-width
+    textlint-rule-prh
+    textlint-rule-zh-half-and-full-width-bracket
+)
 
 HOMEBREW_BIN="/home/linuxbrew/.linuxbrew/bin/brew"
 IS_WSL=0
@@ -80,6 +86,7 @@ STEP_LABELS=() STEP_STATES=() STEP_REMEDIES=() STEP_CODES=()
 readonly STEP_BREW=4 STEP_LAZYGIT=5 STEP_UV=6 STEP_NODE=7
 readonly STEP_USER_BIN=8 STEP_COMPLETION=9 STEP_LAZY_BREW=10
 readonly STEP_OMZ=14 STEP_FZF=15 STEP_PLUGIN_BASE=16 STEP_STARSHIP=24 STEP_NODE_MIGRATION=25
+readonly STEP_TEXTLINT=26
 
 # ------------------------------------------------------------
 # Output helpers
@@ -829,6 +836,10 @@ migrate_node_environment() (
     done
     return "$failed"
 )
+
+install_textlint() {
+    PATH="$SYSTEM_NODE_DIR:$PATH" "$SYSTEM_NODE_DIR/npm" install -g "${TEXTLINT_PACKAGES[@]}"
+}
 
 report_installed_versions() (
     printf '\n可用工具版本\n'
@@ -1619,6 +1630,7 @@ run_install() {
     fi
     if [ "${SELECTED[4]}" -eq 1 ]; then
         printf 'Node.js：NodeSource apt 源，固定 %s.x；npm 随附，用户 prefix：%s/.local。\n' "$NODE_VERSION" "$HOME"
+        printf '同时通过 npm 全局安装：%s。\n' "${TEXTLINT_PACKAGES[*]}"
         printf '成功后备份并停用 Bash/Zsh/Fish 的可识别 nvm 自动加载；旧文件和工具保留。\n'
         printf 'apt 需要移除现有包、自定义 prefix 或软件源冲突时停止该步骤。\n'
         report_old_node_tools
@@ -1752,6 +1764,13 @@ run_install() {
     if [ "${STEP_STATES[STEP_NODE]:-}" = '成功' ]; then
         export PATH="$SYSTEM_NODE_DIR:$PATH"
         run_step "$STEP_NODE_MIGRATION" 'npm 目录 / nvm 启动迁移' "$rerun_command" migrate_node_environment
+    fi
+    if [ "${SELECTED[4]}" -eq 1 ]; then
+        if [ "${STEP_STATES[STEP_NODE_MIGRATION]:-}" = '成功' ]; then
+            run_step "$STEP_TEXTLINT" 'textlint 及规则包' "$runtime_command" install_textlint
+        else
+            skip_step "$STEP_TEXTLINT" 'textlint 及规则包' '因依赖失败跳过' "$runtime_command"
+        fi
     fi
     if [ "$SHELL_NAME" = zsh ]; then install_plugins "$rerun_command" "$runtime_command"; fi
     # Each step runs in a subshell; rediscover installed command paths in the parent.

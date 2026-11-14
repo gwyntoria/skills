@@ -145,6 +145,8 @@ elif name == 'npm':
         lines = config.read_text().splitlines() if config.exists() else []
         config.write_text('\n'.join(l for l in lines if not l.startswith('prefix=')) + '\nprefix=' + args[3] + '\n')
     elif args[:1] == ['ls']: print(json.dumps({'dependencies': {'old-tool': {'version': '1.2.3'}}}))
+    elif args[:2] == ['install', '-g']:
+        if os.environ.get('FAIL_TEXTLINT'): sys.exit(62)
     else: print('9.2.0')
 elif name in ('brew', 'eza', 'lazygit', 'uv', 'git'):
     if name == 'git' and args[:1] == ['clone']:
@@ -1328,8 +1330,26 @@ os.execv(""" + repr(shutil.which('cp')) + """, ['cp'] + sys.argv[1:])
         self.assertEqual(code, 0, output)
         self.assertIn('npm install -g old-tool@1.2.3', output)
         self.assertIn(['npm', 'ls', '--global', '--depth=0', '--json'], self.calls())
-        self.assertFalse(any(c[:3] == ['npm', 'install', '-g'] for c in self.calls()))
+        self.assertFalse(any(c[:3] == ['npm', 'install', '-g'] and 'old-tool@1.2.3' in c for c in self.calls()))
         self.assertTrue((directory / 'npm').exists())
+
+    def test_textlint_installs_with_node_after_prefix_migration(self):
+        output, code = self.confirm(self.choose_only({4}))
+        self.assertEqual(code, 0, output)
+        install = ['npm', 'install', '-g', 'textlint',
+                   'textlint-rule-ja-space-between-half-and-full-width',
+                   'textlint-rule-prh', 'textlint-rule-zh-half-and-full-width-bracket']
+        calls = self.calls()
+        self.assertIn(install, calls)
+        self.assertLess(calls.index(['npm', 'config', 'set', 'prefix', str(self.home / '.local'), '--location=user']), calls.index(install))
+        self.assertIn('[成功] textlint 及规则包', output)
+
+    def test_textlint_failure_is_reported_and_independent_steps_continue(self):
+        self.env['FAIL_TEXTLINT'] = '1'
+        output, code = self.confirm(self.choose_only({4}))
+        self.assertEqual(code, 1, output)
+        self.assertIn('[失败] textlint 及规则包', output)
+        self.assertTrue(self.calls('chsh'))
 
     def test_node_migrates_multiline_zsh_plugins_and_retains_lazy_settings(self):
         self.dev_fixture()
@@ -1452,6 +1472,8 @@ os.execv(""" + repr(shutil.which('cp')) + """, ['cp'] + sys.argv[1:])
         self.assertIn('[失败] npm 目录 / nvm 启动迁移', output)
         self.assertIn('source "$NVM_DIR/nvm.sh"; export KEEP=yes', self.bashrc.read_text())
         self.assertFalse(self.calls('chsh'))
+        self.assertFalse(any(c[:3] == ['npm', 'install', '-g'] for c in self.calls()))
+        self.assertIn('[因依赖失败跳过] textlint 及规则包', output)
 
     def test_unselected_node_keeps_existing_nvm(self):
         self.bashrc.write_text('source "$NVM_DIR/nvm.sh"\n')
