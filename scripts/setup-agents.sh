@@ -63,6 +63,14 @@ GWYNTORIA_SKILLS_URL="https://github.com/gwyntoria/skills"
 DISTILLY_SKILLS_URL="https://github.com/titanwings/distilly"
 # Parallel arrays keep this compatible with the Bash shipped by macOS.
 SKILL_SOURCE_GROUPS=(Waza Kami 'Matt Pocock' HumanLayer Gwyntoria Distilly)
+SKILL_SOURCE_DEFAULTS=(
+    'check health hunt learn read think ui write'
+    ''
+    'setup-matt-pocock-skills grill-with-docs to-spec to-tickets code-review improve-codebase-architecture implement-spec writing-for-agents codebase-design domain-modeling grilling tdd'
+    'show-me'
+    'how why'
+    ''
+)
 SKILL_NAMES=()
 SKILL_SOURCES=()
 SKILL_GROUPS=()
@@ -324,9 +332,9 @@ catalog_fetch_group() {
 }
 
 # Append one source group's skills to the session table, fetching only when
-# the cache has no copy yet. New skills start selected.
+# the cache has no copy yet. An omitted default list selects every skill.
 catalog_add_group() {
-    local group="$1" source name i
+    local group="$1" defaults="${2-*}" source name i picked
     source="$(skill_source_url "$group")" || return 1
     for ((i=0; i<${#SKILL_GROUPS[@]}; i++)); do
         [ "${SKILL_GROUPS[i]}" != "$group" ] || return 0
@@ -337,8 +345,10 @@ catalog_add_group() {
         SKILL_NAMES+=("$name")
         SKILL_SOURCES+=("$source")
         SKILL_GROUPS+=("$group")
-        SKILL_PICKED+=(1)
-        SKILL_EXPLICIT+=(1)
+        picked=0
+        if [[ "$defaults" = '*' || " $defaults " = *" $name "* ]]; then picked=1; fi
+        SKILL_PICKED+=("$picked")
+        SKILL_EXPLICIT+=("$picked")
     done <<<"$CATALOG_FETCHED_NAMES"
 }
 
@@ -2124,7 +2134,7 @@ interactive_setup() {
     trap 'exit 143' TERM
     local page="${1:-main}" i task menu_status removal_scanned=0 removal_signature="" signature command_action removal_backup=0
     local session_status=0 INTERACTIVE_RESULT=0 show_summary=0
-    local repo_labels=() repo_group repo_url
+    local repo_labels=() repo_defaults=() repo_url
     local rule_labels=() rule_names=() rule_sources=() source_scope selected_rule
     local task_labels=('Rules' 'Skills' 'Agent')
     local tasks=() agent_requested=0
@@ -2420,11 +2430,13 @@ interactive_setup() {
                 fi ;;
             skill_repos)
                 repo_labels=()
-                for repo_group in "${SKILL_SOURCE_GROUPS[@]}"; do
-                    repo_url="$(skill_source_url "$repo_group")"
+                repo_defaults=()
+                for i in "${!SKILL_SOURCE_GROUPS[@]}"; do
+                    repo_url="$(skill_source_url "${SKILL_SOURCE_GROUPS[i]}")"
                     repo_labels+=("${repo_url#https://github.com/}")
+                    if [ -n "${SKILL_SOURCE_DEFAULTS[i]}" ]; then repo_defaults+=(1); else repo_defaults+=(0); fi
                 done
-                choose_items 6 'Choose skill repositories' 1 0 "${repo_labels[@]}" || {
+                choose_items 6 'Choose skill repositories' 1 "${repo_defaults[*]}" "${repo_labels[@]}" || {
                     [ "$?" -eq 2 ] || return "$session_status"
                     if [[ " ${AGENT_ITEMS[*]+${AGENT_ITEMS[*]}} " = *" 2 "* ]]; then
                         if [ "$RULE_SCOPE" = global ] && [ "${#SELECTED_RULES[@]}" -gt 0 ]; then page=rule_targets; else page=rule_scope; fi
@@ -2435,7 +2447,7 @@ interactive_setup() {
                 # Cached failures come back first so a later visit still reports them.
                 FAILED=("${CATALOG_FAILURES[@]+"${CATALOG_FAILURES[@]}"}")
                 for i in "${SELECTED_REPOS[@]+"${SELECTED_REPOS[@]}"}"; do
-                    catalog_add_group "${SKILL_SOURCE_GROUPS[i]}"
+                    catalog_add_group "${SKILL_SOURCE_GROUPS[i]}" "${SKILL_SOURCE_DEFAULTS[i]}"
                 done
                 [ "${#FAILED[@]}" -eq 0 ] || session_status=1
                 catalog_collect_selection
