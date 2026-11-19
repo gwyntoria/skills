@@ -85,7 +85,7 @@ usage() {
     printf 'Usage: %s [options]\n' "$PROGRAM_NAME"
     printf '\n'
     printf 'Options:\n'
-    printf '  --all        Include Claude, Pi and Hermes with their plugins/extensions\n'
+    printf '  -a, --all    Include Claude, Pi and Hermes with their plugins/extensions\n'
     printf '  -h, --help   Show this help message\n'
     printf '\nDefault: update Skills, Codex (including Plugin Marketplace) and Homebrew.\n'
 }
@@ -96,7 +96,7 @@ usage() {
 parse_args() {
     while [ "$#" -gt 0 ]; do
         case "$1" in
-        --all)
+        -a | --all)
             UPDATE_ALL=1
             shift
             ;;
