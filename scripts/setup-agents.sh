@@ -42,7 +42,7 @@ LATEST_SCRIPT_URL=https://raw.githubusercontent.com/gwyntoria/skills/main/script
 RESOURCE_TEMP=""
 RESOURCE_PATH=""
 STATUSLINE_SOURCE=""
-RULE_SCOPE=global
+INSTALL_SCOPE=global
 RULE_TARGETS="codex claude pi"
 SELECTED_RULES=()
 SELECTED_RULE_SOURCES=()
@@ -211,24 +211,36 @@ print_summary() {
 }
 
 print_skill_targets() {
-    local name="$1" agent destination
-    printf '    \033[32mShared skill / %s -> %s/.agents/skills/%s\033[0m\n' "$name" "$HOME" "$name"
+    local name="$1" agent root="$HOME" claude_dir="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+    if [ "$INSTALL_SCOPE" = project ]; then
+        root="$PROJECT_TARGET"
+        claude_dir="$PROJECT_TARGET/.claude"
+    fi
+    printf '    \033[32mShared skill / %s -> %s/.agents/skills/%s\033[0m\n' "$name" "$root" "$name"
     for agent in "${TARGET_AGENTS[@]}"; do
         if [ "$agent" = claude-code ]; then
-            destination="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/skills/$name"
-            printf '    \033[32mClaude / %s -> %s\033[0m\n' "$name" "$destination"
+            printf '    \033[32mClaude / %s -> %s/skills/%s\033[0m\n' "$name" "$claude_dir" "$name"
         fi
     done
 }
 
-install_agent_skills() {
+install_agent_skills() (
     local source="$1"
     shift
-    local name
+    local name scope_args=()
+    if [ "$INSTALL_SCOPE" = global ]; then
+        scope_args=(--global)
+    else
+        if [ "$PROJECT_TARGET" = / ]; then
+            printf 'Error: refusing to use / as a project directory.\n' >&2
+            return 1
+        fi
+        cd -- "$PROJECT_TARGET" || return 1
+    fi
     for name in "$@"; do print_skill_targets "$name"; done
     npx --yes skills add "$source" --skill "$@" \
-        --agent "${TARGET_AGENTS[@]}" --global --yes
-}
+        --agent "${TARGET_AGENTS[@]}" "${scope_args[@]+"${scope_args[@]}"}" --yes
+)
 
 # skills add --list is read-only. Restrict parsing to its Available Skills
 # section and reject empty/unrecognised output rather than hiding a failure.
@@ -604,7 +616,7 @@ resolve_rule_source() {
 }
 
 load_rule_catalog() {
-    local file name title names=()
+    local scope="$1" file name title names=()
     resolve_resource rules || return 1
     for file in "$RESOURCE_PATH"/*.md; do
         [ -f "$file" ] || continue
@@ -617,7 +629,7 @@ load_rule_catalog() {
         case "$title" in '# '*) ;; *) printf 'Rule must start with H1: %s\n' "$file" >&2; return 1 ;; esac
         names+=("$name")
     done
-    if [ "$RULE_SCOPE" = global ]; then
+    if [ "$scope" = global ]; then
         RULE_NAMES_GLOBAL=("${names[@]+"${names[@]}"}")
     else
         RULE_NAMES_PROJECT=("${names[@]+"${names[@]}"}"); RULE_CATALOG_PROJECT=1
@@ -1524,7 +1536,7 @@ list_content() (
         printf '\nRules:\n'
         # Remote means the published catalog, even when invoked from a checkout.
         REPO=""
-        if RULE_SCOPE=global load_rule_catalog; then
+        if load_rule_catalog global; then
             printf '  Gwyntoria (%s):\n' "$GWYNTORIA_SKILLS_URL"
             for name in "${RULE_NAMES_GLOBAL[@]+"${RULE_NAMES_GLOBAL[@]}"}"; do printf '    %s\n' "$name"; done
         else failed=1; fi
@@ -2030,9 +2042,9 @@ execute_plan() {
             2)
                 for ((index=0; index<${#SELECTED_RULES[@]}; index++)); do
                     other="${SELECTED_RULES[index]}"
-                    source_scope="${SELECTED_RULE_SOURCES[index]:-$RULE_SCOPE}"
+                    source_scope="${SELECTED_RULE_SOURCES[index]:-$INSTALL_SCOPE}"
                     if ! resolve_rule_source "$source_scope"; then FAILED+=("$source_scope rule: $other (resource unavailable)"); continue; fi
-                    run_item "$RULE_SCOPE rule: $other ($RULE_TARGETS)" apply_rule "$other" "$RULE_SCOPE" "$RULE_TARGETS" install "$source_scope"
+                    run_item "$INSTALL_SCOPE rule: $other ($RULE_TARGETS)" apply_rule "$other" "$INSTALL_SCOPE" "$RULE_TARGETS" install "$source_scope"
                 done ;;
             5)
                 before=${#FAILED[@]}
@@ -2079,7 +2091,7 @@ print_install_plan() {
     if [ "${#SELECTED_RULES[@]}" -gt 0 ]; then
         for ((index=0; index<${#SELECTED_RULES[@]}; index++)); do
             i="${SELECTED_RULES[index]}"
-            source_scope="${SELECTED_RULE_SOURCES[index]:-$RULE_SCOPE}"
+            source_scope="${SELECTED_RULE_SOURCES[index]:-$INSTALL_SCOPE}"
             resolve_rule_source "$source_scope" || return 1
             if [ "$source_scope" = waza ]; then
                 printf '  Rule source: GitHub tw93/Waza @ main -> %s (rules/%s.md)\n' "$WAZA_RULES_COMMIT" "${i#waza-}"
@@ -2088,11 +2100,11 @@ print_install_plan() {
             else
                 printf '  Rule source: %s/%s.md\n' "$RESOURCE_PATH" "$i"
             fi
-            if [ "$RULE_SCOPE" = project ]; then
+            if [ "$INSTALL_SCOPE" = project ]; then
                 printf '  \033[32mproject / %s -> docs/rules/%s.md\033[0m\n' "$i" "$i"
                 printf '    \033[32m%s/docs/rules/%s.md\033[0m\n' "$PROJECT_TARGET" "$i"
             else
-                printf '  \033[32m%s / %s -> %s\033[0m\n' "$RULE_SCOPE" "$i" "$RULE_TARGETS"
+                printf '  \033[32m%s / %s -> %s\033[0m\n' "$INSTALL_SCOPE" "$i" "$RULE_TARGETS"
                 rule_targets="$RULE_TARGETS"
                 if [ "$rule_targets" = both ]; then rule_targets='codex claude'; fi
                 for destination in $rule_targets; do
@@ -2137,15 +2149,15 @@ interactive_setup() {
     local repo_labels=() repo_defaults=() repo_url
     local rule_labels=() rule_names=() rule_sources=() source_scope selected_rule
     local task_labels=('Rules' 'Skills' 'Agent')
-    local tasks=() agent_requested=0
+    local tasks=() agent_requested=0 scope rules_visited=0
     [ "$page" != agent_choices ] || agent_requested=1
     while :; do
         case "$page" in
             main)
                 choose_items 0 'Agent setup' 0 0 'Install / Update' 'Remove' 'Remove all backups' 'Install / Update this command' 'List' 'Exit' || return "$session_status"
                 case "${MENU_SELECTED[0]}" in
-                    0) page=tasks ;;
-                    1) removal_scanned=0; page=remove_categories ;;
+                    0) page=install_scope ;;
+                    1) removal_scanned=0; page=remove_scope ;;
                     2) run_interactive_task confirm_backup_removal; page=complete ;;
                     3) page=command_confirm ;;
                     4) page=list_categories ;;
@@ -2214,21 +2226,21 @@ interactive_setup() {
             remove_categories)
                 choose_items 5 'Remove: choose content' 1 0 Rules Skills || {
                     [ "$?" -eq 2 ] || return "$session_status"
-                    page=main; continue
+                    page=remove_scope; continue
                 }
                 [ "${#MENU_SELECTED[@]}" -gt 0 ] || { printf 'No content selected; cancelled.\n'; page=complete; continue; }
                 REMOVE_RULES=0; REMOVE_SKILLS=0
                 for i in "${MENU_SELECTED[@]}"; do
                     if [ "$i" -eq 0 ]; then REMOVE_RULES=1; else REMOVE_SKILLS=1; fi
                 done
-                page=remove_scope ;;
+                page=remove_agents ;;
             remove_scope)
                 choose_items 14 'Remove: choose scope' 0 0 Global Project || {
                     [ "$?" -eq 2 ] || return "$session_status"
-                    page=remove_categories; continue
+                    page=main; continue
                 }
                 if [ "${MENU_SELECTED[0]}" -eq 0 ]; then REMOVE_SCOPE=global; else REMOVE_SCOPE=project; fi
-                page=remove_agents ;;
+                page=remove_categories ;;
             remove_agents)
                 local remove_agent_labels=(Codex 'Claude Code') remove_agent_defaults='1 0'
                 if [ "$REMOVE_SCOPE" = global ]; then
@@ -2239,7 +2251,7 @@ interactive_setup() {
                 fi
                 choose_items 4 'Remove: choose agents' 1 "$remove_agent_defaults" "${remove_agent_labels[@]}" || {
                     [ "$?" -eq 2 ] || return "$session_status"
-                    page=remove_scope; continue
+                    page=remove_categories; continue
                 }
                 [ "${#MENU_SELECTED[@]}" -gt 0 ] || { printf 'No agents selected; cancelled.\n'; page=complete; continue; }
                 REMOVE_CODEX=0; REMOVE_CLAUDE=0; REMOVE_PI=0
@@ -2312,10 +2324,23 @@ interactive_setup() {
                     *) printf 'Cancelled.\n' ;;
                 esac
                 page=complete ;;
+            install_scope)
+                choose_items 7 'Install: choose scope' 0 0 Global Project || {
+                    [ "$?" -eq 2 ] || return "$session_status"
+                    page=main; continue
+                }
+                if [ "${MENU_SELECTED[0]}" -eq 0 ]; then scope=global; else scope=project; fi
+                if [ "$scope" != "$INSTALL_SCOPE" ]; then
+                    SELECTED_RULES=(); SELECTED_RULE_SOURCES=(); rules_visited=0
+                    SKILL_NAMES=(); SKILL_SOURCES=(); SKILL_GROUPS=(); SKILL_PICKED=(); SKILL_EXPLICIT=()
+                    MENU_VISITED[6]=0
+                fi
+                INSTALL_SCOPE="$scope"
+                page=tasks ;;
             tasks)
                 choose_items 1 'Choose installation tasks' 1 0 "${task_labels[@]}" || {
                     [ "$?" -eq 2 ] || return "$session_status"
-                    page=main; continue
+                    page=install_scope; continue
                 }
                 tasks=("${MENU_SELECTED[@]+"${MENU_SELECTED[@]}"}")
                 [ "${#tasks[@]}" -gt 0 ] || { printf 'No tasks selected.\n'; page=complete; continue; }
@@ -2350,10 +2375,10 @@ interactive_setup() {
                 page=before_rules ;;
             before_rules)
                 if [[ " ${AGENT_ITEMS[*]+${AGENT_ITEMS[*]}} " = *" 2 "* ]]; then page=rule_choices;
-                else SELECTED_RULES=(); SELECTED_RULE_SOURCES=(); page=after_rules; fi ;;
+                else SELECTED_RULES=(); SELECTED_RULE_SOURCES=(); rules_visited=0; page=after_rules; fi ;;
             rule_choices)
                 if [ "$RULE_CATALOG_PROJECT" -eq 0 ]; then
-                    if ! RULE_SCOPE=project load_rule_catalog; then
+                    if ! load_rule_catalog project; then
                         FAILED+=('project rule catalog unavailable'); show_summary=1; page=complete; continue
                     fi
                 fi
@@ -2383,6 +2408,12 @@ interactive_setup() {
                 for ((i=0; i<${#rule_names[@]}; i++)); do
                     source_scope="${rule_sources[i]}"
                     if [ "$source_scope" = waza ]; then REPO_ITEM_GROUPS+=(Waza); else REPO_ITEM_GROUPS+=(Gwyntoria); fi
+                    if [ "$INSTALL_SCOPE" = global ] && [ "$rules_visited" -eq 0 ]; then
+                        case "$source_scope:${rule_names[i]}" in
+                            waza:waza-anti-patterns | waza:waza-clarity | waza:waza-durable-context | project:chinese-punctuation)
+                                REPO_SELECTED+=("$i") ;;
+                        esac
+                    fi
                     for ((selected_rule=0; selected_rule<${#SELECTED_RULES[@]}; selected_rule++)); do
                         if [ "${SELECTED_RULES[selected_rule]}" = "${rule_names[i]}" ] &&
                            [ "${SELECTED_RULE_SOURCES[selected_rule]}" = "$source_scope" ]; then REPO_SELECTED+=("$i"); break; fi
@@ -2390,29 +2421,26 @@ interactive_setup() {
                 done
                 menu_status=0
                 choose_skill_repositories 9 'Choose rules' 32 || menu_status=$?
+                rules_visited=1
                 SELECTED_RULES=(); SELECTED_RULE_SOURCES=()
                 for i in "${REPO_SELECTED[@]+"${REPO_SELECTED[@]}"}"; do
                     SELECTED_RULES+=("${rule_names[i]}"); SELECTED_RULE_SOURCES+=("${rule_sources[i]}")
                 done
                 if [ "$menu_status" -ne 0 ]; then
                     [ "$menu_status" -eq 2 ] || return "$session_status"
-                    page=tasks; continue
+                    if [ "$agent_requested" -eq 1 ]; then page=agent_choices; else page=tasks; fi
+                    continue
                 fi
-                if [ "${#SELECTED_RULES[@]}" -gt 0 ]; then page=rule_scope; else page=after_rules; fi ;;
-            rule_scope)
-                choose_items 7 'Rules: choose scope' 0 0 Global Project || {
-                    [ "$?" -eq 2 ] || return "$session_status"
-                    page=rule_choices; continue
-                }
-                if [ "${MENU_SELECTED[0]}" -eq 0 ]; then
-                    RULE_SCOPE=global; page=rule_targets
+                if [ "$INSTALL_SCOPE" = global ] && [ "${#SELECTED_RULES[@]}" -gt 0 ]; then
+                    page=rule_targets
                 else
-                    RULE_SCOPE=project; RULE_TARGETS=codex; page=after_rules
+                    if [ "$INSTALL_SCOPE" = project ]; then RULE_TARGETS=codex; fi
+                    page=after_rules
                 fi ;;
             rule_targets)
                 choose_items 8 'Rules: choose agents' 1 '1 0 0' Codex 'Claude Code' Pi || {
                     [ "$?" -eq 2 ] || return "$session_status"
-                    page=rule_scope; continue
+                    page=rule_choices; continue
                 }
                 [ "${#MENU_SELECTED[@]}" -gt 0 ] || { printf 'No rule targets selected; cancelled.\n'; page=complete; continue; }
                 RULE_TARGETS=""
@@ -2434,20 +2462,28 @@ interactive_setup() {
                 for i in "${!SKILL_SOURCE_GROUPS[@]}"; do
                     repo_url="$(skill_source_url "${SKILL_SOURCE_GROUPS[i]}")"
                     repo_labels+=("${repo_url#https://github.com/}")
-                    if [ -n "${SKILL_SOURCE_DEFAULTS[i]}" ]; then repo_defaults+=(1); else repo_defaults+=(0); fi
+                    if [ "$INSTALL_SCOPE" = global ] && [ -n "${SKILL_SOURCE_DEFAULTS[i]}" ]; then
+                        repo_defaults+=(1)
+                    else
+                        repo_defaults+=(0)
+                    fi
                 done
                 choose_items 6 'Choose skill repositories' 1 "${repo_defaults[*]}" "${repo_labels[@]}" || {
                     [ "$?" -eq 2 ] || return "$session_status"
                     if [[ " ${AGENT_ITEMS[*]+${AGENT_ITEMS[*]}} " = *" 2 "* ]]; then
-                        if [ "$RULE_SCOPE" = global ] && [ "${#SELECTED_RULES[@]}" -gt 0 ]; then page=rule_targets; else page=rule_scope; fi
-                    else page=tasks; fi
+                        if [ "$INSTALL_SCOPE" = global ] && [ "${#SELECTED_RULES[@]}" -gt 0 ]; then page=rule_targets; else page=rule_choices; fi
+                    elif [ "$agent_requested" -eq 1 ]; then page=agent_choices; else page=tasks; fi
                     continue
                 }
                 SELECTED_REPOS=("${MENU_SELECTED[@]+"${MENU_SELECTED[@]}"}")
                 # Cached failures come back first so a later visit still reports them.
                 FAILED=("${CATALOG_FAILURES[@]+"${CATALOG_FAILURES[@]}"}")
                 for i in "${SELECTED_REPOS[@]+"${SELECTED_REPOS[@]}"}"; do
-                    catalog_add_group "${SKILL_SOURCE_GROUPS[i]}" "${SKILL_SOURCE_DEFAULTS[i]}"
+                    if [ "$INSTALL_SCOPE" = global ]; then
+                        catalog_add_group "${SKILL_SOURCE_GROUPS[i]}" "${SKILL_SOURCE_DEFAULTS[i]}"
+                    else
+                        catalog_add_group "${SKILL_SOURCE_GROUPS[i]}" ''
+                    fi
                 done
                 [ "${#FAILED[@]}" -eq 0 ] || session_status=1
                 catalog_collect_selection
@@ -2486,7 +2522,7 @@ interactive_setup() {
                         if [ "$INSTALL_SKILLS" -eq 1 ]; then
                             if [ "${#SELECTED_SKILLS[@]}" -gt 0 ]; then page=targets; else page=skill_repos; fi
                         else
-                            if [ "$RULE_SCOPE" = global ] && [ "${#SELECTED_RULES[@]}" -gt 0 ]; then page=rule_targets; else page=rule_scope; fi
+                            if [ "$INSTALL_SCOPE" = global ] && [ "${#SELECTED_RULES[@]}" -gt 0 ]; then page=rule_targets; else page=rule_choices; fi
                         fi
                         continue
                     }
@@ -2528,7 +2564,7 @@ interactive_setup() {
                 AGENT_ITEMS=(); SELECTED_SKILLS=(); SELECTED_RULES=(); SELECTED_RULE_SOURCES=()
                 SKILL_NAMES=(); SKILL_SOURCES=(); SKILL_GROUPS=(); SKILL_PICKED=(); SKILL_EXPLICIT=()
                 SELECTED_REPOS=(); VIEW_SKILL_INDICES=()
-                TARGET_AGENTS=(codex claude-code); RULE_TARGETS="codex claude pi"; RULE_SCOPE=global
+                TARGET_AGENTS=(codex claude-code); RULE_TARGETS="codex claude pi"; INSTALL_SCOPE=global; rules_visited=0
                 REMOVE_CODEX=1; REMOVE_CLAUDE=1; REMOVE_PI=1; REMOVE_RULES=0; REMOVE_SKILLS=0; REMOVE_SCOPE=global
                 REMOVAL_RULE_SELECTION=(); REMOVAL_SKILL_SELECTION=(); removal_scanned=0
                 if [ -n "$REMOVAL_TEMP" ]; then rm -rf -- "$REMOVAL_TEMP"; REMOVAL_TEMP=""; fi
