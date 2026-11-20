@@ -38,7 +38,6 @@ if [ -n "${BASH_SOURCE[0]:-}" ]; then
 fi
 PROJECT_TARGET="$(pwd -P)"
 SOURCE_ARCHIVE_URL=https://codeload.github.com/gwyntoria/skills/tar.gz/refs/heads/main
-LATEST_SCRIPT_URL=https://raw.githubusercontent.com/gwyntoria/skills/main/scripts/setup-agents.sh
 RESOURCE_TEMP=""
 RESOURCE_PATH=""
 STATUSLINE_SOURCE=""
@@ -644,33 +643,6 @@ load_rule_catalog() {
         RULE_NAMES_PROJECT=("${names[@]+"${names[@]}"}"); RULE_CATALOG_PROJECT=1
     fi
 }
-
-install_setup_command() (
-    set -e
-    local directory="$HOME/.local/bin" temporary
-    case "${HOME:-}" in /*) [ "$HOME" != / ] ;; *) return 1 ;; esac
-    mkdir -p "$directory"
-    temporary="$(mktemp "$directory/.agent-setup.XXXXXX")"
-    trap 'rm -f -- "$temporary"' EXIT
-    if [ "${SCRIPT_PATH##*/}" = setup-agents.sh ] &&
-        [ "${SCRIPT_DIR##*/}" = scripts ] && [ -d "$REPO/rules" ]; then
-        cp "$SCRIPT_PATH" "$temporary"
-    else
-        require_command curl
-        curl -fLsS "$LATEST_SCRIPT_URL" -o "$temporary"
-    fi
-    [ -s "$temporary" ] || { printf 'Downloaded script is empty.\n' >&2; return 1; }
-    bash -n "$temporary"
-    chmod 0755 "$temporary"
-    mv -f "$temporary" "$directory/setup-agents"
-    printf '\033[32mInstalled: %s/setup-agents (used on next launch)\033[0m\n' "$directory"
-    # Print the PATH command literally for the user.
-    # shellcheck disable=SC2016
-    case ":$PATH:" in
-        *":$directory:"*) ;;
-        *) printf 'Add this directory to PATH in your shell config:\n  export PATH="$HOME/.local/bin:$PATH"\n' ;;
-    esac
-)
 
 # Pi discovers global instructions here without a settings.json entry.
 pi_rule_path() {
@@ -2239,7 +2211,7 @@ interactive_setup() {
     trap cleanup_setup_resources EXIT
     trap 'exit 130' INT
     trap 'exit 143' TERM
-    local page="${1:-main}" i task menu_status removal_scanned=0 removal_signature="" signature command_action removal_backup=0
+    local page="${1:-main}" i task menu_status removal_scanned=0 removal_signature="" signature removal_backup=0
     local session_status=0 INTERACTIVE_RESULT=0 show_summary=0 list_result=0
     local repo_labels=() repo_defaults=() repo_url
     local rule_labels=() rule_names=() rule_sources=() source_scope selected_rule
@@ -2251,14 +2223,13 @@ interactive_setup() {
     while :; do
         case "$page" in
             main)
-                choose_items 0 'Agent setup' 0 0 'Install / Update' 'Remove' 'Remove all backups' 'Install / Update this command' 'List' 'Exit' || return "$session_status"
+                choose_items 0 'Agent setup' 0 0 'Install / Update' 'Remove' 'Remove all backups' 'List' 'Exit' || return "$session_status"
                 case "${MENU_SELECTED[0]}" in
                     0) page=install_scope ;;
                     1) removal_scanned=0; page=remove_scope ;;
                     2) run_interactive_task confirm_backup_removal; page=complete ;;
-                    3) page=command_confirm ;;
-                    4) page=list_categories ;;
-                    5) return "$session_status" ;;
+                    3) page=list_categories ;;
+                    4) return "$session_status" ;;
                 esac ;;
             list_categories)
                 choose_items 15 'List: choose content' 1 '1 1' Rules Skills || {
@@ -2303,23 +2274,6 @@ interactive_setup() {
                     case "$i" in 0) LIST_CODEX=1 ;; 1) LIST_CLAUDE=1 ;; 2) LIST_PI=1 ;; esac
                 done
                 run_interactive_task list_content interactive; list_result=1; page=complete ;;
-            command_confirm)
-                command_action=Install
-                if [ -e "$HOME/.local/bin/setup-agents" ] || [ -L "$HOME/.local/bin/setup-agents" ]; then
-                    command_action=Update
-                fi
-                printf '\n%s this command?\nTarget: \033[32m%s/.local/bin/setup-agents\033[0m\n' "$command_action" "$HOME"
-                printf 'Continue? [Y/n] (b/Esc: back | q: exit) '
-                read_back_answer || return "$session_status"
-                case "$REPLY" in
-                    y | Y | '')
-                        run_item "$command_action this command" install_setup_command
-                        print_summary || session_status=1
-                        page=complete ;;
-                    b | B) page=main ;;
-                    q | Q) return "$session_status" ;;
-                    *) printf 'Cancelled.\n'; page=complete ;;
-                esac ;;
             remove_categories)
                 choose_items 5 "$remove_title / Content" 1 0 Rules Skills || {
                     [ "$?" -eq 2 ] || return "$session_status"
