@@ -107,19 +107,19 @@ log() { printf '\n==> %s\n' "$1"; }
 
 usage() {
     cat <<EOF
-Usage: $PROGRAM_NAME [--agent] [--skill] | {--list|--list-skill|--list-rule} [--local|--remote] [--global|--project]
+Usage: $PROGRAM_NAME [--install-cli] [--install-skills] | {--list|--list-skills|--list-rules} [--local|--remote] [--global|--project]
 
 No arguments: open the interactive menu (requires a terminal).
-  --agent     Choose Agents (default: Codex); without a terminal, install all with bundled components
-  --skill     Install/update all configured skills; preserve existing skills
-  --list      List installed rules and skills (default: --local)
-  --list-skill List skills only
-  --list-rule  List rules only
-  --local     Show installed content, without network access
-  --remote    Show available content by source
-  --global    Limit local listing to global installations
-  --project   Limit local listing to the current project
-  -h, --help  Show help
+  --install-cli     Choose Agent CLIs (default: Codex); without a terminal, install all with bundled components
+  --install-skills  Install/update all configured skills; preserve existing skills
+  --list            List installed rules and skills (default: --local)
+  --list-skills     List skills only
+  --list-rules      List rules only
+  --local           Show installed content, without network access
+  --remote          Show available content by source
+  --global          Limit local listing to global installations
+  --project         Limit local listing to the current project
+  -h, --help        Show help
 
 The menu also provides a separate, confirmed removal action with an optional backup (default: no).
 Agent selection menus default to Codex only; other Agents can be selected manually.
@@ -130,11 +130,11 @@ parse_args() {
     local local_mode=0 remote_mode=0 global_scope=0 project_scope=0
     while [ "$#" -gt 0 ]; do
         case "$1" in
-            --agent) INSTALL_AGENT=1 ;;
-            --skill) INSTALL_SKILLS=1 ;;
+            --install-cli) INSTALL_AGENT=1 ;;
+            --install-skills) INSTALL_SKILLS=1 ;;
             --list) LIST_SKILLS=1; LIST_RULES=1 ;;
-            --list-skill) LIST_SKILLS=1 ;;
-            --list-rule) LIST_RULES=1 ;;
+            --list-skills) LIST_SKILLS=1 ;;
+            --list-rules) LIST_RULES=1 ;;
             --local) local_mode=1 ;;
             --remote) remote_mode=1 ;;
             --global) global_scope=1 ;;
@@ -2695,12 +2695,12 @@ main() {
         # controlling terminal only after Bash has parsed the entrypoint.
         if [ -z "$SCRIPT_PATH" ] && [ ! -t 0 ] && [ -t 1 ]; then
             if ! { exec 0</dev/tty; } 2>/dev/null; then
-                printf 'Error: interactive setup requires a terminal. Use --agent, --skill, or --list.\n' >&2
+                printf 'Error: interactive setup requires a terminal. Use --install-cli, --install-skills, or --list.\n' >&2
                 return 2
             fi
         fi
         if [ ! -t 0 ] || [ ! -t 1 ]; then
-            printf 'Error: interactive setup requires a terminal. Use --agent, --skill, or --list.\n' >&2
+            printf 'Error: interactive setup requires a terminal. Use --install-cli, --install-skills, or --list.\n' >&2
             return 2
         fi
         interactive_setup
