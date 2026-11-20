@@ -2223,7 +2223,7 @@ interactive_setup() {
     while :; do
         case "$page" in
             main)
-                choose_items 0 'Agent setup' 0 0 'Install / Update' 'Remove' 'Remove all backups' 'List' 'Exit' || return "$session_status"
+                choose_items 0 'AGENT CONFIG' 0 0 'Install' 'Remove' 'Remove all backups' 'List' 'Exit' || return "$session_status"
                 case "${MENU_SELECTED[0]}" in
                     0) page=install_scope ;;
                     1) removal_scanned=0; page=remove_scope ;;
