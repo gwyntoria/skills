@@ -4,7 +4,9 @@ PROGRAM_NAME="${0##*/}"
 UPDATE_ALL=0
 OPEN_AGENT_SETUP=0
 AGENT_SETUP_URL=https://raw.githubusercontent.com/gwyntoria/skills/refs/heads/main/scripts/setup-agents.sh
-START_COLOR=
+TITLE_STYLE=
+STEP_COLOR=
+DIVIDER_COLOR=
 COLOR_RESET=
 
 PROGRESS_ENABLED=0
@@ -43,6 +45,7 @@ draw_progress() {
     local total="$2"
     local name="$3"
     local state="$4"
+    local step="${5:-}"
     local width=20
     local filled
     local empty
@@ -79,8 +82,15 @@ draw_progress() {
 
     text="[$bar] $current/$total  $name ($state)"
     # 留出右侧一列，避免窄窗口中自动换行；一次写完再恢复日志光标。
+    text="${text:0:$((PROGRESS_COLS - 1))}"
+    if [ -n "$STEP_COLOR" ]; then
+        text=${text/" $current/$total"/" $STEP_COLOR$current/$total$COLOR_RESET"}
+        if [ -n "$step" ]; then
+            text=${text/"[Agents $step"/"[Agents $STEP_COLOR$step$COLOR_RESET"}
+        fi
+    fi
     printf '\0337\033[%d;1H\033[2K%s\0338' \
-        "$PROGRESS_ROWS" "${text:0:$((PROGRESS_COLS - 1))}" >&2
+        "$PROGRESS_ROWS" "$text" >&2
 }
 
 usage() {
@@ -153,6 +163,7 @@ run_agent_setup() (
 run_update() {
     local name="$1"
     local executable="$2"
+    local step='' step_prefix='' log_step_prefix=''
     local elapsed
     local status
     local detail
@@ -161,16 +172,22 @@ run_update() {
     shift 2
     if [ "${IN_AGENTS:-0}" -eq 0 ]; then
         TASK_CURRENT=$((TASK_CURRENT + 1))
+    else
+        AGENT_STEP=$((AGENT_STEP + 1))
+        step="#$AGENT_STEP"
+        step_prefix="[Agents $step] "
+        log_step_prefix="[Agents $STEP_COLOR$step$COLOR_RESET] "
     fi
 
     printf '\n'
-    printf '%s\n' "=================================================="
-    printf '%s[%s] [%s/%s] Starting: %s%s\n' \
-        "$START_COLOR" "$(date '+%H:%M:%S')" "$TASK_CURRENT" "$TASK_TOTAL" "$name" "$COLOR_RESET"
+    printf '%s==================================================%s\n' "$DIVIDER_COLOR" "$COLOR_RESET"
+    printf '[%s] %s[%s/%s]%s %sStarting: %s%s%s\n' \
+        "$(date '+%H:%M:%S')" "$STEP_COLOR" "$TASK_CURRENT" "$TASK_TOTAL" "$COLOR_RESET" \
+        "$log_step_prefix" "$TITLE_STYLE" "$name" "$COLOR_RESET"
     printf 'Command:'
     printf ' %s' "$@"
     printf '\n'
-    printf '%s\n' "=================================================="
+    printf '%s==================================================%s\n' "$DIVIDER_COLOR" "$COLOR_RESET"
 
     if ! command -v "$executable" >/dev/null 2>&1; then
         printf '⚠️  Skipped: command '\''%s'\'' not found\n' "$executable"
@@ -178,7 +195,7 @@ run_update() {
         detail="command '$executable' unavailable in current PATH"
     else
         SECONDS=0
-        draw_progress "$TASK_CURRENT" "$TASK_TOTAL" "$name" "Running"
+        draw_progress "$TASK_CURRENT" "$TASK_TOTAL" "$step_prefix$name" "Running" "$step"
 
         # 子命令直接使用终端，保留无换行提示和交互能力。
         "$@"
@@ -197,7 +214,7 @@ run_update() {
         fi
     fi
 
-    draw_progress "$TASK_CURRENT" "$TASK_TOTAL" "$name" "$status"
+    draw_progress "$TASK_CURRENT" "$TASK_TOTAL" "$step_prefix$name" "$status" "$step"
 
     if [ "${IN_AGENTS:-0}" -eq 1 ]; then
         AGENT_RESULTS+=("$status"$'\t'"$name"$'\t'"$detail")
@@ -291,6 +308,7 @@ for name, scope in entries:
 
 run_agents() {
     local IN_AGENTS=1
+    local AGENT_STEP=0
     local -a names=('Codex')
     local -a commands=(codex)
     if [ "$UPDATE_ALL" -eq 1 ]; then
@@ -302,7 +320,8 @@ run_agents() {
     local success=0 failed=0 group_status group_detail
     AGENT_RESULTS=()
     TASK_CURRENT=$((TASK_CURRENT + 1))
-    printf '\n%s[%s/%s] Starting: Agents%s\n' "$START_COLOR" "$TASK_CURRENT" "$TASK_TOTAL" "$COLOR_RESET"
+    printf '\n%s[%s/%s]%s Starting: %sAgents%s\n' \
+        "$STEP_COLOR" "$TASK_CURRENT" "$TASK_TOTAL" "$COLOR_RESET" "$TITLE_STYLE" "$COLOR_RESET"
     draw_progress "$TASK_CURRENT" "$TASK_TOTAL" Agents Running
     printf '\nAgent detection (current PATH):\n'
 
@@ -481,7 +500,9 @@ main() {
     fi
 
     if [ -t 1 ] && [ "${TERM:-dumb}" != dumb ] && [ -z "${NO_COLOR:-}" ]; then
-        START_COLOR=$'\033[1;36m'
+        TITLE_STYLE=$'\033[1m'
+        STEP_COLOR=$'\033[33m'
+        DIVIDER_COLOR=$'\033[90m'
         COLOR_RESET=$'\033[0m'
     fi
 
