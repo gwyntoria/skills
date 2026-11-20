@@ -98,6 +98,7 @@ REMOVE_SKILLS=0
 REMOVE_SCOPE=global
 REMOVAL_TEMP=""
 REMOVAL_RULE_IDS=(); REMOVAL_RULE_LABELS=(); REMOVAL_SKILL_IDS=(); REMOVAL_SKILL_LABELS=(); REMOVAL_SKILL_GROUPS=()
+REMOVAL_TARGET_COUNT=0
 REMOVAL_RULE_SELECTION=(); REMOVAL_SKILL_SELECTION=()
 REPO_ITEM_LABELS=(); REPO_ITEM_GROUPS=(); REPO_SELECTED=()
 REPO_EXPLICIT=()
@@ -211,15 +212,18 @@ print_summary() {
 }
 
 print_skill_targets() {
-    local name="$1" agent root="$HOME" claude_dir="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+    local name="$1" format="${2:-}" agent root="$HOME/" claude_dir="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+    local shared_label="Shared skill / $name" claude_label="Claude / $name"
+    if [ "$format" = preview ]; then shared_label='Shared skill'; claude_label=Claude; fi
     if [ "$INSTALL_SCOPE" = project ]; then
-        root="$PROJECT_TARGET"
-        claude_dir="$PROJECT_TARGET/.claude"
+        root="$PROJECT_TARGET/"
+        if [ "$format" = preview ]; then root=""; fi
+        claude_dir="${root}.claude"
     fi
-    printf '    \033[32mShared skill / %s -> %s/.agents/skills/%s\033[0m\n' "$name" "$root" "$name"
+    printf '    \033[32m%s -> %s.agents/skills/%s\033[0m\n' "$shared_label" "$root" "$name"
     for agent in "${TARGET_AGENTS[@]}"; do
         if [ "$agent" = claude-code ]; then
-            printf '    \033[32mClaude / %s -> %s/skills/%s\033[0m\n' "$name" "$claude_dir" "$name"
+            printf '    \033[32m%s -> %s/skills/%s\033[0m\n' "$claude_label" "$claude_dir" "$name"
         fi
     done
 }
@@ -1193,13 +1197,12 @@ choose_items_page() {
         MENU_VISITED[page]=1
         MENU_CURSORS[page]="$cursor"
         MENU_CHOICES[page]="${MENU_SELECTED[*]}"
-        printf '\033[H\033[2J%s\n' "$title"
-        printf 'Up/Down: move'
-        if [ "$multiple" -eq 1 ]; then printf ' | Space: select | a: all | n: none'; fi
-        printf ' | Enter: continue'
-        if [ "$page" -ne 0 ]; then printf ' | b/Esc: back'; fi
-        printf ' | q: exit\n\n'
-        if [ "$page" -eq 11 ]; then print_install_plan || return 3; printf '\n'; fi
+        printf '\033[H\033[2J'
+        if [ "$page" -eq 11 ]; then
+            print_install_plan || return 3
+        else
+            printf '%s\n\n' "$title"
+        fi
         start=$((cursor / 8 * 8)); end=$((start + 8))
         for ((i=start; i<end && i<${#options[@]}; i++)); do
             mark=' '; [ "${selected[i]}" -eq 0 ] || mark=x
@@ -1207,9 +1210,18 @@ choose_items_page() {
             if [ "$multiple" -eq 1 ]; then printf '[%s] ' "$mark"; fi
             printf '%s\n' "${options[i]}"
         done
-        printf '\nItem %s/%s' "$((cursor + 1))" "${#options[@]}"
-        if [ "$multiple" -eq 1 ]; then printf ' | Selected: %s' "${#MENU_SELECTED[@]}"; fi
-        printf '\n'
+        if [ "$page" -ne 11 ]; then
+            printf '\nItem %s/%s' "$((cursor + 1))" "${#options[@]}"
+            if [ "$multiple" -eq 1 ]; then printf ' | Selected: %s' "${#MENU_SELECTED[@]}"; fi
+            printf '\n'
+        fi
+        if [ "$multiple" -eq 1 ]; then
+            printf '↑↓ Move   Space Toggle   Enter Continue\na All   n None'
+        else
+            printf '↑↓ Move   Enter Choose'
+        fi
+        if [ "$page" -ne 0 ]; then printf '   b/Esc Back'; fi
+        printf '   q Exit\n'
         read_key || return 1
         case "$KEY" in
             $'\e[A' | $'\eOA') cursor=$(((cursor + ${#options[@]} - 1) % ${#options[@]})) ;;
@@ -1316,8 +1328,8 @@ choose_skill_repositories() {
 choose_skill_repositories_page() {
     local page="$1" title="$2" color="$3" cursor=0 child=-1 i j group found start end total chosen mark row key_page selected_count
     local groups=() item_groups=() selected=() children=()
-    local group_word=repository group_list=repositories group_heading=Repository
-    if [ "$page" -eq 9 ]; then group_word=source; group_list=sources; group_heading=Source; fi
+    local group_heading=Repository group_list=Repos enter_action
+    if [ "$page" -eq 9 ]; then group_heading=Source; group_list=Sources; fi
     local dependency_mode="${4:-0}" notice='' reasons explicit=() requirements=() missing=() before=() touched=()
     for ((i=0; i<${#REPO_ITEM_LABELS[@]}; i++)); do
         group="${REPO_ITEM_GROUPS[i]}"; found=-1
@@ -1340,10 +1352,9 @@ choose_skill_repositories_page() {
         printf '\033[H\033[2J%s\n' "$title"
         [ -z "$notice" ] || printf '%s\n' "$notice"
         if [ "$child" -lt 0 ]; then
-            printf 'Up/Down: move | Space: select %s | Enter: open / continue | c: continue | a: all | n: none | b/Esc: back | q: exit\n\n' "$group_word"
             total=$((${#groups[@]} + 1)); MENU_CURSORS[page]="$cursor"
         else
-            printf '%s: %s\nUp/Down: move | Space: select | a: all | n: none | Enter/b/Esc: %s | c: continue | q: exit\n\n' "$group_heading" "${groups[child]}" "$group_list"
+            printf '%s: %s\n' "$group_heading" "${groups[child]}"
             children=()
             for ((i=0; i<${#selected[@]}; i++)); do [ "${item_groups[i]}" -ne "$child" ] || children+=("$i"); done
             selected_count=0
@@ -1351,6 +1362,7 @@ choose_skill_repositories_page() {
             total="${#children[@]}"; key_page=$((100 + page * 100 + child)); MENU_CURSORS[key_page]="$cursor"
         fi
         if [ "$cursor" -ge "$total" ]; then cursor=0; fi
+        printf '\n'
         start=$((cursor / 8 * 8)); end=$((start + 8))
         for ((row=start; row<end && row<total; row++)); do
             if [ "$row" -eq "$cursor" ]; then printf '> '; else printf '  '; fi
@@ -1377,6 +1389,14 @@ choose_skill_repositories_page() {
             fi
         done
         printf '\nItem %s/%s | Selected: %s\n' "$((cursor + 1))" "$total" "$selected_count"
+        if [ "$child" -ge 0 ]; then
+            printf '↑↓ Move   Space Toggle   Enter %s\n' "$group_list"
+        else
+            enter_action=Open
+            if [ "$cursor" -eq "${#groups[@]}" ]; then enter_action=Continue; fi
+            printf '↑↓ Move   Space Toggle group   Enter %s\n' "$enter_action"
+        fi
+        printf 'a All   n None   c Continue   b/Esc Back   q Exit\n'
         read_key || return 1
         case "$KEY" in
             $'\e[A' | $'\eOA') cursor=$(((cursor + total - 1) % total)) ;;
@@ -1884,6 +1904,7 @@ if (action === 'scan') {
             data.externalLinks = [];
             fs.writeFileSync(manifest, JSON.stringify(data));
         } else if (action === 'preview') {
+            console.log(items.length);
             console.log(`Removal scope: ${scope} (${display(root)})`);
             console.log('Removal targets:');
             for (const group of ruleGroups(items)) {
@@ -1986,7 +2007,7 @@ scan_removal_inventory() {
 }
 
 preview_selected_removal() {
-    local i links ids=()
+    local i links preview ids=()
     for i in "${REMOVAL_RULE_SELECTION[@]+"${REMOVAL_RULE_SELECTION[@]}"}"; do ids+=("${REMOVAL_RULE_IDS[i]}"); done
     for i in "${REMOVAL_SKILL_SELECTION[@]+"${REMOVAL_SKILL_SELECTION[@]}"}"; do ids+=("${REMOVAL_SKILL_IDS[i]}"); done
     if [ "${#ids[@]}" -eq 0 ]; then printf 'No removal targets selected.\n'; return 2; fi
@@ -2006,7 +2027,10 @@ preview_selected_removal() {
             esac
         done
     fi
-    removal_inventory preview || return 1
+    preview=$(removal_inventory preview) || return 1
+    # The first line counts actual manifest entries, including opted-in links.
+    REMOVAL_TARGET_COUNT="${preview%%$'\n'*}"
+    printf '\n%s\n' "${preview#*$'\n'}"
 }
 
 list_setup_backups() {
@@ -2132,11 +2156,22 @@ execute_plan() {
 }
 
 print_install_plan() {
-    local i destination index source_scope rule_targets
+    local i destination index source_scope rule_targets="$RULE_TARGETS" user_clis="" scope_title=Global
     local labels=('Codex CLI' 'Claude Code CLI' 'Rules' 'Claude statusline' 'Skills' 'Pi CLI')
-    printf '\nExecution plan:\n'
+    printf '\nExecution plan'
+    if [ "$INSTALL_SCOPE" = project ]; then
+        printf ' (project-relative destinations)'
+        rule_targets=docs/rules
+        scope_title=Project
+    elif [ "$rule_targets" = both ]; then
+        rule_targets='codex claude'
+    fi
+    printf ':\n'
     for i in "${AGENT_ITEMS[@]+"${AGENT_ITEMS[@]}"}"; do
-        [ "$i" -eq 2 ] || printf '  \033[32m%s\033[0m\n' "${labels[i]}"
+        if [ "$i" -ne 2 ]; then
+            printf '  \033[32m%s\033[0m\n' "${labels[i]}"
+            user_clis="${user_clis:+$user_clis, }${labels[i]}"
+        fi
         if [ "$i" -eq 1 ]; then printf '    Claude statusline (bundled)\n'; fi
         if [ "$i" -eq 5 ]; then printf '    %s (bundled)\n' "${PI_PACKAGES[@]}"; fi
     done
@@ -2153,12 +2188,9 @@ print_install_plan() {
                 printf '  Rule source: %s/%s.md\n' "$RESOURCE_PATH" "$i"
             fi
             if [ "$INSTALL_SCOPE" = project ]; then
-                printf '  \033[32mproject / %s -> docs/rules/%s.md\033[0m\n' "$i" "$i"
-                printf '    \033[32m%s/docs/rules/%s.md\033[0m\n' "$PROJECT_TARGET" "$i"
+                printf '    \033[32mDestination: docs/rules/%s.md\033[0m\n' "$i"
             else
-                printf '  \033[32m%s / %s -> %s\033[0m\n' "$INSTALL_SCOPE" "$i" "$RULE_TARGETS"
-                rule_targets="$RULE_TARGETS"
-                if [ "$rule_targets" = both ]; then rule_targets='codex claude'; fi
+                printf '  \033[32m%s / %s -> %s\033[0m\n' "$INSTALL_SCOPE" "$i" "$rule_targets"
                 for destination in $rule_targets; do
                     case "$destination" in
                         codex) printf '    \033[32m%s/.codex/AGENTS.md\033[0m\n' "$HOME" ;;
@@ -2174,9 +2206,20 @@ print_install_plan() {
     fi
     for i in "${SELECTED_SKILLS[@]+"${SELECTED_SKILLS[@]}"}"; do
         printf '  \033[32m%s / %s -> %s\033[0m\n' "${SKILL_GROUPS[i]}" "${SKILL_NAMES[i]}" "${TARGET_AGENTS[*]}"
-        print_skill_targets "${SKILL_NAMES[i]}"
+        print_skill_targets "${SKILL_NAMES[i]}" preview
     done
     for i in "${FAILED[@]+"${FAILED[@]}"}"; do printf '  UNAVAILABLE: %s\n' "$i"; done
+    printf '\nInstall / %s\n' "$scope_title"
+    if [ "$INSTALL_SCOPE" = project ]; then printf '  Project root: %q\n' "$PROJECT_TARGET"; fi
+    if [ "${#SELECTED_RULES[@]}" -gt 0 ]; then
+        printf '  Rules: %s -> %s\n' "${#SELECTED_RULES[@]}" "$rule_targets"
+    fi
+    if [ "${#SELECTED_SKILLS[@]}" -gt 0 ]; then
+        printf '  Skills: %s -> %s\n' "${#SELECTED_SKILLS[@]}" "${TARGET_AGENTS[*]}"
+    fi
+    if [ -n "$user_clis" ]; then printf '  User CLIs: %s\n' "$user_clis"; fi
+    if [ "${#FAILED[@]}" -gt 0 ]; then printf '  Unavailable: %s (see plan)\n' "${#FAILED[@]}"; fi
+    printf '\n'
 }
 
 # Capture action failures without putting the action in a conditional, which
@@ -2201,7 +2244,9 @@ interactive_setup() {
     local repo_labels=() repo_defaults=() repo_url
     local rule_labels=() rule_names=() rule_sources=() source_scope selected_rule
     local task_labels=('Rules' 'Skills' 'Agent')
-    local tasks=() agent_requested=0 scope rules_visited=0
+    local tasks=() agent_requested=0 scope rules_visited=0 project_option
+    local install_title='Install / Global' remove_title='Remove / Global'
+    printf -v project_option 'Project\n    %q' "$PROJECT_TARGET"
     [ "$page" != agent_choices ] || agent_requested=1
     while :; do
         case "$page" in
@@ -2276,7 +2321,7 @@ interactive_setup() {
                     *) printf 'Cancelled.\n'; page=complete ;;
                 esac ;;
             remove_categories)
-                choose_items 5 'Remove: choose content' 1 0 Rules Skills || {
+                choose_items 5 "$remove_title / Content" 1 0 Rules Skills || {
                     [ "$?" -eq 2 ] || return "$session_status"
                     page=remove_scope; continue
                 }
@@ -2287,11 +2332,15 @@ interactive_setup() {
                 done
                 page=remove_agents ;;
             remove_scope)
-                choose_items 14 'Remove: choose scope' 0 0 Global Project || {
+                choose_items 14 'Remove / Choose scope' 0 0 Global "$project_option" || {
                     [ "$?" -eq 2 ] || return "$session_status"
                     page=main; continue
                 }
-                if [ "${MENU_SELECTED[0]}" -eq 0 ]; then REMOVE_SCOPE=global; else REMOVE_SCOPE=project; fi
+                if [ "${MENU_SELECTED[0]}" -eq 0 ]; then
+                    REMOVE_SCOPE=global; remove_title='Remove / Global'
+                else
+                    REMOVE_SCOPE=project; remove_title='Remove / Project'
+                fi
                 page=remove_categories ;;
             remove_agents)
                 local remove_agent_labels=(Codex 'Claude Code') remove_agent_defaults='1 0'
@@ -2301,7 +2350,7 @@ interactive_setup() {
                 elif [ "${MENU_CURSORS[4]:-0}" -gt 1 ]; then
                     MENU_CURSORS[4]=1
                 fi
-                choose_items 4 'Remove: choose agents' 1 "$remove_agent_defaults" "${remove_agent_labels[@]}" || {
+                choose_items 4 "$remove_title / Agents" 1 "$remove_agent_defaults" "${remove_agent_labels[@]}" || {
                     [ "$?" -eq 2 ] || return "$session_status"
                     page=remove_categories; continue
                 }
@@ -2318,7 +2367,7 @@ interactive_setup() {
                 page=remove_rules ;;
             remove_rules)
                 if [ "$REMOVE_RULES" -eq 1 ] && [ "${#REMOVAL_RULE_IDS[@]}" -gt 0 ]; then
-                    choose_items 12 'Choose installed rules to remove' 1 0 "${REMOVAL_RULE_LABELS[@]}" || {
+                    choose_items 12 "$remove_title / Rules" 1 0 "${REMOVAL_RULE_LABELS[@]}" || {
                         [ "$?" -eq 2 ] || return "$session_status"
                         page=remove_agents; continue
                     }
@@ -2329,7 +2378,7 @@ interactive_setup() {
                 if [ "$REMOVE_SKILLS" -eq 1 ] && [ "${#REMOVAL_SKILL_IDS[@]}" -gt 0 ]; then
                     REPO_ITEM_LABELS=("${REMOVAL_SKILL_LABELS[@]}"); REPO_ITEM_GROUPS=("${REMOVAL_SKILL_GROUPS[@]}")
                     REPO_SELECTED=("${REMOVAL_SKILL_SELECTION[@]+"${REMOVAL_SKILL_SELECTION[@]}"}")
-                    choose_skill_repositories 13 'Remove skills by repository' 31 || {
+                    choose_skill_repositories 13 "$remove_title / Skills by repository" 31 || {
                         menu_status=$?
                         REMOVAL_SKILL_SELECTION=("${REPO_SELECTED[@]+"${REPO_SELECTED[@]}"}")
                         [ "$menu_status" -eq 2 ] || return "$session_status"
@@ -2362,10 +2411,11 @@ interactive_setup() {
                     *) printf 'Please enter y or n (b/Esc: back | q: exit).\n' ;;
                 esac ;;
             remove_confirm)
+                printf '\n%s\n  Targets: %s\n' "$remove_title" "$REMOVAL_TARGET_COUNT"
                 if [ "$removal_backup" -eq 1 ]; then
-                    printf 'All selected content will be backed up before removal.\n'
+                    printf '  Backup: create before removal\n'
                 else
-                    printf 'No backup will be created.\n'
+                    printf '  Backup: none\n'
                 fi
                 printf 'Confirm removal? [Y/n] (b/Esc: back | q: exit): '
                 read_back_answer || return "$session_status"
@@ -2377,11 +2427,15 @@ interactive_setup() {
                 esac
                 page=complete ;;
             install_scope)
-                choose_items 7 'Install: choose scope' 0 0 Global Project || {
+                choose_items 7 'Install / Choose scope' 0 0 Global "$project_option" || {
                     [ "$?" -eq 2 ] || return "$session_status"
                     page=main; continue
                 }
-                if [ "${MENU_SELECTED[0]}" -eq 0 ]; then scope=global; else scope=project; fi
+                if [ "${MENU_SELECTED[0]}" -eq 0 ]; then
+                    scope=global; install_title='Install / Global'
+                else
+                    scope=project; install_title='Install / Project'
+                fi
                 if [ "$scope" != "$INSTALL_SCOPE" ]; then
                     SELECTED_RULES=(); SELECTED_RULE_SOURCES=(); rules_visited=0
                     SKILL_NAMES=(); SKILL_SOURCES=(); SKILL_GROUPS=(); SKILL_PICKED=(); SKILL_EXPLICIT=()
@@ -2390,7 +2444,7 @@ interactive_setup() {
                 INSTALL_SCOPE="$scope"
                 page=tasks ;;
             tasks)
-                choose_items 1 'Choose installation tasks' 1 0 "${task_labels[@]}" || {
+                choose_items 1 "$install_title / Tasks" 1 0 "${task_labels[@]}" || {
                     [ "$?" -eq 2 ] || return "$session_status"
                     page=install_scope; continue
                 }
@@ -2409,7 +2463,7 @@ interactive_setup() {
                 fi
                 if [ "$agent_requested" -eq 1 ]; then page=agent_choices; else page=before_rules; fi ;;
             agent_choices)
-                choose_items 12 'Choose Agents' 1 '1 0 0' Codex 'Claude Code (with statusline)' 'Pi (with three packages)' || {
+                choose_items 12 "$install_title / Agent CLIs" 1 '1 0 0' Codex 'Claude Code (with statusline)' 'Pi (with three packages)' || {
                     [ "$?" -eq 2 ] || return "$session_status"
                     page=tasks; continue
                 }
@@ -2435,7 +2489,7 @@ interactive_setup() {
                     fi
                 fi
                 if ! load_waza_rules; then
-                    choose_items 13 "Waza rules unavailable${WAZA_RULES_ERROR:+$'\n'$WAZA_RULES_ERROR}" 0 0 Retry 'Continue without Waza rules' Back || {
+                    choose_items 13 "$install_title / Waza rules unavailable${WAZA_RULES_ERROR:+$'\n'$WAZA_RULES_ERROR}" 0 0 Retry 'Continue without Waza rules' Back || {
                         [ "$?" -eq 2 ] || return "$session_status"
                         page=tasks; continue
                     }
@@ -2472,7 +2526,7 @@ interactive_setup() {
                     done
                 done
                 menu_status=0
-                choose_skill_repositories 9 'Choose rules' 32 || menu_status=$?
+                choose_skill_repositories 9 "$install_title / Rules" 32 || menu_status=$?
                 rules_visited=1
                 SELECTED_RULES=(); SELECTED_RULE_SOURCES=()
                 for i in "${REPO_SELECTED[@]+"${REPO_SELECTED[@]}"}"; do
@@ -2490,7 +2544,7 @@ interactive_setup() {
                     page=after_rules
                 fi ;;
             rule_targets)
-                choose_items 8 'Rules: choose agents' 1 '1 0 0' Codex 'Claude Code' Pi || {
+                choose_items 8 "$install_title / Agents for rules" 1 '1 0 0' Codex 'Claude Code' Pi || {
                     [ "$?" -eq 2 ] || return "$session_status"
                     page=rule_choices; continue
                 }
@@ -2520,7 +2574,7 @@ interactive_setup() {
                         repo_defaults+=(0)
                     fi
                 done
-                choose_items 6 'Choose skill repositories' 1 "${repo_defaults[*]}" "${repo_labels[@]}" || {
+                choose_items 6 "$install_title / Skill repositories" 1 "${repo_defaults[*]}" "${repo_labels[@]}" || {
                     [ "$?" -eq 2 ] || return "$session_status"
                     if [[ " ${AGENT_ITEMS[*]+${AGENT_ITEMS[*]}} " = *" 2 "* ]]; then
                         if [ "$INSTALL_SCOPE" = global ] && [ "${#SELECTED_RULES[@]}" -gt 0 ]; then page=rule_targets; else page=rule_choices; fi
@@ -2542,7 +2596,7 @@ interactive_setup() {
                 catalog_build_view
                 if [ "${#REPO_ITEM_LABELS[@]}" -gt 0 ]; then page=skills; else page=review; fi ;;
             skills)
-                choose_skill_repositories 2 'Install skills by repository' 32 1 || {
+                choose_skill_repositories 2 "$install_title / Skills by repository" 32 1 || {
                     menu_status=$?
                     catalog_sync_selection
                     [ "$menu_status" -eq 2 ] || return "$session_status"
@@ -2551,7 +2605,7 @@ interactive_setup() {
                 catalog_sync_selection
                 if [ "${#SELECTED_SKILLS[@]}" -gt 0 ]; then page=targets; else page=review; fi ;;
             targets)
-                choose_items 3 'Install skills for' 1 '1 0' Codex 'Claude Code' || {
+                choose_items 3 "$install_title / Agents for skills" 1 '1 0' Codex 'Claude Code' || {
                     [ "$?" -eq 2 ] || return "$session_status"
                     page=skills; continue
                 }
@@ -2565,7 +2619,7 @@ interactive_setup() {
                 page=review ;;
             review)
                 if [[ " ${AGENT_ITEMS[*]+${AGENT_ITEMS[*]}} " = *" 2 "* ]]; then
-                    choose_items 11 'Confirm installation' 0 0 Install Cancel || {
+                    choose_items 11 '' 0 0 Install Cancel || {
                         menu_status=$?
                         if [ "$menu_status" -eq 3 ]; then
                             FAILED+=('Cannot prepare installation plan'); show_summary=1; page=complete; continue
@@ -2622,6 +2676,7 @@ interactive_setup() {
                 SELECTED_REPOS=(); VIEW_SKILL_INDICES=()
                 TARGET_AGENTS=(codex claude-code); RULE_TARGETS="codex claude pi"; INSTALL_SCOPE=global; rules_visited=0
                 REMOVE_CODEX=1; REMOVE_CLAUDE=1; REMOVE_PI=1; REMOVE_RULES=0; REMOVE_SKILLS=0; REMOVE_SCOPE=global
+                install_title='Install / Global'; remove_title='Remove / Global'
                 REMOVAL_RULE_SELECTION=(); REMOVAL_SKILL_SELECTION=(); removal_scanned=0
                 if [ -n "$REMOVAL_TEMP" ]; then rm -rf -- "$REMOVAL_TEMP"; REMOVAL_TEMP=""; fi
                 INTERACTIVE_RESULT=0; show_summary=0; list_result=0; INSTALL_SKILLS=0
