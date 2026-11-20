@@ -84,11 +84,11 @@ draw_progress() {
 }
 
 usage() {
-    printf 'Usage: %s [options]\n' "$PROGRAM_NAME"
+    printf 'Usage: %s [all | config | -h | --help]\n' "$PROGRAM_NAME"
     printf '\n'
-    printf 'Options:\n'
-    printf '  -a, --all    Include Claude, Pi and Hermes with their plugins/extensions\n'
-    printf '  --agent     Download and open the interactive Agent setup menu\n'
+    printf 'Arguments:\n'
+    printf '  all         Include Claude, Pi and Hermes with their plugins/extensions\n'
+    printf '  config      Download and open the interactive Agent setup menu\n'
     printf '  -h, --help   Show this help message\n'
     printf '\nDefault: update Skills, Codex (including Plugin Marketplace) and Homebrew.\n'
 }
@@ -99,11 +99,11 @@ usage() {
 parse_args() {
     while [ "$#" -gt 0 ]; do
         case "$1" in
-        -a | --all)
+        all)
             UPDATE_ALL=1
             shift
             ;;
-        --agent)
+        config)
             OPEN_AGENT_SETUP=1
             shift
             ;;
@@ -120,7 +120,7 @@ parse_args() {
     done
 
     if [ "$OPEN_AGENT_SETUP" -eq 1 ] && [ "$UPDATE_ALL" -eq 1 ]; then
-        printf 'Error: --agent cannot be combined with --all.\n' >&2
+        printf 'Error: config cannot be combined with all.\n' >&2
         return 2
     fi
 
