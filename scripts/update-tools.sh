@@ -2,6 +2,8 @@
 
 PROGRAM_NAME="${0##*/}"
 UPDATE_ALL=0
+OPEN_AGENT_SETUP=0
+AGENT_SETUP_URL=https://raw.githubusercontent.com/gwyntoria/skills/refs/heads/main/scripts/setup-agents.sh
 START_COLOR=
 COLOR_RESET=
 
@@ -86,6 +88,7 @@ usage() {
     printf '\n'
     printf 'Options:\n'
     printf '  -a, --all    Include Claude, Pi and Hermes with their plugins/extensions\n'
+    printf '  --agent     Download and open the interactive Agent setup menu\n'
     printf '  -h, --help   Show this help message\n'
     printf '\nDefault: update Skills, Codex (including Plugin Marketplace) and Homebrew.\n'
 }
@@ -100,6 +103,10 @@ parse_args() {
             UPDATE_ALL=1
             shift
             ;;
+        --agent)
+            OPEN_AGENT_SETUP=1
+            shift
+            ;;
         -h | --help)
             usage
             return 1
@@ -112,8 +119,30 @@ parse_args() {
         esac
     done
 
+    if [ "$OPEN_AGENT_SETUP" -eq 1 ] && [ "$UPDATE_ALL" -eq 1 ]; then
+        printf 'Error: --agent cannot be combined with --all.\n' >&2
+        return 2
+    fi
+
     return 0
 }
+
+run_agent_setup() (
+    local temporary
+    temporary=$(mktemp) || return 1
+    trap 'rm -f -- "$temporary"' EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    trap 'exit 129' HUP
+
+    curl -fsSL "$AGENT_SETUP_URL" -o "$temporary" || return "$?"
+    if [ ! -s "$temporary" ]; then
+        printf 'Error: downloaded Agent setup script is empty.\n' >&2
+        return 1
+    fi
+    # 安装器从标准输入加载时会自行打开终端，并使用远程资源。
+    bash < "$temporary"
+)
 
 # 执行一个更新任务，把结果追加到 RESULTS。
 #
@@ -445,6 +474,11 @@ main() {
     1) return 0 ;;
     *) return 2 ;;
     esac
+
+    if [ "$OPEN_AGENT_SETUP" -eq 1 ]; then
+        run_agent_setup
+        return "$?"
+    fi
 
     if [ -t 1 ] && [ "${TERM:-dumb}" != dumb ] && [ -z "${NO_COLOR:-}" ]; then
         START_COLOR=$'\033[1;36m'
