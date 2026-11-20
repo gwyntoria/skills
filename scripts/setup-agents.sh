@@ -378,7 +378,12 @@ print_catalog() {
     for ((i=0; i<${#SKILL_NAMES[@]}; i++)); do
         if [ "$previous" != "${SKILL_GROUPS[i]}" ]; then
             previous="${SKILL_GROUPS[i]}"
-            printf '\n%s (%s):\n' "$previous" "${SKILL_SOURCES[i]}"
+            if [ "${1:-}" = interactive ]; then
+                list_heading "Skills · $previous"
+                printf '%s\n' "${SKILL_SOURCES[i]}"
+            else
+                printf '\n%s (%s):\n' "$previous" "${SKILL_SOURCES[i]}"
+            fi
         fi
         printf '  %s\n' "${SKILL_NAMES[i]}"
     done
@@ -1425,10 +1430,20 @@ choose_skill_repositories_page() {
 # Listing follows links for inspection only; it never uses removal manifests or writes installations.
 print_installed_content() {
     require_node || return 1
-    node - "$HOME" "$PROJECT_TARGET" "$LIST_SCOPE" "$LIST_RULES" "$LIST_SKILLS" "$LIST_CODEX" "$LIST_CLAUDE" "$LIST_PI" "$(pi_rule_path)" <<'JS'
+    node - "$HOME" "$PROJECT_TARGET" "$LIST_SCOPE" "$LIST_RULES" "$LIST_SKILLS" "$LIST_CODEX" "$LIST_CLAUDE" "$LIST_PI" "$(pi_rule_path)" "${1:-}" "${list_color:-0}" <<'JS'
 const fs = require('fs');
 const path = require('path');
-const [home, project, scope, rules, skills, codex, claude, pi, piPath] = process.argv.slice(2);
+const [home, project, scope, rules, skills, codex, claude, pi, piPath, format, color] = process.argv.slice(2);
+const interactive = format === 'interactive';
+const paint = (code, text) => color === '1' ? `\x1b[${code}m${text}\x1b[0m` : text;
+const rows = [];
+function printGroup(title, count) {
+    if (interactive) {
+        console.log(`\n${paint('1;36', `${title} (${count})`)}`);
+        for (const item of rows.splice(0)) console.log(item);
+    }
+    if (!count) console.log(interactive ? '  None' : '      None');
+}
 const display = value => JSON.stringify(String(value)).slice(1, -1);
 function stat(file) {
     try { return fs.statSync(file); }
@@ -1444,7 +1459,15 @@ function source(text) {
 function row(name, origin, file) {
     let link = '';
     if (fs.lstatSync(file).isSymbolicLink()) link = ` -> ${display(fs.readlinkSync(file))}`;
-    console.log(`      ${display(name)} [${display(origin)}]\n        ${display(file)}${link}`);
+    if (interactive) {
+        const warning = ' (broken link)';
+        const provenance = origin.endsWith(warning)
+            ? display(origin.slice(0, -warning.length)) + paint('33', warning)
+            : display(origin);
+        rows.push(`  ${paint('1', display(name))}  [${provenance}]\n    ${display(file)}${link}`);
+    } else {
+        console.log(`      ${display(name)} [${display(origin)}]\n        ${display(file)}${link}`);
+    }
 }
 function ruleFiles(directory, ancestors = new Set()) {
     const info = stat(directory);
@@ -1463,7 +1486,9 @@ function ruleFiles(directory, ancestors = new Set()) {
 }
 for (const [label, root] of [['global', home], ['project', project]]) {
     if (scope !== 'both' && scope !== label) continue;
-    console.log(`\n${label === 'global' ? 'Global' : 'Project'} (${display(root)}):`);
+    const scopeTitle = label === 'global' ? 'Global' : 'Project';
+    if (interactive) console.log(`\n${paint('1;36', `Installed · ${scopeTitle}`)}\n${display(root)}`);
+    else console.log(`\n${scopeTitle} (${display(root)}):`);
     let records = {};
     if (skills === '1') {
         const lock = path.join(root, label === 'global' ? '.agents/.skill-lock.json' : 'skills-lock.json');
@@ -1472,9 +1497,9 @@ for (const [label, root] of [['global', home], ['project', project]]) {
     }
     for (const kind of ['Rules', 'Skills']) {
         if ((kind === 'Rules' ? rules : skills) !== '1') continue;
-        console.log(`  ${kind}:`);
+        if (!interactive) console.log(`  ${kind}:`);
         if (kind === 'Rules' && label === 'project') {
-            console.log('    Shared project rules:');
+            if (!interactive) console.log('    Shared project rules:');
             const directory = path.join(root, 'docs/rules');
             let count = 0;
             if (stat(directory)?.isDirectory()) {
@@ -1487,12 +1512,12 @@ for (const [label, root] of [['global', home], ['project', project]]) {
                     row(name, origin, file); count++;
                 }
             }
-            if (!count) console.log('      None');
+            printGroup('Rules · Shared project rules', count);
             continue;
         }
         for (const [agent, enabled] of [['Codex', codex], ['Claude', claude], ['Pi', pi]]) {
             if (enabled !== '1' || (agent === 'Pi' && (kind === 'Skills' || label === 'project'))) continue;
-            console.log(`    ${agent}:`);
+            if (!interactive) console.log(`    ${agent}:`);
             let count = 0;
             if (kind === 'Rules') {
                 const file = agent === 'Codex' ? path.join(root, '.codex/AGENTS.md') :
@@ -1520,36 +1545,63 @@ for (const [label, root] of [['global', home], ['project', project]]) {
                     }
                 }
             }
-            if (!count) console.log('      None');
+            printGroup(`${kind} · ${agent}`, count);
         }
     }
 }
 JS
 }
 
+list_heading() {
+    if [ "$list_color" -eq 1 ]; then
+        printf '\n\033[1;36m%s\033[0m\n' "$1"
+    else
+        printf '\n%s\n' "$1"
+    fi
+}
+
 list_content() (
-    if [ "$LIST_MODE" = local ]; then print_installed_content; exit $?; fi
-    local name failed=0
+    local format="${1:-}" list_color=0 name failed=0 rule_indent="    "
+    if [ "$format" = interactive ] && [ -t 1 ] && [ "${TERM:-dumb}" != dumb ]; then
+        printf '\033[H\033[2J'
+        if [ -z "${NO_COLOR:-}" ]; then list_color=1; fi
+    fi
+    if [ "$LIST_MODE" = local ]; then print_installed_content "$format"; exit $?; fi
     trap cleanup_setup_resources EXIT
-    printf '\nRemote available content:\n'
+    if [ "$format" = interactive ]; then
+        list_heading 'Available · Remote'
+        rule_indent="  "
+    else
+        printf '\nRemote available content:\n'
+    fi
     if [ "$LIST_RULES" -eq 1 ]; then
-        printf '\nRules:\n'
+        if [ "$format" != interactive ]; then printf '\nRules:\n'; fi
         # Remote means the published catalog, even when invoked from a checkout.
         REPO=""
         if load_rule_catalog global; then
-            printf '  Gwyntoria (%s):\n' "$GWYNTORIA_SKILLS_URL"
-            for name in "${RULE_NAMES_GLOBAL[@]+"${RULE_NAMES_GLOBAL[@]}"}"; do printf '    %s\n' "$name"; done
+            if [ "$format" = interactive ]; then
+                list_heading 'Rules · Gwyntoria'
+                printf '%s\n' "$GWYNTORIA_SKILLS_URL"
+            else
+                printf '  Gwyntoria (%s):\n' "$GWYNTORIA_SKILLS_URL"
+            fi
+            for name in "${RULE_NAMES_GLOBAL[@]+"${RULE_NAMES_GLOBAL[@]}"}"; do printf '%s%s\n' "$rule_indent" "$name"; done
         else failed=1; fi
         if load_waza_rules; then
-            printf '  Waza (%s):\n' "$WAZA_SKILLS_URL"
-            for name in "${RULE_NAMES_WAZA[@]+"${RULE_NAMES_WAZA[@]}"}"; do printf '    %s\n' "$name"; done
+            if [ "$format" = interactive ]; then
+                list_heading 'Rules · Waza'
+                printf '%s\n' "$WAZA_SKILLS_URL"
+            else
+                printf '  Waza (%s):\n' "$WAZA_SKILLS_URL"
+            fi
+            for name in "${RULE_NAMES_WAZA[@]+"${RULE_NAMES_WAZA[@]}"}"; do printf '%s%s\n' "$rule_indent" "$name"; done
         else failed=1; fi
     fi
     if [ "$LIST_SKILLS" -eq 1 ]; then
-        printf '\nSkills:\n'
+        if [ "$format" != interactive ]; then printf '\nSkills:\n'; fi
         preflight 4 || exit 1
         load_catalog
-        print_catalog
+        print_catalog "$format"
         [ "${#FAILED[@]}" -eq 0 ] || failed=1
     fi
     exit "$failed"
@@ -2145,7 +2197,7 @@ interactive_setup() {
     trap 'exit 130' INT
     trap 'exit 143' TERM
     local page="${1:-main}" i task menu_status removal_scanned=0 removal_signature="" signature command_action removal_backup=0
-    local session_status=0 INTERACTIVE_RESULT=0 show_summary=0
+    local session_status=0 INTERACTIVE_RESULT=0 show_summary=0 list_result=0
     local repo_labels=() repo_defaults=() repo_url
     local rule_labels=() rule_names=() rule_sources=() source_scope selected_rule
     local task_labels=('Rules' 'Skills' 'Agent')
@@ -2182,7 +2234,7 @@ interactive_setup() {
                 if [ "${MENU_SELECTED[0]}" -eq 0 ]; then
                     LIST_MODE=local; page=list_scope
                 else
-                    LIST_MODE=remote; run_interactive_task list_content; page=complete
+                    LIST_MODE=remote; run_interactive_task list_content interactive; list_result=1; page=complete
                 fi ;;
             list_scope)
                 choose_items 17 'List: choose scope' 0 0 Global Project || {
@@ -2205,7 +2257,7 @@ interactive_setup() {
                 for i in "${MENU_SELECTED[@]}"; do
                     case "$i" in 0) LIST_CODEX=1 ;; 1) LIST_CLAUDE=1 ;; 2) LIST_PI=1 ;; esac
                 done
-                run_interactive_task list_content; page=complete ;;
+                run_interactive_task list_content interactive; list_result=1; page=complete ;;
             command_confirm)
                 command_action=Install
                 if [ -e "$HOME/.local/bin/setup-agents" ] || [ -L "$HOME/.local/bin/setup-agents" ]; then
@@ -2550,7 +2602,11 @@ interactive_setup() {
             complete)
                 if [ "$INTERACTIVE_RESULT" -ne 0 ] || [ "${#FAILED[@]}" -gt 0 ]; then session_status=1; fi
                 if [ "$show_summary" -eq 1 ]; then print_summary || true; fi
-                printf '\nPress Enter to return to the main menu (Esc: back | q: exit): '
+                if [ "$list_result" -eq 1 ]; then
+                    printf '\nEnter / Esc  Main menu    q  Exit '
+                else
+                    printf '\nPress Enter to return to the main menu (Esc: back | q: exit): '
+                fi
                 while :; do
                     read_key || return "$session_status"
                     case "$KEY" in
@@ -2568,7 +2624,7 @@ interactive_setup() {
                 REMOVE_CODEX=1; REMOVE_CLAUDE=1; REMOVE_PI=1; REMOVE_RULES=0; REMOVE_SKILLS=0; REMOVE_SCOPE=global
                 REMOVAL_RULE_SELECTION=(); REMOVAL_SKILL_SELECTION=(); removal_scanned=0
                 if [ -n "$REMOVAL_TEMP" ]; then rm -rf -- "$REMOVAL_TEMP"; REMOVAL_TEMP=""; fi
-                INTERACTIVE_RESULT=0; show_summary=0; INSTALL_SKILLS=0
+                INTERACTIVE_RESULT=0; show_summary=0; list_result=0; INSTALL_SKILLS=0
                 LIST_RULES=0; LIST_SKILLS=0; LIST_MODE=local; LIST_SCOPE=both
                 LIST_CODEX=1; LIST_CLAUDE=1; LIST_PI=1
                 page=main ;;
@@ -2601,7 +2657,7 @@ main() {
         return "$parse_status"
     }
     if [ "$((LIST_SKILLS + LIST_RULES))" -gt 0 ]; then
-        list_content
+        list_content plain
         return $?
     fi
     if [ "$INSTALL_AGENT" -eq 1 ]; then
