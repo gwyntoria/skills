@@ -130,8 +130,8 @@ No arguments: open the interactive menu (requires a terminal).
   --project         Limit local listing to the current project
   -h, --help        Show help
 
-The menu also provides a separate, confirmed removal action with an optional backup (default: no).
-Agent selection menus default to Codex only; other Agents can be selected manually.
+The Agent menu offers Install, Cleanup, and Uninstall. Agent Install defaults to Codex.
+The Skill / Rule menu offers Install, Remove, List, and Remove all backups.
 EOF
 }
 
@@ -489,7 +489,7 @@ cleanup_setup_resources() {
 
 resolve_resource() {
     local relative="$1" candidate="$REPO/$1"
-    case "$relative" in rules | scripts/statusline.sh) ;; *) return 2 ;; esac
+    case "$relative" in rules | scripts/statusline.sh | scripts/agent-lifecycle.cjs) ;; *) return 2 ;; esac
     if [ -n "$REPO" ] && { [ -e "$candidate" ] || [ -L "$candidate" ]; }; then
         RESOURCE_PATH="$candidate"
     else
@@ -2430,7 +2430,9 @@ interactive_setup() {
     local session_status=0 INTERACTIVE_RESULT=0 show_summary=0 list_result=0
     local repo_labels=() repo_defaults=() repo_url
     local rule_labels=() rule_names=() rule_sources=() source_scope selected_rule
-    local task_labels=('Rules' 'Skills' 'Agent')
+    local task_labels=('Rules' 'Skills')
+    local lifecycle_action command_name command_paths statusline_source lifecycle_source lifecycle_status
+    local lifecycle_agents=(codex claude pi)
     local tasks=() agent_requested=0 scope rules_visited=0 project_option
     local install_title='Install / Global' remove_title='Remove / Global'
     printf -v project_option 'Project\n    %q' "$PROJECT_TARGET"
@@ -2438,29 +2440,94 @@ interactive_setup() {
     while :; do
         case "$page" in
         main)
-            choose_items 0 'AGENT CONFIG' 0 0 'Install' 'Remove' 'Remove all backups' 'List' 'Exit' || return "$session_status"
+            choose_items 0 'AGENT CONFIG' 0 0 Agent 'Skill / Rule' Exit || return "$session_status"
+            case "${MENU_SELECTED[0]}" in
+            0) page=agent_menu ;;
+            1) page=content_menu ;;
+            2) return "$session_status" ;;
+            esac
+            ;;
+        agent_menu)
+            choose_items 20 Agent 0 0 Install Cleanup Uninstall Back || {
+                [ "$?" -eq 2 ] || return "$session_status"
+                page=main
+                continue
+            }
+            case "${MENU_SELECTED[0]}" in
+            0)
+                agent_requested=1
+                page=agent_choices
+                ;;
+            1)
+                lifecycle_action=Cleanup
+                page=lifecycle_agent
+                ;;
+            2)
+                lifecycle_action=Uninstall
+                page=lifecycle_agent
+                ;;
+            3) page=main ;;
+            esac
+            ;;
+        lifecycle_agent)
+            MENU_VISITED[21]=0
+            choose_items 21 "Agent / $lifecycle_action" 1 0 Codex 'Claude Code' Pi || {
+                [ "$?" -eq 2 ] || return "$session_status"
+                page=agent_menu
+                continue
+            }
+            if [ "${#MENU_SELECTED[@]}" -eq 0 ]; then
+                page=agent_menu
+                continue
+            fi
+            if require_node && resolve_resource scripts/agent-lifecycle.cjs; then
+                lifecycle_source="$RESOURCE_PATH"
+                lifecycle_status=0
+                for i in "${MENU_SELECTED[@]}"; do
+                    command_name="${lifecycle_agents[i]}"
+                    command_paths=$(type -aP "$command_name" || true)
+                    statusline_source=""
+                    if [ "$command_name" = claude ] && [ -f "$HOME/.claude/statusline.sh" ] && resolve_resource scripts/statusline.sh; then
+                        statusline_source="$RESOURCE_PATH"
+                    fi
+                    printf '\nAgent / %s / %s\n' "$lifecycle_action" "$command_name"
+                    run_interactive_task node "$lifecycle_source" "$lifecycle_action" "$command_name" "$command_paths" "$statusline_source" "${PI_PACKAGES[@]}"
+                    if [ "$INTERACTIVE_RESULT" -ne 0 ]; then lifecycle_status=1; fi
+                done
+                INTERACTIVE_RESULT="$lifecycle_status"
+            else
+                INTERACTIVE_RESULT=1
+            fi
+            page=complete
+            ;;
+        content_menu)
+            choose_items 22 'Skill / Rule' 0 0 Install Remove List 'Remove all backups' Back || {
+                [ "$?" -eq 2 ] || return "$session_status"
+                page=main
+                continue
+            }
             case "${MENU_SELECTED[0]}" in
             0) page=install_scope ;;
             1)
                 removal_scanned=0
                 page=remove_scope
                 ;;
-            2)
+            2) page=list_categories ;;
+            3)
                 run_interactive_task confirm_backup_removal
                 page=complete
                 ;;
-            3) page=list_categories ;;
-            4) return "$session_status" ;;
+            4) page=main ;;
             esac
             ;;
         list_categories)
             choose_items 15 'List: choose content' 1 '1 1' Rules Skills || {
                 [ "$?" -eq 2 ] || return "$session_status"
-                page=main
+                page=content_menu
                 continue
             }
             [ "${#MENU_SELECTED[@]}" -gt 0 ] || {
-                page=main
+                page=content_menu
                 continue
             }
             LIST_RULES=0
@@ -2541,7 +2608,7 @@ interactive_setup() {
         remove_scope)
             choose_items 14 'Remove / Choose scope' 0 0 Global "$project_option" || {
                 [ "$?" -eq 2 ] || return "$session_status"
-                page=main
+                page=content_menu
                 continue
             }
             if [ "${MENU_SELECTED[0]}" -eq 0 ]; then
@@ -2673,7 +2740,7 @@ interactive_setup() {
         install_scope)
             choose_items 7 'Install / Choose scope' 0 0 Global "$project_option" || {
                 [ "$?" -eq 2 ] || return "$session_status"
-                page=main
+                page=content_menu
                 continue
             }
             if [ "${MENU_SELECTED[0]}" -eq 0 ]; then
@@ -2716,7 +2783,6 @@ interactive_setup() {
                 case "$task" in
                 0) AGENT_ITEMS+=(2) ;;
                 1) INSTALL_SKILLS=1 ;;
-                2) agent_requested=1 ;;
                 esac
             done
             if [ "$INSTALL_SKILLS" -eq 1 ] && ! preflight 4; then
@@ -2725,16 +2791,15 @@ interactive_setup() {
                 page=complete
                 continue
             fi
-            if [ "$agent_requested" -eq 1 ]; then page=agent_choices; else page=before_rules; fi
+            page=before_rules
             ;;
         agent_choices)
-            choose_items 12 "$install_title / Agent CLIs" 1 '1 0 0' Codex 'Claude Code (with statusline)' 'Pi (with three packages)' || {
+            choose_items 12 'Agent / Install' 1 '1 0 0' Codex 'Claude Code (with statusline)' 'Pi (with three packages)' || {
                 [ "$?" -eq 2 ] || return "$session_status"
-                page=tasks
+                page=agent_menu
                 continue
             }
-            # Back/re-entry replaces the previous Agent choices, preserving Rules.
-            if [[ " ${AGENT_ITEMS[*]+${AGENT_ITEMS[*]}} " = *" 2 "* ]]; then AGENT_ITEMS=(2); else AGENT_ITEMS=(); fi
+            AGENT_ITEMS=()
             for i in "${MENU_SELECTED[@]+"${MENU_SELECTED[@]}"}"; do
                 case "$i" in 0) AGENT_ITEMS+=(0) ;; 1) AGENT_ITEMS+=(1) ;; 2) AGENT_ITEMS+=(5) ;; esac
             done
@@ -3025,6 +3090,7 @@ interactive_setup() {
             MENU_CHOICES=()
             MENU_VISITED=()
             AGENT_ITEMS=()
+            agent_requested=0
             SELECTED_SKILLS=()
             SELECTED_RULES=()
             SELECTED_RULE_SOURCES=()

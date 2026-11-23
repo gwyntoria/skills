@@ -42,3 +42,9 @@
 
 **可安装目录 (Available catalog)**：
 各配置来源提供的规则与技能候选集合，不表示它们已经安装在本机。
+
+**Agent 清理 (Agent cleanup)**：
+移除可重建的本地文件或用户选中的附带组件，保留 Agent CLI、会话和凭据。
+
+**Agent 卸载 (Agent uninstall)**：
+移除选中的 Agent CLI 及该 Agent 的用户级配置、凭据和历史。Agent 独有的技能与规则可随卸载移除，共享技能由技能与规则入口管理。
