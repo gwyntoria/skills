@@ -151,7 +151,7 @@ run_agent_setup() (
         return 1
     fi
     # 安装器从标准输入加载时会自行打开终端，并使用远程资源。
-    bash < "$temporary"
+    bash <"$temporary"
 )
 
 # 执行一个更新任务，把结果追加到 RESULTS。
@@ -364,13 +364,16 @@ run_agents() {
         case "${commands[$i]}" in
         codex)
             run_update Codex "$executable" "$executable" update
-            run_update 'Codex Plugin Marketplace' "$executable" "$executable" plugin marketplace upgrade ;;
+            run_update 'Codex Plugin Marketplace' "$executable" "$executable" plugin marketplace upgrade
+            ;;
         claude)
             run_update 'Claude Code' "$executable" "$executable" update
-            run_claude_plugins "$executable" ;;
+            run_claude_plugins "$executable"
+            ;;
         pi)
             run_update Pi "$executable" "$executable" update --self
-            run_pi_extensions "$executable" ;;
+            run_pi_extensions "$executable"
+            ;;
         *) run_update "${names[$i]}" "$executable" "$executable" update ;;
         esac
     done

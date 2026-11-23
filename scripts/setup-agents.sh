@@ -17,7 +17,10 @@ LIST_PI=1
 resolve_script_path() {
     local file="$1" directory link hops=0
     while [ -L "$file" ]; do
-        [ "$hops" -lt 40 ] || { printf 'Too many script symlinks\n' >&2; return 1; }
+        [ "$hops" -lt 40 ] || {
+            printf 'Too many script symlinks\n' >&2
+            return 1
+        }
         hops=$((hops + 1))
         directory="$(cd -P "$(dirname "$file")" && pwd -P)"
         link="$(readlink "$file")"
@@ -96,10 +99,17 @@ REMOVE_RULES=0
 REMOVE_SKILLS=0
 REMOVE_SCOPE=global
 REMOVAL_TEMP=""
-REMOVAL_RULE_IDS=(); REMOVAL_RULE_LABELS=(); REMOVAL_SKILL_IDS=(); REMOVAL_SKILL_LABELS=(); REMOVAL_SKILL_GROUPS=()
+REMOVAL_RULE_IDS=()
+REMOVAL_RULE_LABELS=()
+REMOVAL_SKILL_IDS=()
+REMOVAL_SKILL_LABELS=()
+REMOVAL_SKILL_GROUPS=()
 REMOVAL_TARGET_COUNT=0
-REMOVAL_RULE_SELECTION=(); REMOVAL_SKILL_SELECTION=()
-REPO_ITEM_LABELS=(); REPO_ITEM_GROUPS=(); REPO_SELECTED=()
+REMOVAL_RULE_SELECTION=()
+REMOVAL_SKILL_SELECTION=()
+REPO_ITEM_LABELS=()
+REPO_ITEM_GROUPS=()
+REPO_SELECTED=()
 REPO_EXPLICIT=()
 
 log() { printf '\n==> %s\n' "$1"; }
@@ -129,17 +139,26 @@ parse_args() {
     local local_mode=0 remote_mode=0 global_scope=0 project_scope=0
     while [ "$#" -gt 0 ]; do
         case "$1" in
-            --install-cli) INSTALL_AGENT=1 ;;
-            --install-skills) INSTALL_SKILLS=1 ;;
-            --list) LIST_SKILLS=1; LIST_RULES=1 ;;
-            --list-skills) LIST_SKILLS=1 ;;
-            --list-rules) LIST_RULES=1 ;;
-            --local) local_mode=1 ;;
-            --remote) remote_mode=1 ;;
-            --global) global_scope=1 ;;
-            --project) project_scope=1 ;;
-            -h | --help) usage; return 1 ;;
-            *) printf 'Error: unknown option: %s\n' "$1" >&2; return 2 ;;
+        --install-cli) INSTALL_AGENT=1 ;;
+        --install-skills) INSTALL_SKILLS=1 ;;
+        --list)
+            LIST_SKILLS=1
+            LIST_RULES=1
+            ;;
+        --list-skills) LIST_SKILLS=1 ;;
+        --list-rules) LIST_RULES=1 ;;
+        --local) local_mode=1 ;;
+        --remote) remote_mode=1 ;;
+        --global) global_scope=1 ;;
+        --project) project_scope=1 ;;
+        -h | --help)
+            usage
+            return 1
+            ;;
+        *)
+            printf 'Error: unknown option: %s\n' "$1" >&2
+            return 2
+            ;;
         esac
         shift
     done
@@ -149,11 +168,13 @@ parse_args() {
         return 2
     fi
     if [ "$((local_mode + remote_mode))" -gt 1 ] || [ "$((global_scope + project_scope))" -gt 1 ]; then
-        printf 'Error: conflicting list modes or scopes.\n' >&2; return 2
+        printf 'Error: conflicting list modes or scopes.\n' >&2
+        return 2
     fi
     [ "$remote_mode" -eq 0 ] || LIST_MODE=remote
     if [ "$LIST_MODE" = remote ] && [ "$((global_scope + project_scope))" -gt 0 ]; then
-        printf 'Error: --global/--project require local listing.\n' >&2; return 2
+        printf 'Error: --global/--project require local listing.\n' >&2
+        return 2
     fi
     [ "$global_scope" -eq 0 ] || LIST_SCOPE=global
     [ "$project_scope" -eq 0 ] || LIST_SCOPE=project
@@ -186,9 +207,13 @@ run_item() {
     local label="$1" result
     shift
     case "$label" in Remove*) printf '\n==> \033[31m%s\033[0m\n' "$label" ;;
-        *) printf '\n==> \033[32m%s\033[0m\n' "$label" ;; esac
+    *) printf '\n==> \033[32m%s\033[0m\n' "$label" ;; esac
     set +e
-    ( set -e; set -o pipefail; "$@" ) </dev/null
+    (
+        set -e
+        set -o pipefail
+        "$@"
+    ) </dev/null
     result=$?
     set -e
     if [ "$result" -eq 0 ]; then
@@ -204,7 +229,7 @@ print_summary() {
     printf '\nResults: %s succeeded, %s failed\n' "${#SUCCEEDED[@]}" "${#FAILED[@]}"
     for item in "${SUCCEEDED[@]+"${SUCCEEDED[@]}"}"; do
         case "$item" in Remove*) printf '  OK    \033[31m%s\033[0m\n' "$item" ;;
-            *) printf '  OK    \033[32m%s\033[0m\n' "$item" ;; esac
+        *) printf '  OK    \033[32m%s\033[0m\n' "$item" ;; esac
     done
     for item in "${FAILED[@]+"${FAILED[@]}"}"; do printf '  FAIL  \033[31m%s\033[0m\n' "$item"; done
     [ "${#FAILED[@]}" -eq 0 ]
@@ -213,7 +238,10 @@ print_summary() {
 print_skill_targets() {
     local name="$1" format="${2:-}" agent root="$HOME/" claude_dir="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
     local shared_label="Shared skill / $name" claude_label="Claude / $name"
-    if [ "$format" = preview ]; then shared_label='Shared skill'; claude_label=Claude; fi
+    if [ "$format" = preview ]; then
+        shared_label='Shared skill'
+        claude_label=Claude
+    fi
     if [ "$INSTALL_SCOPE" = project ]; then
         root="$PROJECT_TARGET/"
         if [ "$format" = preview ]; then root=""; fi
@@ -288,13 +316,13 @@ fetch_mattpocock_skill_names() (
 
 skill_source_url() {
     case "$1" in
-        Waza) printf '%s\n' "$WAZA_SKILLS_URL" ;;
-        Kami) printf '%s\n' "$KAMI_SKILLS_URL" ;;
-        'Matt Pocock') printf '%s\n' "$MATTPOCOCK_SKILLS_URL" ;;
-        HumanLayer) printf '%s\n' "$HUMANLAYER_SKILLS_URL" ;;
-        Gwyntoria) printf '%s\n' "$GWYNTORIA_SKILLS_URL" ;;
-        Distilly) printf '%s\n' "$DISTILLY_SKILLS_URL" ;;
-        *) return 1 ;;
+    Waza) printf '%s\n' "$WAZA_SKILLS_URL" ;;
+    Kami) printf '%s\n' "$KAMI_SKILLS_URL" ;;
+    'Matt Pocock') printf '%s\n' "$MATTPOCOCK_SKILLS_URL" ;;
+    HumanLayer) printf '%s\n' "$HUMANLAYER_SKILLS_URL" ;;
+    Gwyntoria) printf '%s\n' "$GWYNTORIA_SKILLS_URL" ;;
+    Distilly) printf '%s\n' "$DISTILLY_SKILLS_URL" ;;
+    *) return 1 ;;
     esac
 }
 
@@ -309,7 +337,7 @@ catalog_report_failure() {
 catalog_fetch_group() {
     local group="$1" source names valid name i
     CATALOG_FETCHED_NAMES=""
-    for ((i=0; i<${#CATALOG_CACHE_GROUPS[@]}; i++)); do
+    for ((i = 0; i < ${#CATALOG_CACHE_GROUPS[@]}; i++)); do
         if [ "${CATALOG_CACHE_GROUPS[i]}" = "$group" ]; then
             CATALOG_FETCHED_NAMES="${CATALOG_CACHE_NAMES[i]}"
             return 0
@@ -351,7 +379,7 @@ catalog_fetch_group() {
 catalog_add_group() {
     local group="$1" defaults="${2-*}" source name i picked
     source="$(skill_source_url "$group")" || return 1
-    for ((i=0; i<${#SKILL_GROUPS[@]}; i++)); do
+    for ((i = 0; i < ${#SKILL_GROUPS[@]}; i++)); do
         [ "${SKILL_GROUPS[i]}" != "$group" ] || return 0
     done
     catalog_fetch_group "$group"
@@ -369,7 +397,11 @@ catalog_add_group() {
 
 load_catalog() {
     local group name
-    SKILL_NAMES=(); SKILL_SOURCES=(); SKILL_GROUPS=(); SKILL_PICKED=(); SKILL_EXPLICIT=()
+    SKILL_NAMES=()
+    SKILL_SOURCES=()
+    SKILL_GROUPS=()
+    SKILL_PICKED=()
+    SKILL_EXPLICIT=()
     for group in "${SKILL_SOURCE_GROUPS[@]}"; do
         catalog_add_group "$group"
     done
@@ -378,7 +410,7 @@ load_catalog() {
 
 print_catalog() {
     local i previous=""
-    for ((i=0; i<${#SKILL_NAMES[@]}; i++)); do
+    for ((i = 0; i < ${#SKILL_NAMES[@]}; i++)); do
         if [ "$previous" != "${SKILL_GROUPS[i]}" ]; then
             previous="${SKILL_GROUPS[i]}"
             if [ "${1:-}" = interactive ]; then
@@ -406,8 +438,12 @@ repo_group_selected() {
 # selection survives adding or dropping a repository between visits.
 catalog_build_view() {
     local i pos
-    REPO_ITEM_LABELS=(); REPO_ITEM_GROUPS=(); REPO_SELECTED=(); REPO_EXPLICIT=(); VIEW_SKILL_INDICES=()
-    for ((i=0; i<${#SKILL_NAMES[@]}; i++)); do
+    REPO_ITEM_LABELS=()
+    REPO_ITEM_GROUPS=()
+    REPO_SELECTED=()
+    REPO_EXPLICIT=()
+    VIEW_SKILL_INDICES=()
+    for ((i = 0; i < ${#SKILL_NAMES[@]}; i++)); do
         repo_group_selected "${SKILL_GROUPS[i]}" || continue
         REPO_ITEM_LABELS+=("${SKILL_NAMES[i]}")
         REPO_ITEM_GROUPS+=("${SKILL_SOURCES[i]#https://github.com/}")
@@ -422,7 +458,7 @@ catalog_build_view() {
 # install set. Skills outside the view keep their last state.
 catalog_sync_selection() {
     local pos i
-    for ((pos=0; pos<${#VIEW_SKILL_INDICES[@]}; pos++)); do
+    for ((pos = 0; pos < ${#VIEW_SKILL_INDICES[@]}; pos++)); do
         i="${VIEW_SKILL_INDICES[pos]}"
         SKILL_PICKED[i]=0
         SKILL_EXPLICIT[i]="${REPO_EXPLICIT[pos]}"
@@ -438,7 +474,7 @@ catalog_sync_selection() {
 catalog_collect_selection() {
     local i
     SELECTED_SKILLS=()
-    for ((i=0; i<${#SKILL_NAMES[@]}; i++)); do
+    for ((i = 0; i < ${#SKILL_NAMES[@]}; i++)); do
         [ "${SKILL_PICKED[i]}" -ne 0 ] || continue
         repo_group_selected "${SKILL_GROUPS[i]}" || continue
         SELECTED_SKILLS+=("$i")
@@ -477,9 +513,12 @@ resolve_resource() {
         RESOURCE_PATH="$candidate"
     fi
     case "$relative" in
-        rules) [ -d "$RESOURCE_PATH" ] ;;
-        *) [ -f "$RESOURCE_PATH" ] ;;
-    esac || { printf 'Invalid resource: %s\n' "$RESOURCE_PATH" >&2; return 1; }
+    rules) [ -d "$RESOURCE_PATH" ] ;;
+    *) [ -f "$RESOURCE_PATH" ] ;;
+    esac || {
+        printf 'Invalid resource: %s\n' "$RESOURCE_PATH" >&2
+        return 1
+    }
 }
 
 # Keep API and Git acquisition separate; publish the catalog only after success.
@@ -493,7 +532,7 @@ waza_catalog_api() {
         if (!/^[a-f0-9]{40}$/.test(data.sha)) { console.error("Invalid Waza commit"); process.exit(1); }
         console.log(data.sha);
     ' "$staged/commit.json")" || return 1
-    printf '%s\n' "$commit" > "$staged/resolved-commit" || return 1
+    printf '%s\n' "$commit" >"$staged/resolved-commit" || return 1
     curl -fLsS "https://api.github.com/repos/tw93/Waza/contents/rules?ref=$commit" -o "$staged/catalog.json" || return 1
     node -e '
         const fs = require("fs");
@@ -509,7 +548,7 @@ waza_catalog_api() {
         }
         if (!names.length) { console.error("No Waza rules available"); process.exit(1); }
         console.log([...new Set(names)].sort().join("\n"));
-    ' "$staged/catalog.json" > "$staged/names" || return 1
+    ' "$staged/catalog.json" >"$staged/names" || return 1
 }
 
 # The checkout never escapes this subshell. Only rule bytes and metadata survive it.
@@ -528,9 +567,12 @@ waza_clone_snapshot() (
         git -C "$checkout/repo" fetch --quiet --depth 1 origin "$pinned" || return 1
         commit="$pinned"
     fi
-    [[ "$commit" =~ ^[a-f0-9]{40}$ ]] || { printf 'Invalid Waza Git commit\n' >&2; return 1; }
+    [[ "$commit" =~ ^[a-f0-9]{40}$ ]] || {
+        printf 'Invalid Waza Git commit\n' >&2
+        return 1
+    }
     # Read blobs without a worktree, excluding symlinks and nested directories.
-    git -C "$checkout/repo" ls-tree -z "$commit:rules" > "$checkout/tree" || return 1
+    git -C "$checkout/repo" ls-tree -z "$commit:rules" >"$checkout/tree" || return 1
     mkdir -p "$checkout/snapshot/rules" || return 1
     node -e '
         const fs = require("fs");
@@ -549,11 +591,11 @@ waza_clone_snapshot() (
         fs.writeFileSync(output + "/blobs", entries.map(e => e[1] + "\t" + e[0]).join("\n") + "\n");
     ' "$checkout/tree" "$checkout/snapshot" || return 1
     while IFS=$'\t' read -r hash name; do
-        git -C "$checkout/repo" cat-file blob "$hash" > "$checkout/snapshot/rules/$name.md" || return 1
-    done < "$checkout/snapshot/blobs"
+        git -C "$checkout/repo" cat-file blob "$hash" >"$checkout/snapshot/rules/$name.md" || return 1
+    done <"$checkout/snapshot/blobs"
     cp "$checkout/snapshot/rules/"*.md "$staged/rules/" || return 1
     cp "$checkout/snapshot/names" "$staged/names" || return 1
-    printf '%s\n' "$commit" > "$staged/resolved-commit"
+    printf '%s\n' "$commit" >"$staged/resolved-commit"
 )
 
 # Pin the catalog before selection; every selected body uses the same commit.
@@ -571,18 +613,18 @@ load_waza_rules() {
     rm -rf -- "$staged" || return 1
     mkdir -p "$staged/rules" || return 1
     printf 'Fetching Waza rule catalog from GitHub main...\n' >&2
-    if ! waza_catalog_api "$staged" 2> "$staged/error.log"; then
+    if ! waza_catalog_api "$staged" 2>"$staged/error.log"; then
         commit=""
-        if [ -f "$staged/resolved-commit" ]; then IFS= read -r commit < "$staged/resolved-commit"; fi
+        if [ -f "$staged/resolved-commit" ]; then IFS= read -r commit <"$staged/resolved-commit"; fi
         printf 'Waza API unavailable; trying Git clone.\n' >&2
-        if ! waza_clone_snapshot "$staged" "$commit" 2>> "$staged/error.log"; then
+        if ! waza_clone_snapshot "$staged" "$commit" 2>>"$staged/error.log"; then
             WAZA_RULES_ERROR="$(cat "$staged/error.log")"
             printf '%s\n' "$WAZA_RULES_ERROR" >&2
             return 1
         fi
     fi
-    IFS= read -r commit < "$staged/resolved-commit" || return 1
-    while IFS= read -r name; do names+=("$name"); done < "$staged/names"
+    IFS= read -r commit <"$staged/resolved-commit" || return 1
+    while IFS= read -r name; do names+=("$name"); done <"$staged/names"
     RULE_NAMES_WAZA=("${names[@]}")
     WAZA_RULES_COMMIT="$commit"
     WAZA_RULES_PATH="$staged/rules"
@@ -593,9 +635,15 @@ fetch_waza_rule() {
     local name="$1" candidate title listed found=0
     load_waza_rules || return 1
     for listed in "${RULE_NAMES_WAZA[@]}"; do
-        if [ "$listed" = "$name" ]; then found=1; break; fi
+        if [ "$listed" = "$name" ]; then
+            found=1
+            break
+        fi
     done
-    [ "$found" -eq 1 ] || { printf 'Unknown Waza rule: %s\n' "$name" >&2; return 1; }
+    [ "$found" -eq 1 ] || {
+        printf 'Unknown Waza rule: %s\n' "$name" >&2
+        return 1
+    }
     candidate="$WAZA_RULES_PATH/$name.md"
     if [ ! -f "$candidate" ]; then
         if curl -fLsS "https://raw.githubusercontent.com/tw93/Waza/$WAZA_RULES_COMMIT/rules/${name#waza-}.md" \
@@ -607,10 +655,13 @@ fetch_waza_rule() {
             waza_clone_snapshot "$RESOURCE_TEMP/waza" "$WAZA_RULES_COMMIT" || return 1
         fi
     fi
-    title=""; IFS= read -r title < "$candidate" || true
+    title=""
+    IFS= read -r title <"$candidate" || true
     case "$title" in '# '* | '## '*) ;; *)
         rm -f -- "$candidate"
-        printf 'Waza rule must start with H1 or H2: %s\n' "$name" >&2; return 1 ;;
+        printf 'Waza rule must start with H1 or H2: %s\n' "$name" >&2
+        return 1
+        ;;
     esac
 }
 
@@ -628,19 +679,26 @@ load_rule_catalog() {
     resolve_resource rules || return 1
     for file in "$RESOURCE_PATH"/*.md; do
         [ -f "$file" ] || continue
-        name="${file##*/}"; name="${name%.md}"
+        name="${file##*/}"
+        name="${name%.md}"
         if [[ ! "$name" =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]*$ ]]; then
-            printf 'Invalid rule name: %s\n' "$file" >&2; return 1
+            printf 'Invalid rule name: %s\n' "$file" >&2
+            return 1
         fi
         title=""
         IFS= read -r title <"$file" || true
-        case "$title" in '# '*) ;; *) printf 'Rule must start with H1: %s\n' "$file" >&2; return 1 ;; esac
+        case "$title" in '# '*) ;; *)
+            printf 'Rule must start with H1: %s\n' "$file" >&2
+            return 1
+            ;;
+        esac
         names+=("$name")
     done
     if [ "$scope" = global ]; then
         RULE_NAMES_GLOBAL=("${names[@]+"${names[@]}"}")
     else
-        RULE_NAMES_PROJECT=("${names[@]+"${names[@]}"}"); RULE_CATALOG_PROJECT=1
+        RULE_NAMES_PROJECT=("${names[@]+"${names[@]}"}")
+        RULE_CATALOG_PROJECT=1
     fi
 }
 
@@ -650,8 +708,8 @@ pi_rule_path() {
     # Match a literal tilde supplied in the environment.
     # shellcheck disable=SC2088
     case "$directory" in
-        '~') directory="$HOME" ;;
-        '~/'*) directory="$HOME/${directory#\~/}" ;;
+    '~') directory="$HOME" ;;
+    '~/'*) directory="$HOME/${directory#\~/}" ;;
     esac
     printf '%s/AGENTS.md\n' "${directory%/}"
 }
@@ -667,179 +725,194 @@ apply_rule() {
 # The rule engine owns its helpers only inside this subshell.
 rule_engine() (
     set -euo pipefail
-    RULE="$1"; SCOPE="$2"; TARGET_OPT="$3"; MODE="${4:-install}"
-    RULE_FILE="$RULE.md"; RULE_CLASSIFICATION="${6:-$SCOPE}"; RULE_SOURCE=""; RULE_TITLE=""
-    TARGETS=""; SCOPES=""; FAILURES=0
+    RULE="$1"
+    SCOPE="$2"
+    TARGET_OPT="$3"
+    MODE="${4:-install}"
+    RULE_FILE="$RULE.md"
+    RULE_CLASSIFICATION="${6:-$SCOPE}"
+    RULE_SOURCE=""
+    RULE_TITLE=""
+    TARGETS=""
+    SCOPES=""
+    FAILURES=0
     PROJECT_DIR=""
     case "$SCOPE" in global | project) ;; *) return 2 ;; esac
     if [[ ! "$RULE" =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]*$ ]]; then return 2; fi
     if [ "$MODE" = install ]; then
         RULE_SOURCE="$5/$RULE_FILE"
-        [ -f "$RULE_SOURCE" ] || { printf 'Missing rule: %s\n' "$RULE_SOURCE" >&2; return 1; }
+        [ -f "$RULE_SOURCE" ] || {
+            printf 'Missing rule: %s\n' "$RULE_SOURCE" >&2
+            return 1
+        }
         IFS= read -r RULE_TITLE <"$RULE_SOURCE" || true
         if [ "$RULE_CLASSIFICATION" = waza ]; then
-            case "$RULE_TITLE" in '# '* | '## '*) ;; *) printf 'Waza rule must start with H1 or H2: %s\n' "$RULE_SOURCE" >&2; return 1 ;; esac
+            case "$RULE_TITLE" in '# '* | '## '*) ;; *)
+                printf 'Waza rule must start with H1 or H2: %s\n' "$RULE_SOURCE" >&2
+                return 1
+                ;;
+            esac
         else
-            case "$RULE_TITLE" in '# '*) ;; *) printf 'Rule must start with H1: %s\n' "$RULE_SOURCE" >&2; return 1 ;; esac
+            case "$RULE_TITLE" in '# '*) ;; *)
+                printf 'Rule must start with H1: %s\n' "$RULE_SOURCE" >&2
+                return 1
+                ;;
+            esac
         fi
     fi
 
-log() {
-    printf '\n\033[1;32m==> %s\033[0m\n' "$1"
-}
+    log() {
+        printf '\n\033[1;32m==> %s\033[0m\n' "$1"
+    }
 
-success() {
-    printf '\033[1;32m✓ %s\033[0m\n' "$1"
-}
+    success() {
+        printf '\033[1;32m✓ %s\033[0m\n' "$1"
+    }
 
-warn() {
-    printf '\033[1;33m! %s\033[0m\n' "$1" >&2
-}
+    warn() {
+        printf '\033[1;33m! %s\033[0m\n' "$1" >&2
+    }
 
-error() {
-    printf '\033[31mError: %s\033[0m\n' "$1" >&2
-}
+    error() {
+        printf '\033[31mError: %s\033[0m\n' "$1" >&2
+    }
 
+    resolve_symlinks() {
+        local path="$1"
+        local directory
+        local link
+        local hops=0
 
-resolve_symlinks() {
-    local path="$1"
-    local directory
-    local link
-    local hops=0
-
-    while [ -L "$path" ]; do
-        if [ "$hops" -ge 8 ]; then
-            error "too many symlink hops resolving $1"
-            return 1
-        fi
-        hops=$((hops + 1))
-        directory="$(cd -P "$(dirname "$path")" && pwd -P)" || return 1
-        link="$(readlink "$directory/$(basename "$path")")" || return 1
-        case "$link" in
-        /*) path="$link" ;;
-        *) path="$directory/$link" ;;
-        esac
-    done
-
-    if [ -d "$(dirname "$path")" ]; then
-        directory="$(cd -P "$(dirname "$path")" && pwd -P)" || return 1
-        path="$directory/$(basename "$path")"
-    fi
-
-    printf '%s\n' "$path"
-    return 0
-}
-
-
-require_safe_home() {
-    if [ -z "${HOME:-}" ] || [ "$HOME" = "/" ]; then
-        error "HOME is empty or unsafe."
-        exit 1
-    fi
-
-    case "$HOME" in
-    /*) ;;
-    *)
-        error "HOME must be an absolute path."
-        exit 1
-        ;;
-    esac
-}
-
-
-resolve_targets() {
-    local resolved=""
-    local name
-
-    case "$TARGET_OPT" in
-    claude | codex | pi | 'codex claude' | 'codex pi' | 'claude pi' | 'codex claude pi')
-        resolved="$TARGET_OPT"
-        ;;
-    both)
-        resolved="claude codex"
-        ;;
-    auto)
-        # Autodetection never creates an agent's directory: doing so would
-        # pollute a machine that does not run that agent.
-        for name in claude codex; do
-            if [ -d "$HOME/.$name" ]; then
-                resolved="${resolved:+$resolved }$name"
+        while [ -L "$path" ]; do
+            if [ "$hops" -ge 8 ]; then
+                error "too many symlink hops resolving $1"
+                return 1
             fi
+            hops=$((hops + 1))
+            directory="$(cd -P "$(dirname "$path")" && pwd -P)" || return 1
+            link="$(readlink "$directory/$(basename "$path")")" || return 1
+            case "$link" in
+            /*) path="$link" ;;
+            *) path="$directory/$link" ;;
+            esac
         done
-        if [ -z "$resolved" ]; then
-            error "neither $HOME/.claude nor $HOME/.codex exists; pass --target explicitly."
+
+        if [ -d "$(dirname "$path")" ]; then
+            directory="$(cd -P "$(dirname "$path")" && pwd -P)" || return 1
+            path="$directory/$(basename "$path")"
+        fi
+
+        printf '%s\n' "$path"
+        return 0
+    }
+
+    require_safe_home() {
+        if [ -z "${HOME:-}" ] || [ "$HOME" = "/" ]; then
+            error "HOME is empty or unsafe."
+            exit 1
+        fi
+
+        case "$HOME" in
+        /*) ;;
+        *)
+            error "HOME must be an absolute path."
+            exit 1
+            ;;
+        esac
+    }
+
+    resolve_targets() {
+        local resolved=""
+        local name
+
+        case "$TARGET_OPT" in
+        claude | codex | pi | 'codex claude' | 'codex pi' | 'claude pi' | 'codex claude pi')
+            resolved="$TARGET_OPT"
+            ;;
+        both)
+            resolved="claude codex"
+            ;;
+        auto)
+            # Autodetection never creates an agent's directory: doing so would
+            # pollute a machine that does not run that agent.
+            for name in claude codex; do
+                if [ -d "$HOME/.$name" ]; then
+                    resolved="${resolved:+$resolved }$name"
+                fi
+            done
+            if [ -z "$resolved" ]; then
+                error "neither $HOME/.claude nor $HOME/.codex exists; pass --target explicitly."
+                return 1
+            fi
+            ;;
+        *)
+            error "unknown target: $TARGET_OPT (expected selected codex, claude, pi targets, both, or auto)"
+            return 1
+            ;;
+        esac
+
+        TARGETS="$resolved"
+        return 0
+    }
+
+    resolve_project_dir() {
+        PROJECT_DIR="$PROJECT_TARGET"
+
+        # Never mkdir a directory that was not there: a typo would quietly create a
+        # tree that nothing loads rules from.
+        if [ ! -d "$PROJECT_DIR" ]; then
+            error "project directory does not exist: $PROJECT_DIR"
             return 1
         fi
-        ;;
-    *)
-        error "unknown target: $TARGET_OPT (expected selected codex, claude, pi targets, both, or auto)"
-        return 1
-        ;;
-    esac
 
-    TARGETS="$resolved"
-    return 0
-}
-
-
-resolve_project_dir() {
-    PROJECT_DIR="$PROJECT_TARGET"
-
-    # Never mkdir a directory that was not there: a typo would quietly create a
-    # tree that nothing loads rules from.
-    if [ ! -d "$PROJECT_DIR" ]; then
-        error "project directory does not exist: $PROJECT_DIR"
-        return 1
-    fi
-
-    if [ "$PROJECT_DIR" = "/" ]; then
-        error "refusing to use / as a project directory."
-        return 1
-    fi
-
-    PROJECT_DIR="$(cd -P "$PROJECT_DIR" && pwd -P)"
-    return 0
-}
-
-# ------------------------------------------------------------
-# Paths
-# ------------------------------------------------------------
-
-claude_rule_path() {
-    case "$1" in
-    global)
-        if [ "$RULE" = "agent-behavior" ]; then
-            printf '%s\n' "$HOME/.claude/CLAUDE.md"
-        else
-            printf '%s\n' "$HOME/.claude/rules/$RULE_FILE"
+        if [ "$PROJECT_DIR" = "/" ]; then
+            error "refusing to use / as a project directory."
+            return 1
         fi
-        ;;
-    esac
-}
 
-codex_file_path() {
-    case "$1" in
-    global) printf '%s\n' "$HOME/.codex/AGENTS.md" ;;
-    esac
-}
-
-rule_file_path() {
-    if [ "$2" = project ]; then
-        printf '%s/docs/rules/%s\n' "$PROJECT_DIR" "$RULE_FILE"
+        PROJECT_DIR="$(cd -P "$PROJECT_DIR" && pwd -P)"
         return 0
-    fi
-    case "$1" in
+    }
+
+    # ------------------------------------------------------------
+    # Paths
+    # ------------------------------------------------------------
+
+    claude_rule_path() {
+        case "$1" in
+        global)
+            if [ "$RULE" = "agent-behavior" ]; then
+                printf '%s\n' "$HOME/.claude/CLAUDE.md"
+            else
+                printf '%s\n' "$HOME/.claude/rules/$RULE_FILE"
+            fi
+            ;;
+        esac
+    }
+
+    codex_file_path() {
+        case "$1" in
+        global) printf '%s\n' "$HOME/.codex/AGENTS.md" ;;
+        esac
+    }
+
+    rule_file_path() {
+        if [ "$2" = project ]; then
+            printf '%s/docs/rules/%s\n' "$PROJECT_DIR" "$RULE_FILE"
+            return 0
+        fi
+        case "$1" in
         claude) claude_rule_path "$2" ;;
         codex) codex_file_path "$2" ;;
         pi) pi_rule_path ;;
-    esac
-}
+        esac
+    }
 
-# Shift ATX headings relative to the rule title, leaving fenced/indented code alone.
-format_rule_headings() {
-    local body="$1"
-    local level="$2"
-    awk -v target="$level" '
+    # Shift ATX headings relative to the rule title, leaving fenced/indented code alone.
+    format_rule_headings() {
+        local body="$1"
+        local level="$2"
+        awk -v target="$level" '
         NR == 1 {
             title = $0
             sub(/[^#].*$/, "", title)
@@ -884,159 +957,157 @@ format_rule_headings() {
             print
         }
     ' "$body"
-}
+    }
 
-# Append in place: existing bytes, including legacy markers, are user content.
-append_rule_file() {
-    local source_hashes="${RULE_TITLE%% *}"
-    local target="$1" scope="$2" destination resolved level="${#source_hashes}" eol="" last_byte
-    destination="$(rule_file_path "$target" "$scope")"
-    resolved="$(resolve_symlinks "$destination")" || return 1
-    mkdir -p "$(dirname "$resolved")" || return 1
-    if [ "$target" = claude ]; then
-        level=1
-    else
-        if [ "$scope" = global ] && [ -f "$(dirname "$destination")/AGENTS.override.md" ]; then
-            warn "$(dirname "$destination")/AGENTS.override.md exists and takes precedence; $target will not read $(basename "$destination")."
+    # Append in place: existing bytes, including legacy markers, are user content.
+    append_rule_file() {
+        local source_hashes="${RULE_TITLE%% *}"
+        local target="$1" scope="$2" destination resolved level="${#source_hashes}" eol="" last_byte
+        destination="$(rule_file_path "$target" "$scope")"
+        resolved="$(resolve_symlinks "$destination")" || return 1
+        mkdir -p "$(dirname "$resolved")" || return 1
+        if [ "$target" = claude ]; then
+            level=1
+        else
+            if [ "$scope" = global ] && [ -f "$(dirname "$destination")/AGENTS.override.md" ]; then
+                warn "$(dirname "$destination")/AGENTS.override.md exists and takes precedence; $target will not read $(basename "$destination")."
+            fi
+            if [ "$scope" = global ] || [ "$RULE_CLASSIFICATION" = project ]; then level=2; fi
         fi
-        if [ "$scope" = global ] || [ "$RULE_CLASSIFICATION" = project ]; then level=2; fi
-    fi
-    if [ -f "$resolved" ] && LC_ALL=C grep -qU $'\r' "$resolved"; then eol=$'\r'; fi
+        if [ -f "$resolved" ] && LC_ALL=C grep -qU $'\r' "$resolved"; then eol=$'\r'; fi
 
-    if [ -s "$resolved" ]; then
-        last_byte="$(tail -c 1 "$resolved" | od -An -tu1 | tr -d '[:space:]')"
-        if [ "$last_byte" != 10 ]; then
-            printf '%s\n%s\n' "$eol" "$eol" >>"$resolved" || return 1
-        elif [ -n "$(tail -n 1 "$resolved" | tr -d '\r\n')" ]; then
-            printf '%s\n' "$eol" >>"$resolved" || return 1
+        if [ -s "$resolved" ]; then
+            last_byte="$(tail -c 1 "$resolved" | od -An -tu1 | tr -d '[:space:]')"
+            if [ "$last_byte" != 10 ]; then
+                printf '%s\n%s\n' "$eol" "$eol" >>"$resolved" || return 1
+            elif [ -n "$(tail -n 1 "$resolved" | tr -d '\r\n')" ]; then
+                printf '%s\n' "$eol" >>"$resolved" || return 1
+            fi
+        elif [ "$target" != claude ] && [ "$scope" = global ]; then
+            printf '# Global Rules%s\n%s\n' "$eol" "$eol" >>"$resolved" || return 1
         fi
-    elif [ "$target" != claude ] && [ "$scope" = global ]; then
-        printf '# Global Rules%s\n%s\n' "$eol" "$eol" >>"$resolved" || return 1
-    fi
-    if ! format_rule_headings "$RULE_SOURCE" "$level" |
-        awk -v eol="$eol" '{ sub(/\r$/, ""); printf "%s%s\n", $0, eol }' >>"$resolved"; then
-        error "could not append $resolved"
-        return 1
-    fi
-    printf '\033[1;34m✓ installation complete (%s, %s): %s\033[0m\n' "$target" "$scope" "$resolved"
-}
+        if ! format_rule_headings "$RULE_SOURCE" "$level" |
+            awk -v eol="$eol" '{ sub(/\r$/, ""); printf "%s%s\n", $0, eol }' >>"$resolved"; then
+            error "could not append $resolved"
+            return 1
+        fi
+        printf '\033[1;34m✓ installation complete (%s, %s): %s\033[0m\n' "$target" "$scope" "$resolved"
+    }
 
-remove_rule_file() {
-    local destination
-    destination="$(rule_file_path "$1" "$2")"
-    if [ ! -e "$destination" ] && [ ! -L "$destination" ]; then
-        printf '  not installed (%s, %s): %s\n' "$1" "$2" "$destination"
-        return 0
-    fi
-    # Unlink the selected path; never resolve a rule link for removal.
-    rm -f -- "$destination" || return 1
-    success "removed ($1, $2): $destination"
-}
+    remove_rule_file() {
+        local destination
+        destination="$(rule_file_path "$1" "$2")"
+        if [ ! -e "$destination" ] && [ ! -L "$destination" ]; then
+            printf '  not installed (%s, %s): %s\n' "$1" "$2" "$destination"
+            return 0
+        fi
+        # Unlink the selected path; never resolve a rule link for removal.
+        rm -f -- "$destination" || return 1
+        success "removed ($1, $2): $destination"
+    }
 
-# ------------------------------------------------------------
-# Pre-flight
-# ------------------------------------------------------------
+    # ------------------------------------------------------------
+    # Pre-flight
+    # ------------------------------------------------------------
 
-# Check every planned destination before the first write, so a failure on the
-# second target cannot leave the first one installed.
-preflight() {
-    local target
-    local scope
-    local directory
+    # Check every planned destination before the first write, so a failure on the
+    # second target cannot leave the first one installed.
+    preflight() {
+        local target
+        local scope
+        local directory
 
-    for target in $TARGETS; do
-        case "$target" in
-        claude)
-            for scope in $SCOPES; do
-                if [ "$RULE" = "agent-behavior" ] && [ "$scope" = "global" ]; then
-                    directory="$HOME/.claude"
-                elif [ "$scope" = "global" ]; then
-                    directory="$HOME/.claude/rules"
-                else
-                    directory="$PROJECT_DIR/.claude/rules"
-                fi
-                if ! mkdir -p "$directory"; then
-                    error "cannot create $directory"
-                    return 1
-                fi
-                if [ ! -w "$directory" ]; then
-                    error "cannot write to $directory"
-                    return 1
-                fi
-            done
-            ;;
-        codex | pi | project)
-            for scope in $SCOPES; do
-                directory="$(dirname "$(rule_file_path "$target" "$scope")")"
-                if [ ! -d "$directory" ]; then
+        for target in $TARGETS; do
+            case "$target" in
+            claude)
+                for scope in $SCOPES; do
+                    if [ "$RULE" = "agent-behavior" ] && [ "$scope" = "global" ]; then
+                        directory="$HOME/.claude"
+                    elif [ "$scope" = "global" ]; then
+                        directory="$HOME/.claude/rules"
+                    else
+                        directory="$PROJECT_DIR/.claude/rules"
+                    fi
                     if ! mkdir -p "$directory"; then
                         error "cannot create $directory"
                         return 1
                     fi
+                    if [ ! -w "$directory" ]; then
+                        error "cannot write to $directory"
+                        return 1
+                    fi
+                done
+                ;;
+            codex | pi | project)
+                for scope in $SCOPES; do
+                    directory="$(dirname "$(rule_file_path "$target" "$scope")")"
+                    if [ ! -d "$directory" ]; then
+                        if ! mkdir -p "$directory"; then
+                            error "cannot create $directory"
+                            return 1
+                        fi
+                    fi
+                    if [ ! -w "$directory" ]; then
+                        error "cannot write to $directory"
+                        return 1
+                    fi
+                done
+                ;;
+            esac
+        done
+
+        return 0
+    }
+
+    run() {
+        local target
+        local scope
+        local status
+
+        if [ "$SCOPE" = "everywhere" ] || [ "$SCOPE" = "project" ]; then
+            resolve_project_dir || return 1
+        fi
+
+        if [ "$SCOPE" = "everywhere" ]; then
+            SCOPES="global project"
+        else
+            SCOPES="$SCOPE"
+        fi
+
+        resolve_targets || return 1
+        # Project rules are shared files, so multiple selected agents write only once.
+        if [ "$SCOPE" = project ]; then TARGETS=project; fi
+
+        if [ "$MODE" = "install" ]; then
+            preflight || return 1
+
+            log "Installing $RULE_FILE"
+        else
+            log "Removing $RULE_FILE"
+        fi
+
+        for target in $TARGETS; do
+            for scope in $SCOPES; do
+                status=0
+                if [ "$MODE" = install ]; then
+                    append_rule_file "$target" "$scope" || status=1
+                else
+                    remove_rule_file "$target" "$scope" || status=1
                 fi
-                if [ ! -w "$directory" ]; then
-                    error "cannot write to $directory"
-                    return 1
+                if [ "$status" -ne 0 ]; then
+                    FAILURES=$((FAILURES + 1))
                 fi
             done
-            ;;
-        esac
-    done
-
-    return 0
-}
-
-
-run() {
-    local target
-    local scope
-    local status
-
-    if [ "$SCOPE" = "everywhere" ] || [ "$SCOPE" = "project" ]; then
-        resolve_project_dir || return 1
-    fi
-
-    if [ "$SCOPE" = "everywhere" ]; then
-        SCOPES="global project"
-    else
-        SCOPES="$SCOPE"
-    fi
-
-    resolve_targets || return 1
-    # Project rules are shared files, so multiple selected agents write only once.
-    if [ "$SCOPE" = project ]; then TARGETS=project; fi
-
-    if [ "$MODE" = "install" ]; then
-        preflight || return 1
-
-        log "Installing $RULE_FILE"
-    else
-        log "Removing $RULE_FILE"
-    fi
-
-    for target in $TARGETS; do
-        for scope in $SCOPES; do
-            status=0
-            if [ "$MODE" = install ]; then
-                append_rule_file "$target" "$scope" || status=1
-            else
-                remove_rule_file "$target" "$scope" || status=1
-            fi
-            if [ "$status" -ne 0 ]; then
-                FAILURES=$((FAILURES + 1))
-            fi
         done
-    done
 
-    if [ "$FAILURES" -ne 0 ]; then
-        printf '\n'
-        error "$FAILURES destination(s) did not complete."
-        return 1
-    fi
+        if [ "$FAILURES" -ne 0 ]; then
+            printf '\n'
+            error "$FAILURES destination(s) did not complete."
+            return 1
+        fi
 
-    return 0
-}
-
+        return 0
+    }
 
     require_safe_home
     run
@@ -1083,15 +1154,15 @@ install_statusline() {
 
 install_codex() {
     if ! command -v codex >/dev/null 2>&1; then
-        curl -fsSL https://chatgpt.com/codex/install.sh | sh;
+        curl -fsSL https://chatgpt.com/codex/install.sh | sh
     fi
     require_command codex
     printf '\033[32mCodex CLI: %s\033[0m\n' "$(command -v codex)"
 }
 
 install_claude() {
-    if ! command -v claude >/dev/null 2>&1; then 
-        curl -fsSL https://claude.ai/install.sh | bash;
+    if ! command -v claude >/dev/null 2>&1; then
+        curl -fsSL https://claude.ai/install.sh | bash
     fi
     require_command claude
     printf '\033[32mClaude Code CLI: %s\033[0m\n' "$(command -v claude)"
@@ -1127,12 +1198,26 @@ read_back_answer() {
     REPLY=""
     while read_key; do
         case "$KEY" in
-            '') printf '\n'; return 0 ;;
-            $'\e') REPLY=b; printf '\n'; return 0 ;;
-            $'\177' | $'\b')
-                if [ -n "$REPLY" ]; then REPLY="${REPLY%?}"; printf '\b \b'; fi ;;
-            $'\e'*) ;; # Navigation sequences are not confirmation text or Back.
-            *) REPLY+="$KEY"; printf '%s' "$KEY" ;;
+        '')
+            printf '\n'
+            return 0
+            ;;
+        $'\e')
+            REPLY=b
+            printf '\n'
+            return 0
+            ;;
+        $'\177' | $'\b')
+            if [ -n "$REPLY" ]; then
+                REPLY="${REPLY%?}"
+                printf '\b \b'
+            fi
+            ;;
+        $'\e'*) ;; # Navigation sequences are not confirmation text or Back.
+        *)
+            REPLY+="$KEY"
+            printf '%s' "$KEY"
+            ;;
         esac
     done
     return 1
@@ -1157,17 +1242,17 @@ choose_items_page() {
     if [[ "$defaults" = *" "* ]]; then
         read -r -a selected <<<"$defaults"
     else
-        for ((i=0; i<${#options[@]}; i++)); do selected+=("$defaults"); done
+        for ((i = 0; i < ${#options[@]}; i++)); do selected+=("$defaults"); done
     fi
     if [ "${MENU_VISITED[page]:-0}" -eq 1 ]; then
         cursor="${MENU_CURSORS[page]}"
-        for ((i=0; i<${#options[@]}; i++)); do selected[i]=0; done
+        for ((i = 0; i < ${#options[@]}; i++)); do selected[i]=0; done
         IFS=' ' read -r -a restored <<<"${MENU_CHOICES[page]}"
         for i in "${restored[@]+"${restored[@]}"}"; do selected[i]=1; done
     fi
     while :; do
         MENU_SELECTED=()
-        for ((i=0; i<${#options[@]}; i++)); do
+        for ((i = 0; i < ${#options[@]}; i++)); do
             [ "${selected[i]}" -eq 0 ] || MENU_SELECTED+=("$i")
         done
         MENU_VISITED[page]=1
@@ -1179,9 +1264,11 @@ choose_items_page() {
         else
             printf '%s\n\n' "$title"
         fi
-        start=$((cursor / 8 * 8)); end=$((start + 8))
-        for ((i=start; i<end && i<${#options[@]}; i++)); do
-            mark=' '; [ "${selected[i]}" -eq 0 ] || mark=x
+        start=$((cursor / 8 * 8))
+        end=$((start + 8))
+        for ((i = start; i < end && i < ${#options[@]}; i++)); do
+            mark=' '
+            [ "${selected[i]}" -eq 0 ] || mark=x
             if [ "$i" -eq "$cursor" ]; then printf '> '; else printf '  '; fi
             if [ "$multiple" -eq 1 ]; then printf '[%s] ' "$mark"; fi
             printf '%s\n' "${options[i]}"
@@ -1200,21 +1287,25 @@ choose_items_page() {
         printf '   q Exit\n'
         read_key || return 1
         case "$KEY" in
-            $'\e[A' | $'\eOA') cursor=$(((cursor + ${#options[@]} - 1) % ${#options[@]})) ;;
-            $'\e[B' | $'\eOB') cursor=$(((cursor + 1) % ${#options[@]})) ;;
-            ' ')
-                if [ "$multiple" -eq 1 ]; then selected[cursor]=$((1 - selected[cursor])); fi ;;
-            a | n)
-                if [ "$multiple" -eq 1 ]; then
-                    for ((i=0; i<${#options[@]}; i++)); do
-                        selected[i]=0; [ "$KEY" != a ] || selected[i]=1
-                    done
-                fi ;;
-            '')
-                if [ "$multiple" -eq 0 ]; then MENU_SELECTED=("$cursor"); fi
-                return 0 ;;
-            b | B | $'\e') if [ "$page" -ne 0 ]; then return 2; fi ;;
-            q | Q) return 1 ;;
+        $'\e[A' | $'\eOA') cursor=$(((cursor + ${#options[@]} - 1) % ${#options[@]})) ;;
+        $'\e[B' | $'\eOB') cursor=$(((cursor + 1) % ${#options[@]})) ;;
+        ' ')
+            if [ "$multiple" -eq 1 ]; then selected[cursor]=$((1 - selected[cursor])); fi
+            ;;
+        a | n)
+            if [ "$multiple" -eq 1 ]; then
+                for ((i = 0; i < ${#options[@]}; i++)); do
+                    selected[i]=0
+                    [ "$KEY" != a ] || selected[i]=1
+                done
+            fi
+            ;;
+        '')
+            if [ "$multiple" -eq 0 ]; then MENU_SELECTED=("$cursor"); fi
+            return 0
+            ;;
+        b | B | $'\e') if [ "$page" -ne 0 ]; then return 2; fi ;;
+        q | Q) return 1 ;;
         esac
     done
 }
@@ -1226,29 +1317,34 @@ choose_items_page() {
 # Include calls in conditional branches so every supported path is available.
 matt_skill_dependencies() {
     case "$1" in
-        grill-me) printf '%s\n' grilling ;;
-        grill-with-docs) printf '%s\n' grilling domain-modeling ;;
-        tdd) printf '%s\n' codebase-design ;;
-        implement | implement-spec) printf '%s\n' tdd code-review ;;
-        wayfinder) printf '%s\n' grilling domain-modeling prototype research ;;
-        improve-codebase-architecture) printf '%s\n' codebase-design grilling domain-modeling ;;
-        triage) printf '%s\n' grilling domain-modeling ;;
-        retro) printf '%s\n' writing-for-agents ;;
+    grill-me) printf '%s\n' grilling ;;
+    grill-with-docs) printf '%s\n' grilling domain-modeling ;;
+    tdd) printf '%s\n' codebase-design ;;
+    implement | implement-spec) printf '%s\n' tdd code-review ;;
+    wayfinder) printf '%s\n' grilling domain-modeling prototype research ;;
+    improve-codebase-architecture) printf '%s\n' codebase-design grilling domain-modeling ;;
+    triage) printf '%s\n' grilling domain-modeling ;;
+    retro) printf '%s\n' writing-for-agents ;;
     esac
 }
 
 picker_dependency_graph() {
     local i j dependency match changed=1
-    for ((i=0; i<${#selected[@]}; i++)); do
-        requirements[i]=" $i "; missing[i]=''
+    for ((i = 0; i < ${#selected[@]}; i++)); do
+        requirements[i]=" $i "
+        missing[i]=''
         [ "${REPO_ITEM_GROUPS[i]}" = mattpocock/skills ] || continue
         while IFS= read -r dependency; do
             [ -n "$dependency" ] || continue
             match=-1
-            for ((j=0; j<${#selected[@]}; j++)); do
-                if [ "${REPO_ITEM_GROUPS[j]}" = mattpocock/skills ] && [ "${REPO_ITEM_LABELS[j]}" = "$dependency" ]; then match="$j"; break; fi
+            for ((j = 0; j < ${#selected[@]}; j++)); do
+                if [ "${REPO_ITEM_GROUPS[j]}" = mattpocock/skills ] && [ "${REPO_ITEM_LABELS[j]}" = "$dependency" ]; then
+                    match="$j"
+                    break
+                fi
             done
-            if [ "$match" -lt 0 ]; then missing[i]="$dependency";
+            if [ "$match" -lt 0 ]; then
+                missing[i]="$dependency"
             else requirements[i]+="$match "; fi
         done < <(matt_skill_dependencies "${REPO_ITEM_LABELS[i]}")
     done
@@ -1256,11 +1352,17 @@ picker_dependency_graph() {
     # Membership checks also make cycles terminate.
     while [ "$changed" -eq 1 ]; do
         changed=0
-        for ((i=0; i<${#selected[@]}; i++)); do
+        for ((i = 0; i < ${#selected[@]}; i++)); do
             for j in ${requirements[i]}; do
-                if [ -z "${missing[i]}" ] && [ -n "${missing[j]}" ]; then missing[i]="${missing[j]}"; changed=1; fi
+                if [ -z "${missing[i]}" ] && [ -n "${missing[j]}" ]; then
+                    missing[i]="${missing[j]}"
+                    changed=1
+                fi
                 for dependency in ${requirements[j]}; do
-                    if [[ "${requirements[i]}" != *" $dependency "* ]]; then requirements[i]+="$dependency "; changed=1; fi
+                    if [[ "${requirements[i]}" != *" $dependency "* ]]; then
+                        requirements[i]+="$dependency "
+                        changed=1
+                    fi
                 done
             done
         done
@@ -1269,8 +1371,8 @@ picker_dependency_graph() {
 
 picker_resolve_dependencies() {
     local i dependency
-    for ((i=0; i<${#selected[@]}; i++)); do selected[i]=0; done
-    for ((i=0; i<${#selected[@]}; i++)); do
+    for ((i = 0; i < ${#selected[@]}; i++)); do selected[i]=0; done
+    for ((i = 0; i < ${#selected[@]}; i++)); do
         [ "${explicit[i]}" -ne 0 ] || continue
         if [ -n "${missing[i]}" ]; then
             explicit[i]=0
@@ -1283,7 +1385,7 @@ picker_resolve_dependencies() {
 
 picker_deselect_dependency() {
     local target="$1" root
-    for ((root=0; root<${#explicit[@]}; root++)); do
+    for ((root = 0; root < ${#explicit[@]}; root++)); do
         if [ "${explicit[root]}" -eq 1 ] && [[ "${requirements[root]}" = *" $target "* ]]; then
             explicit[root]=0
             [ "$root" -eq "$target" ] || notice+="Also deselected "$'\033[32m'"${REPO_ITEM_LABELS[root]}"$'\033[0m'". "
@@ -1305,13 +1407,24 @@ choose_skill_repositories_page() {
     local page="$1" title="$2" color="$3" cursor=0 child=-1 i j group found start end total chosen mark row key_page selected_count
     local groups=() item_groups=() selected=() children=()
     local group_heading=Repository group_list=Repos enter_action
-    if [ "$page" -eq 9 ]; then group_heading=Source; group_list=Sources; fi
+    if [ "$page" -eq 9 ]; then
+        group_heading=Source
+        group_list=Sources
+    fi
     local dependency_mode="${4:-0}" notice='' reasons explicit=() requirements=() missing=() before=() touched=()
-    for ((i=0; i<${#REPO_ITEM_LABELS[@]}; i++)); do
-        group="${REPO_ITEM_GROUPS[i]}"; found=-1
-        for ((j=0; j<${#groups[@]}; j++)); do [ "${groups[j]}" != "$group" ] || { found="$j"; break; }; done
-        if [ "$found" -eq -1 ]; then found="${#groups[@]}"; groups+=("$group"); fi
-        item_groups+=("$found"); selected+=(0)
+    for ((i = 0; i < ${#REPO_ITEM_LABELS[@]}; i++)); do
+        group="${REPO_ITEM_GROUPS[i]}"
+        found=-1
+        for ((j = 0; j < ${#groups[@]}; j++)); do [ "${groups[j]}" != "$group" ] || {
+            found="$j"
+            break
+        }; done
+        if [ "$found" -eq -1 ]; then
+            found="${#groups[@]}"
+            groups+=("$group")
+        fi
+        item_groups+=("$found")
+        selected+=(0)
     done
     for i in "${REPO_SELECTED[@]+"${REPO_SELECTED[@]}"}"; do selected[i]=1; done
     if [ "$dependency_mode" -eq 1 ]; then
@@ -1322,40 +1435,54 @@ choose_skill_repositories_page() {
     cursor="${MENU_CURSORS[page]:-0}"
     while :; do
         REPO_SELECTED=()
-        for ((i=0; i<${#selected[@]}; i++)); do [ "${selected[i]}" -eq 0 ] || REPO_SELECTED+=("$i"); done
+        for ((i = 0; i < ${#selected[@]}; i++)); do [ "${selected[i]}" -eq 0 ] || REPO_SELECTED+=("$i"); done
         selected_count="${#REPO_SELECTED[@]}"
         if [ "$dependency_mode" -eq 1 ]; then REPO_EXPLICIT=("${explicit[@]}"); fi
         printf '\033[H\033[2J%s\n' "$title"
         [ -z "$notice" ] || printf '%s\n' "$notice"
         if [ "$child" -lt 0 ]; then
-            total=$((${#groups[@]} + 1)); MENU_CURSORS[page]="$cursor"
+            total=$((${#groups[@]} + 1))
+            MENU_CURSORS[page]="$cursor"
         else
             printf '%s: %s\n' "$group_heading" "${groups[child]}"
             children=()
-            for ((i=0; i<${#selected[@]}; i++)); do [ "${item_groups[i]}" -ne "$child" ] || children+=("$i"); done
+            for ((i = 0; i < ${#selected[@]}; i++)); do [ "${item_groups[i]}" -ne "$child" ] || children+=("$i"); done
             selected_count=0
             for i in "${children[@]}"; do selected_count=$((selected_count + selected[i])); done
-            total="${#children[@]}"; key_page=$((100 + page * 100 + child)); MENU_CURSORS[key_page]="$cursor"
+            total="${#children[@]}"
+            key_page=$((100 + page * 100 + child))
+            MENU_CURSORS[key_page]="$cursor"
         fi
         if [ "$cursor" -ge "$total" ]; then cursor=0; fi
         printf '\n'
-        start=$((cursor / 8 * 8)); end=$((start + 8))
-        for ((row=start; row<end && row<total; row++)); do
+        start=$((cursor / 8 * 8))
+        end=$((start + 8))
+        for ((row = start; row < end && row < total; row++)); do
             if [ "$row" -eq "$cursor" ]; then printf '> '; else printf '  '; fi
             if [ "$child" -lt 0 ]; then
-                if [ "$row" -eq "${#groups[@]}" ]; then printf 'Continue\n'; continue; fi
-                chosen=0; found=0
-                for ((i=0; i<${#selected[@]}; i++)); do
-                    if [ "${item_groups[i]}" -eq "$row" ]; then found=$((found + 1)); chosen=$((chosen + selected[i])); fi
+                if [ "$row" -eq "${#groups[@]}" ]; then
+                    printf 'Continue\n'
+                    continue
+                fi
+                chosen=0
+                found=0
+                for ((i = 0; i < ${#selected[@]}; i++)); do
+                    if [ "${item_groups[i]}" -eq "$row" ]; then
+                        found=$((found + 1))
+                        chosen=$((chosen + selected[i]))
+                    fi
                 done
-                mark=' '; if [ "$chosen" -eq "$found" ]; then mark=x; elif [ "$chosen" -gt 0 ]; then mark=-; fi
+                mark=' '
+                if [ "$chosen" -eq "$found" ]; then mark=x; elif [ "$chosen" -gt 0 ]; then mark=-; fi
                 printf '[%s] \033[%sm%s\033[0m (%s/%s)\n' "$mark" "$color" "${groups[row]}" "$chosen" "$found"
             else
-                i="${children[row]}"; mark=' '; [ "${selected[i]}" -eq 0 ] || mark=x
+                i="${children[row]}"
+                mark=' '
+                [ "${selected[i]}" -eq 0 ] || mark=x
                 printf '[%s] \033[%sm%s\033[0m\n' "$mark" "$color" "${REPO_ITEM_LABELS[i]}"
                 if [ "$dependency_mode" -eq 1 ] && [ "${selected[i]}" -eq 1 ] && [ "${explicit[i]}" -eq 0 ]; then
                     reasons=''
-                    for ((j=0; j<${#selected[@]}; j++)); do
+                    for ((j = 0; j < ${#selected[@]}; j++)); do
                         if [ "${explicit[j]}" -eq 1 ] && [[ "${requirements[j]}" = *" $i "* ]]; then
                             reasons+="${reasons:+, }"$'\033[32m'"${REPO_ITEM_LABELS[j]}"$'\033[0m'
                         fi
@@ -1375,50 +1502,81 @@ choose_skill_repositories_page() {
         printf 'a All   n None   c Continue   b/Esc Back   q Exit\n'
         read_key || return 1
         case "$KEY" in
-            $'\e[A' | $'\eOA') cursor=$(((cursor + total - 1) % total)) ;;
-            $'\e[B' | $'\eOB') cursor=$(((cursor + 1) % total)) ;;
-            ' ' | a | n)
-                before=("${selected[@]}"); touched=(); notice=''
-                if [ "$child" -lt 0 ]; then
-                    [ "$cursor" -lt "${#groups[@]}" ] || [ "$KEY" != ' ' ] || continue
-                    found=1
-                    if [ "$KEY" = n ]; then found=0;
-                    elif [ "$KEY" = ' ' ]; then
-                        chosen=0; total=0
-                        for ((i=0; i<${#selected[@]}; i++)); do
-                            if [ "${item_groups[i]}" -eq "$cursor" ]; then total=$((total + 1)); chosen=$((chosen + selected[i])); fi
-                        done
-                        [ "$chosen" -ne "$total" ] || found=0
-                    fi
-                    for ((i=0; i<${#selected[@]}; i++)); do
-                        if [ "$KEY" != ' ' ] || [ "${item_groups[i]}" -eq "$cursor" ]; then selected[i]="$found"; touched+=("$i"); fi
-                    done
-                elif [ "$KEY" = ' ' ]; then i="${children[cursor]}"; selected[i]=$((1 - selected[i])); touched+=("$i");
-                else
-                    found=1; [ "$KEY" != n ] || found=0
-                    for i in "${children[@]}"; do selected[i]="$found"; touched+=("$i"); done
-                fi
-                if [ "$dependency_mode" -eq 1 ]; then
-                    # All also promotes already checked dependencies to explicit.
-                    for i in "${touched[@]}"; do
-                        if [ "${selected[i]}" -eq 1 ]; then explicit[i]=1;
-                        else picker_deselect_dependency "$i"; fi
-                    done
-                    picker_resolve_dependencies
-                    for ((i=0; i<${#selected[@]}; i++)); do
-                        if [ "${before[i]}" -eq 1 ] && [ "${selected[i]}" -eq 0 ] && [ "${REPO_ITEM_GROUPS[i]}" = mattpocock/skills ]; then
-                            notice+="Deselected "$'\033[32m'"${REPO_ITEM_LABELS[i]}"$'\033[0m'". "
+        $'\e[A' | $'\eOA') cursor=$(((cursor + total - 1) % total)) ;;
+        $'\e[B' | $'\eOB') cursor=$(((cursor + 1) % total)) ;;
+        ' ' | a | n)
+            before=("${selected[@]}")
+            touched=()
+            notice=''
+            if [ "$child" -lt 0 ]; then
+                [ "$cursor" -lt "${#groups[@]}" ] || [ "$KEY" != ' ' ] || continue
+                found=1
+                if [ "$KEY" = n ]; then
+                    found=0
+                elif [ "$KEY" = ' ' ]; then
+                    chosen=0
+                    total=0
+                    for ((i = 0; i < ${#selected[@]}; i++)); do
+                        if [ "${item_groups[i]}" -eq "$cursor" ]; then
+                            total=$((total + 1))
+                            chosen=$((chosen + selected[i]))
                         fi
                     done
-                fi ;;
-            '')
-                if [ "$child" -ge 0 ]; then child=-1; cursor="${MENU_CURSORS[page]}";
-                elif [ "$cursor" -eq "${#groups[@]}" ]; then return 0;
-                else child="$cursor"; key_page=$((100 + page * 100 + child)); cursor="${MENU_CURSORS[key_page]:-0}"; fi ;;
-            c) return 0 ;;
-            b | B | $'\e')
-                if [ "$child" -ge 0 ]; then child=-1; cursor="${MENU_CURSORS[page]}"; else return 2; fi ;;
-            q | Q) return 1 ;;
+                    [ "$chosen" -ne "$total" ] || found=0
+                fi
+                for ((i = 0; i < ${#selected[@]}; i++)); do
+                    if [ "$KEY" != ' ' ] || [ "${item_groups[i]}" -eq "$cursor" ]; then
+                        selected[i]="$found"
+                        touched+=("$i")
+                    fi
+                done
+            elif [ "$KEY" = ' ' ]; then
+                i="${children[cursor]}"
+                selected[i]=$((1 - selected[i]))
+                touched+=("$i")
+            else
+                found=1
+                [ "$KEY" != n ] || found=0
+                for i in "${children[@]}"; do
+                    selected[i]="$found"
+                    touched+=("$i")
+                done
+            fi
+            if [ "$dependency_mode" -eq 1 ]; then
+                # All also promotes already checked dependencies to explicit.
+                for i in "${touched[@]}"; do
+                    if [ "${selected[i]}" -eq 1 ]; then
+                        explicit[i]=1
+                    else picker_deselect_dependency "$i"; fi
+                done
+                picker_resolve_dependencies
+                for ((i = 0; i < ${#selected[@]}; i++)); do
+                    if [ "${before[i]}" -eq 1 ] && [ "${selected[i]}" -eq 0 ] && [ "${REPO_ITEM_GROUPS[i]}" = mattpocock/skills ]; then
+                        notice+="Deselected "$'\033[32m'"${REPO_ITEM_LABELS[i]}"$'\033[0m'". "
+                    fi
+                done
+            fi
+            ;;
+        '')
+            if [ "$child" -ge 0 ]; then
+                child=-1
+                cursor="${MENU_CURSORS[page]}"
+            elif [ "$cursor" -eq "${#groups[@]}" ]; then
+                return 0
+            else
+                child="$cursor"
+                key_page=$((100 + page * 100 + child))
+                cursor="${MENU_CURSORS[key_page]:-0}"
+            fi
+            ;;
+        c) return 0 ;;
+        b | B | $'\e')
+            if [ "$child" -ge 0 ]; then
+                child=-1
+                cursor="${MENU_CURSORS[page]}"
+            else return 2; fi
+            ;;
+        q | Q) return 1 ;;
         esac
     done
 }
@@ -1562,7 +1720,10 @@ list_content() (
         printf '\033[H\033[2J'
         if [ -z "${NO_COLOR:-}" ]; then list_color=1; fi
     fi
-    if [ "$LIST_MODE" = local ]; then print_installed_content "$format"; exit $?; fi
+    if [ "$LIST_MODE" = local ]; then
+        print_installed_content "$format"
+        exit $?
+    fi
     trap cleanup_setup_resources EXIT
     if [ "$format" = interactive ]; then
         list_heading 'Available · Remote'
@@ -1972,13 +2133,26 @@ scan_removal_inventory() {
     trap 'exit 143' TERM
     removal_inventory scan "$REMOVE_CODEX" "$REMOVE_CLAUDE" "$REMOVE_RULES" "$REMOVE_SKILLS" "$REMOVE_PI" || return 1
     rows=$(removal_inventory rows) || return 1
-    REMOVAL_RULE_IDS=(); REMOVAL_RULE_LABELS=(); REMOVAL_SKILL_IDS=(); REMOVAL_SKILL_LABELS=(); REMOVAL_SKILL_GROUPS=()
-    REMOVAL_RULE_SELECTION=(); REMOVAL_SKILL_SELECTION=()
-    MENU_VISITED[12]=0; MENU_CURSORS[12]=0; MENU_CURSORS[13]=0
+    REMOVAL_RULE_IDS=()
+    REMOVAL_RULE_LABELS=()
+    REMOVAL_SKILL_IDS=()
+    REMOVAL_SKILL_LABELS=()
+    REMOVAL_SKILL_GROUPS=()
+    REMOVAL_RULE_SELECTION=()
+    REMOVAL_SKILL_SELECTION=()
+    MENU_VISITED[12]=0
+    MENU_CURSORS[12]=0
+    MENU_CURSORS[13]=0
     while IFS=$'\t' read -r id kind group label; do
         [ -n "$id" ] || continue
-        if [ "$kind" = rules ]; then REMOVAL_RULE_IDS+=("$id"); REMOVAL_RULE_LABELS+=("$label");
-        else REMOVAL_SKILL_IDS+=("$id"); REMOVAL_SKILL_LABELS+=("$label"); REMOVAL_SKILL_GROUPS+=("$group"); fi
+        if [ "$kind" = rules ]; then
+            REMOVAL_RULE_IDS+=("$id")
+            REMOVAL_RULE_LABELS+=("$label")
+        else
+            REMOVAL_SKILL_IDS+=("$id")
+            REMOVAL_SKILL_LABELS+=("$label")
+            REMOVAL_SKILL_GROUPS+=("$group")
+        fi
     done <<<"$rows"
 }
 
@@ -1986,7 +2160,10 @@ preview_selected_removal() {
     local i links preview ids=()
     for i in "${REMOVAL_RULE_SELECTION[@]+"${REMOVAL_RULE_SELECTION[@]}"}"; do ids+=("${REMOVAL_RULE_IDS[i]}"); done
     for i in "${REMOVAL_SKILL_SELECTION[@]+"${REMOVAL_SKILL_SELECTION[@]}"}"; do ids+=("${REMOVAL_SKILL_IDS[i]}"); done
-    if [ "${#ids[@]}" -eq 0 ]; then printf 'No removal targets selected.\n'; return 2; fi
+    if [ "${#ids[@]}" -eq 0 ]; then
+        printf 'No removal targets selected.\n'
+        return 2
+    fi
     removal_inventory select "${ids[@]}" || return 1
     links=$(removal_inventory linked-skills) || return 1
     if [ -n "$links" ]; then
@@ -1995,11 +2172,14 @@ preview_selected_removal() {
             printf 'Also remove these Claude links? [y/N] (b/Esc: back | q: exit): '
             read_back_answer || return 4
             case "$REPLY" in
-                y | Y) removal_inventory include-links || return 1; break ;;
-                n | N | '') break ;;
-                b | B) return 3 ;;
-                q | Q) return 4 ;;
-                *) printf 'Please enter y or n (b/Esc: back | q: exit).\n' ;;
+            y | Y)
+                removal_inventory include-links || return 1
+                break
+                ;;
+            n | N | '') break ;;
+            b | B) return 3 ;;
+            q | Q) return 4 ;;
+            *) printf 'Please enter y or n (b/Esc: back | q: exit).\n' ;;
             esac
         done
     fi
@@ -2049,7 +2229,10 @@ confirm_backup_removal() {
     local backups=()
     require_node || return 1
     names=$(list_setup_backups)
-    if [ -z "$names" ]; then printf 'No setup backups found.\n'; return 0; fi
+    if [ -z "$names" ]; then
+        printf 'No setup backups found.\n'
+        return 0
+    fi
     printf '\nRemove all setup backup directories listed below:\n'
     while IFS= read -r name; do
         backups+=("$name")
@@ -2067,12 +2250,22 @@ preflight() {
     local item
     for item in "$@"; do
         case "$item" in
-            0) require_command curl || return 1 ;;
-            1) require_command curl || return 1; require_node || return 1 ;;
-            2) : ;;
-            3) require_node || return 1 ;;
-            5) require_node || return 1; require_command npm || return 1 ;;
-            4) require_command curl || return 1; require_node || return 1; require_command npx || return 1 ;;
+        0) require_command curl || return 1 ;;
+        1)
+            require_command curl || return 1
+            require_node || return 1
+            ;;
+        2) : ;;
+        3) require_node || return 1 ;;
+        5)
+            require_node || return 1
+            require_command npm || return 1
+            ;;
+        4)
+            require_command curl || return 1
+            require_node || return 1
+            require_command npx || return 1
+            ;;
         esac
     done
 }
@@ -2082,40 +2275,53 @@ execute_plan() {
     local completed_sources=() names=()
     for item in "${AGENT_ITEMS[@]+"${AGENT_ITEMS[@]}"}"; do
         case "$item" in
-            0) run_item 'Codex CLI' install_codex ;;
-            1)
-                before=${#FAILED[@]}
-                run_item 'Claude Code CLI' install_claude
-                if [ "${#FAILED[@]}" -eq "$before" ]; then
-                    if resolve_resource scripts/statusline.sh; then
-                        run_item 'Claude statusline' install_statusline
-                    else FAILED+=('Claude statusline: resource unavailable'); fi
-                else FAILED+=('Claude statusline: skipped because Claude installation failed'); fi ;;
-            2)
-                for ((index=0; index<${#SELECTED_RULES[@]}; index++)); do
-                    other="${SELECTED_RULES[index]}"
-                    source_scope="${SELECTED_RULE_SOURCES[index]:-$INSTALL_SCOPE}"
-                    if ! resolve_rule_source "$source_scope"; then FAILED+=("$source_scope rule: $other (resource unavailable)"); continue; fi
-                    run_item "$INSTALL_SCOPE rule: $other ($RULE_TARGETS)" apply_rule "$other" "$INSTALL_SCOPE" "$RULE_TARGETS" install "$source_scope"
-                done ;;
-            5)
-                before=${#FAILED[@]}
-                run_item 'Pi CLI' install_pi
-                if [ "${#FAILED[@]}" -eq "$before" ]; then
-                    for package in "${PI_PACKAGES[@]}"; do run_item "$package" pi install "$package"; done
-                else
-                    for package in "${PI_PACKAGES[@]}"; do FAILED+=("$package: skipped because Pi installation failed"); done
-                fi ;;
-            3)
-                if ! resolve_resource scripts/statusline.sh; then FAILED+=('Claude statusline: resource unavailable'); continue; fi
-                run_item 'Claude statusline' install_statusline ;;
+        0) run_item 'Codex CLI' install_codex ;;
+        1)
+            before=${#FAILED[@]}
+            run_item 'Claude Code CLI' install_claude
+            if [ "${#FAILED[@]}" -eq "$before" ]; then
+                if resolve_resource scripts/statusline.sh; then
+                    run_item 'Claude statusline' install_statusline
+                else FAILED+=('Claude statusline: resource unavailable'); fi
+            else FAILED+=('Claude statusline: skipped because Claude installation failed'); fi
+            ;;
+        2)
+            for ((index = 0; index < ${#SELECTED_RULES[@]}; index++)); do
+                other="${SELECTED_RULES[index]}"
+                source_scope="${SELECTED_RULE_SOURCES[index]:-$INSTALL_SCOPE}"
+                if ! resolve_rule_source "$source_scope"; then
+                    FAILED+=("$source_scope rule: $other (resource unavailable)")
+                    continue
+                fi
+                run_item "$INSTALL_SCOPE rule: $other ($RULE_TARGETS)" apply_rule "$other" "$INSTALL_SCOPE" "$RULE_TARGETS" install "$source_scope"
+            done
+            ;;
+        5)
+            before=${#FAILED[@]}
+            run_item 'Pi CLI' install_pi
+            if [ "${#FAILED[@]}" -eq "$before" ]; then
+                for package in "${PI_PACKAGES[@]}"; do run_item "$package" pi install "$package"; done
+            else
+                for package in "${PI_PACKAGES[@]}"; do FAILED+=("$package: skipped because Pi installation failed"); done
+            fi
+            ;;
+        3)
+            if ! resolve_resource scripts/statusline.sh; then
+                FAILED+=('Claude statusline: resource unavailable')
+                continue
+            fi
+            run_item 'Claude statusline' install_statusline
+            ;;
         esac
     done
     for item in "${SELECTED_SKILLS[@]+"${SELECTED_SKILLS[@]}"}"; do
         source="${SKILL_SOURCES[item]}"
         handled=0
         for previous in "${completed_sources[@]+"${completed_sources[@]}"}"; do
-            if [ "$previous" = "$source" ]; then handled=1; break; fi
+            if [ "$previous" = "$source" ]; then
+                handled=1
+                break
+            fi
         done
         [ "$handled" -eq 0 ] || continue
         names=()
@@ -2152,7 +2358,7 @@ print_install_plan() {
         if [ "$i" -eq 5 ]; then printf '    %s (bundled)\n' "${PI_PACKAGES[@]}"; fi
     done
     if [ "${#SELECTED_RULES[@]}" -gt 0 ]; then
-        for ((index=0; index<${#SELECTED_RULES[@]}; index++)); do
+        for ((index = 0; index < ${#SELECTED_RULES[@]}; index++)); do
             i="${SELECTED_RULES[index]}"
             source_scope="${SELECTED_RULE_SOURCES[index]:-$INSTALL_SCOPE}"
             resolve_rule_source "$source_scope" || return 1
@@ -2169,12 +2375,13 @@ print_install_plan() {
                 printf '  \033[32m%s / %s -> %s\033[0m\n' "$INSTALL_SCOPE" "$i" "$rule_targets"
                 for destination in $rule_targets; do
                     case "$destination" in
-                        codex) printf '    \033[32m%s/.codex/AGENTS.md\033[0m\n' "$HOME" ;;
-                        pi) printf '    \033[32m%s\033[0m\n' "$(pi_rule_path)" ;;
-                        claude)
-                            destination="$HOME/.claude/rules/$i.md"
-                            if [ "$i" = agent-behavior ]; then destination="$HOME/.claude/CLAUDE.md"; fi
-                            printf '    \033[32m%s\033[0m\n' "$destination" ;;
+                    codex) printf '    \033[32m%s/.codex/AGENTS.md\033[0m\n' "$HOME" ;;
+                    pi) printf '    \033[32m%s\033[0m\n' "$(pi_rule_path)" ;;
+                    claude)
+                        destination="$HOME/.claude/rules/$i.md"
+                        if [ "$i" = agent-behavior ]; then destination="$HOME/.claude/CLAUDE.md"; fi
+                        printf '    \033[32m%s\033[0m\n' "$destination"
+                        ;;
                     esac
                 done
             fi
@@ -2202,7 +2409,11 @@ print_install_plan() {
 # would disable errexit inside its file writes and backup steps.
 run_interactive_task() {
     set +e
-    ( set -e; set -o pipefail; "$@" )
+    (
+        set -e
+        set -o pipefail
+        "$@"
+    )
     INTERACTIVE_RESULT=$?
     set -e
     if [ "$INTERACTIVE_RESULT" -ne 0 ]; then
@@ -2226,428 +2437,639 @@ interactive_setup() {
     [ "$page" != agent_choices ] || agent_requested=1
     while :; do
         case "$page" in
-            main)
-                choose_items 0 'AGENT CONFIG' 0 0 'Install' 'Remove' 'Remove all backups' 'List' 'Exit' || return "$session_status"
-                case "${MENU_SELECTED[0]}" in
-                    0) page=install_scope ;;
-                    1) removal_scanned=0; page=remove_scope ;;
-                    2) run_interactive_task confirm_backup_removal; page=complete ;;
-                    3) page=list_categories ;;
-                    4) return "$session_status" ;;
-                esac ;;
-            list_categories)
-                choose_items 15 'List: choose content' 1 '1 1' Rules Skills || {
-                    [ "$?" -eq 2 ] || return "$session_status"
-                    page=main; continue
-                }
-                [ "${#MENU_SELECTED[@]}" -gt 0 ] || { page=main; continue; }
-                LIST_RULES=0; LIST_SKILLS=0
-                for i in "${MENU_SELECTED[@]}"; do
-                    if [ "$i" -eq 0 ]; then LIST_RULES=1; else LIST_SKILLS=1; fi
-                done
-                page=list_mode ;;
-            list_mode)
-                choose_items 16 'List: choose location' 0 0 Local Remote || {
-                    [ "$?" -eq 2 ] || return "$session_status"
-                    page=list_categories; continue
-                }
-                if [ "${MENU_SELECTED[0]}" -eq 0 ]; then
-                    LIST_MODE=local; page=list_scope
-                else
-                    LIST_MODE=remote; run_interactive_task list_content interactive; list_result=1; page=complete
-                fi ;;
-            list_scope)
-                choose_items 17 'List: choose scope' 0 0 Global Project || {
-                    [ "$?" -eq 2 ] || return "$session_status"
-                    page=list_mode; continue
-                }
-                if [ "${MENU_SELECTED[0]}" -eq 0 ]; then LIST_SCOPE=global; else LIST_SCOPE=project; fi
-                page=list_agents ;;
-            list_agents)
-                local list_agent_labels=(Codex 'Claude Code') list_agent_defaults='1 0'
-                if [ "$LIST_SCOPE" = global ] && [ "$LIST_RULES" -eq 1 ]; then
-                    list_agent_labels+=(Pi); list_agent_defaults+=' 0'
-                elif [ "${MENU_CURSORS[18]:-0}" -gt 1 ]; then MENU_CURSORS[18]=1; fi
-                choose_items 18 'List: choose agents' 1 "$list_agent_defaults" "${list_agent_labels[@]}" || {
-                    [ "$?" -eq 2 ] || return "$session_status"
-                    page=list_scope; continue
-                }
-                [ "${#MENU_SELECTED[@]}" -gt 0 ] || { page=list_scope; continue; }
-                LIST_CODEX=0; LIST_CLAUDE=0; LIST_PI=0
-                for i in "${MENU_SELECTED[@]}"; do
-                    case "$i" in 0) LIST_CODEX=1 ;; 1) LIST_CLAUDE=1 ;; 2) LIST_PI=1 ;; esac
-                done
-                run_interactive_task list_content interactive; list_result=1; page=complete ;;
-            remove_categories)
-                choose_items 5 "$remove_title / Content" 1 0 Rules Skills || {
-                    [ "$?" -eq 2 ] || return "$session_status"
-                    page=remove_scope; continue
-                }
-                [ "${#MENU_SELECTED[@]}" -gt 0 ] || { printf 'No content selected; cancelled.\n'; page=complete; continue; }
-                REMOVE_RULES=0; REMOVE_SKILLS=0
-                for i in "${MENU_SELECTED[@]}"; do
-                    if [ "$i" -eq 0 ]; then REMOVE_RULES=1; else REMOVE_SKILLS=1; fi
-                done
-                page=remove_agents ;;
-            remove_scope)
-                choose_items 14 'Remove / Choose scope' 0 0 Global "$project_option" || {
-                    [ "$?" -eq 2 ] || return "$session_status"
-                    page=main; continue
-                }
-                if [ "${MENU_SELECTED[0]}" -eq 0 ]; then
-                    REMOVE_SCOPE=global; remove_title='Remove / Global'
-                else
-                    REMOVE_SCOPE=project; remove_title='Remove / Project'
-                fi
-                page=remove_categories ;;
-            remove_agents)
-                local remove_agent_labels=(Codex 'Claude Code') remove_agent_defaults='1 0'
-                if [ "$REMOVE_SCOPE" = global ]; then
-                    remove_agent_labels+=('Pi (rules only)')
-                    remove_agent_defaults+=' 0'
-                elif [ "${MENU_CURSORS[4]:-0}" -gt 1 ]; then
-                    MENU_CURSORS[4]=1
-                fi
-                choose_items 4 "$remove_title / Agents" 1 "$remove_agent_defaults" "${remove_agent_labels[@]}" || {
-                    [ "$?" -eq 2 ] || return "$session_status"
-                    page=remove_categories; continue
-                }
-                [ "${#MENU_SELECTED[@]}" -gt 0 ] || { printf 'No agents selected; cancelled.\n'; page=complete; continue; }
-                REMOVE_CODEX=0; REMOVE_CLAUDE=0; REMOVE_PI=0
-                for i in "${MENU_SELECTED[@]}"; do
-                    case "$i" in 0) REMOVE_CODEX=1 ;; 1) REMOVE_CLAUDE=1 ;; 2) REMOVE_PI=1 ;; esac
-                done
-                signature="$REMOVE_SCOPE/$PROJECT_TARGET/$REMOVE_CODEX/$REMOVE_CLAUDE/$REMOVE_PI/$REMOVE_RULES/$REMOVE_SKILLS/$(pi_rule_path)"
-                if [ "$removal_scanned" -eq 0 ] || [ "$signature" != "$removal_signature" ]; then
-                    if ! scan_removal_inventory; then FAILED+=('Installed content scan failed'); show_summary=1; page=complete; continue; fi
-                    removal_signature="$signature"; removal_scanned=1
-                fi
-                page=remove_rules ;;
-            remove_rules)
-                if [ "$REMOVE_RULES" -eq 1 ] && [ "${#REMOVAL_RULE_IDS[@]}" -gt 0 ]; then
-                    choose_items 12 "$remove_title / Rules" 1 0 "${REMOVAL_RULE_LABELS[@]}" || {
-                        [ "$?" -eq 2 ] || return "$session_status"
-                        page=remove_agents; continue
-                    }
-                    REMOVAL_RULE_SELECTION=("${MENU_SELECTED[@]+"${MENU_SELECTED[@]}"}")
-                fi
-                page=remove_skills ;;
-            remove_skills)
-                if [ "$REMOVE_SKILLS" -eq 1 ] && [ "${#REMOVAL_SKILL_IDS[@]}" -gt 0 ]; then
-                    REPO_ITEM_LABELS=("${REMOVAL_SKILL_LABELS[@]}"); REPO_ITEM_GROUPS=("${REMOVAL_SKILL_GROUPS[@]}")
-                    REPO_SELECTED=("${REMOVAL_SKILL_SELECTION[@]+"${REMOVAL_SKILL_SELECTION[@]}"}")
-                    choose_skill_repositories 13 "$remove_title / Skills by repository" 31 || {
-                        menu_status=$?
-                        REMOVAL_SKILL_SELECTION=("${REPO_SELECTED[@]+"${REPO_SELECTED[@]}"}")
-                        [ "$menu_status" -eq 2 ] || return "$session_status"
-                        if [ "$REMOVE_RULES" -eq 1 ] && [ "${#REMOVAL_RULE_IDS[@]}" -gt 0 ]; then page=remove_rules; else page=remove_agents; fi
-                        continue
-                    }
-                    REMOVAL_SKILL_SELECTION=("${REPO_SELECTED[@]+"${REPO_SELECTED[@]}"}")
-                fi
-                preview_selected_removal || {
-                    menu_status=$?
-                    if [ "$menu_status" -eq 3 ]; then continue; fi
-                    if [ "$menu_status" -eq 4 ]; then return "$session_status"; fi
-                    if [ "$menu_status" -ne 2 ]; then FAILED+=('Removal preview failed; rescan required'); show_summary=1; fi
-                    page=complete; continue
-                }
-                page=remove_backup ;;
-            remove_backup)
-                removal_backup=0
-                printf 'Create backup? [y/N] (b/Esc: back | q: exit): '
-                read_back_answer || return "$session_status"
-                case "$REPLY" in
-                    y | Y) removal_backup=1; page=remove_confirm ;;
-                    n | N | '') page=remove_confirm ;;
-                    q | Q) return "$session_status" ;;
-                    b | B)
-                        if [ "$REMOVE_SKILLS" -eq 1 ] && [ "${#REMOVAL_SKILL_IDS[@]}" -gt 0 ]; then page=remove_skills;
-                        elif [ "$REMOVE_RULES" -eq 1 ] && [ "${#REMOVAL_RULE_IDS[@]}" -gt 0 ]; then page=remove_rules;
-                        else page=remove_agents; fi
-                        continue ;;
-                    *) printf 'Please enter y or n (b/Esc: back | q: exit).\n' ;;
-                esac ;;
-            remove_confirm)
-                printf '\n%s\n  Targets: %s\n' "$remove_title" "$REMOVAL_TARGET_COUNT"
-                if [ "$removal_backup" -eq 1 ]; then
-                    printf '  Backup: create before removal\n'
-                else
-                    printf '  Backup: none\n'
-                fi
-                printf 'Confirm removal? [Y/n] (b/Esc: back | q: exit): '
-                read_back_answer || return "$session_status"
-                case "$REPLY" in
-                    y | Y | '') run_interactive_task removal_inventory remove "$removal_backup" ;;
-                    q | Q) return "$session_status" ;;
-                    b | B) page=remove_backup; continue ;;
-                    *) printf 'Cancelled.\n' ;;
-                esac
-                page=complete ;;
-            install_scope)
-                choose_items 7 'Install / Choose scope' 0 0 Global "$project_option" || {
-                    [ "$?" -eq 2 ] || return "$session_status"
-                    page=main; continue
-                }
-                if [ "${MENU_SELECTED[0]}" -eq 0 ]; then
-                    scope=global; install_title='Install / Global'
-                else
-                    scope=project; install_title='Install / Project'
-                fi
-                if [ "$scope" != "$INSTALL_SCOPE" ]; then
-                    SELECTED_RULES=(); SELECTED_RULE_SOURCES=(); rules_visited=0
-                    SKILL_NAMES=(); SKILL_SOURCES=(); SKILL_GROUPS=(); SKILL_PICKED=(); SKILL_EXPLICIT=()
-                    MENU_VISITED[6]=0
-                fi
-                INSTALL_SCOPE="$scope"
-                page=tasks ;;
-            tasks)
-                choose_items 1 "$install_title / Tasks" 1 0 "${task_labels[@]}" || {
-                    [ "$?" -eq 2 ] || return "$session_status"
-                    page=install_scope; continue
-                }
-                tasks=("${MENU_SELECTED[@]+"${MENU_SELECTED[@]}"}")
-                [ "${#tasks[@]}" -gt 0 ] || { printf 'No tasks selected.\n'; page=complete; continue; }
-                AGENT_ITEMS=(); INSTALL_SKILLS=0; agent_requested=0
-                for task in "${tasks[@]}"; do
-                    case "$task" in
-                    0) AGENT_ITEMS+=(2) ;;
-                    1) INSTALL_SKILLS=1 ;;
-                    2) agent_requested=1 ;;
-                    esac
-                done
-                if [ "$INSTALL_SKILLS" -eq 1 ] && ! preflight 4; then
-                    FAILED+=('Installation preparation failed'); show_summary=1; page=complete; continue
-                fi
-                if [ "$agent_requested" -eq 1 ]; then page=agent_choices; else page=before_rules; fi ;;
-            agent_choices)
-                choose_items 12 "$install_title / Agent CLIs" 1 '1 0 0' Codex 'Claude Code (with statusline)' 'Pi (with three packages)' || {
-                    [ "$?" -eq 2 ] || return "$session_status"
-                    page=tasks; continue
-                }
-                # Back/re-entry replaces the previous Agent choices, preserving Rules.
-                if [[ " ${AGENT_ITEMS[*]+${AGENT_ITEMS[*]}} " = *" 2 "* ]]; then AGENT_ITEMS=(2); else AGENT_ITEMS=(); fi
-                for i in "${MENU_SELECTED[@]+"${MENU_SELECTED[@]}"}"; do
-                    case "$i" in 0) AGENT_ITEMS+=(0) ;; 1) AGENT_ITEMS+=(1) ;; 2) AGENT_ITEMS+=(5) ;; esac
-                done
-                if ! preflight "${AGENT_ITEMS[@]+"${AGENT_ITEMS[@]}"}"; then
-                    FAILED+=('Installation preparation failed'); show_summary=1; page=complete; continue
-                fi
-                if [[ " ${AGENT_ITEMS[*]+${AGENT_ITEMS[*]}} " = *" 1 "* ]] && ! resolve_resource scripts/statusline.sh; then
-                    FAILED+=('Installation preparation failed'); show_summary=1; page=complete; continue
-                fi
-                page=before_rules ;;
-            before_rules)
-                if [[ " ${AGENT_ITEMS[*]+${AGENT_ITEMS[*]}} " = *" 2 "* ]]; then page=rule_choices;
-                else SELECTED_RULES=(); SELECTED_RULE_SOURCES=(); rules_visited=0; page=after_rules; fi ;;
-            rule_choices)
-                if [ "$RULE_CATALOG_PROJECT" -eq 0 ]; then
-                    if ! load_rule_catalog project; then
-                        FAILED+=('project rule catalog unavailable'); show_summary=1; page=complete; continue
-                    fi
-                fi
-                if ! load_waza_rules; then
-                    choose_items 13 "$install_title / Waza rules unavailable${WAZA_RULES_ERROR:+$'\n'$WAZA_RULES_ERROR}" 0 0 Retry 'Continue without Waza rules' Back || {
-                        [ "$?" -eq 2 ] || return "$session_status"
-                        page=tasks; continue
-                    }
-                    case "${MENU_SELECTED[0]}" in
-                        0) continue ;;
-                        2) page=tasks; continue ;;
-                    esac
-                    RULE_NAMES_WAZA=()
-                fi
-                rule_labels=(); rule_names=(); rule_sources=()
-                for i in "${RULE_NAMES_WAZA[@]+"${RULE_NAMES_WAZA[@]}"}"; do
-                    rule_labels+=("${i#waza-}"); rule_names+=("$i"); rule_sources+=(waza)
-                done
-                for i in "${RULE_NAMES_GLOBAL[@]+"${RULE_NAMES_GLOBAL[@]}"}"; do
-                    rule_labels+=("$i"); rule_names+=("$i"); rule_sources+=(global)
-                done
-                for i in "${RULE_NAMES_PROJECT[@]+"${RULE_NAMES_PROJECT[@]}"}"; do
-                    rule_labels+=("$i"); rule_names+=("$i"); rule_sources+=(project)
-                done
-                if [ "${#rule_labels[@]}" -eq 0 ]; then FAILED+=('No rules available'); show_summary=1; page=complete; continue; fi
-                REPO_ITEM_LABELS=("${rule_labels[@]}"); REPO_ITEM_GROUPS=(); REPO_SELECTED=()
-                for ((i=0; i<${#rule_names[@]}; i++)); do
-                    source_scope="${rule_sources[i]}"
-                    if [ "$source_scope" = waza ]; then REPO_ITEM_GROUPS+=(Waza); else REPO_ITEM_GROUPS+=(Gwyntoria); fi
-                    if [ "$INSTALL_SCOPE" = global ] && [ "$rules_visited" -eq 0 ]; then
-                        case "$source_scope:${rule_names[i]}" in
-                            waza:waza-anti-patterns | waza:waza-clarity | waza:waza-durable-context | project:chinese-punctuation)
-                                REPO_SELECTED+=("$i") ;;
-                        esac
-                    fi
-                    for ((selected_rule=0; selected_rule<${#SELECTED_RULES[@]}; selected_rule++)); do
-                        if [ "${SELECTED_RULES[selected_rule]}" = "${rule_names[i]}" ] &&
-                           [ "${SELECTED_RULE_SOURCES[selected_rule]}" = "$source_scope" ]; then REPO_SELECTED+=("$i"); break; fi
-                    done
-                done
-                menu_status=0
-                choose_skill_repositories 9 "$install_title / Rules" 32 || menu_status=$?
-                rules_visited=1
-                SELECTED_RULES=(); SELECTED_RULE_SOURCES=()
-                for i in "${REPO_SELECTED[@]+"${REPO_SELECTED[@]}"}"; do
-                    SELECTED_RULES+=("${rule_names[i]}"); SELECTED_RULE_SOURCES+=("${rule_sources[i]}")
-                done
-                if [ "$menu_status" -ne 0 ]; then
-                    [ "$menu_status" -eq 2 ] || return "$session_status"
-                    if [ "$agent_requested" -eq 1 ]; then page=agent_choices; else page=tasks; fi
+        main)
+            choose_items 0 'AGENT CONFIG' 0 0 'Install' 'Remove' 'Remove all backups' 'List' 'Exit' || return "$session_status"
+            case "${MENU_SELECTED[0]}" in
+            0) page=install_scope ;;
+            1)
+                removal_scanned=0
+                page=remove_scope
+                ;;
+            2)
+                run_interactive_task confirm_backup_removal
+                page=complete
+                ;;
+            3) page=list_categories ;;
+            4) return "$session_status" ;;
+            esac
+            ;;
+        list_categories)
+            choose_items 15 'List: choose content' 1 '1 1' Rules Skills || {
+                [ "$?" -eq 2 ] || return "$session_status"
+                page=main
+                continue
+            }
+            [ "${#MENU_SELECTED[@]}" -gt 0 ] || {
+                page=main
+                continue
+            }
+            LIST_RULES=0
+            LIST_SKILLS=0
+            for i in "${MENU_SELECTED[@]}"; do
+                if [ "$i" -eq 0 ]; then LIST_RULES=1; else LIST_SKILLS=1; fi
+            done
+            page=list_mode
+            ;;
+        list_mode)
+            choose_items 16 'List: choose location' 0 0 Local Remote || {
+                [ "$?" -eq 2 ] || return "$session_status"
+                page=list_categories
+                continue
+            }
+            if [ "${MENU_SELECTED[0]}" -eq 0 ]; then
+                LIST_MODE=local
+                page=list_scope
+            else
+                LIST_MODE=remote
+                run_interactive_task list_content interactive
+                list_result=1
+                page=complete
+            fi
+            ;;
+        list_scope)
+            choose_items 17 'List: choose scope' 0 0 Global Project || {
+                [ "$?" -eq 2 ] || return "$session_status"
+                page=list_mode
+                continue
+            }
+            if [ "${MENU_SELECTED[0]}" -eq 0 ]; then LIST_SCOPE=global; else LIST_SCOPE=project; fi
+            page=list_agents
+            ;;
+        list_agents)
+            local list_agent_labels=(Codex 'Claude Code') list_agent_defaults='1 0'
+            if [ "$LIST_SCOPE" = global ] && [ "$LIST_RULES" -eq 1 ]; then
+                list_agent_labels+=(Pi)
+                list_agent_defaults+=' 0'
+            elif [ "${MENU_CURSORS[18]:-0}" -gt 1 ]; then MENU_CURSORS[18]=1; fi
+            choose_items 18 'List: choose agents' 1 "$list_agent_defaults" "${list_agent_labels[@]}" || {
+                [ "$?" -eq 2 ] || return "$session_status"
+                page=list_scope
+                continue
+            }
+            [ "${#MENU_SELECTED[@]}" -gt 0 ] || {
+                page=list_scope
+                continue
+            }
+            LIST_CODEX=0
+            LIST_CLAUDE=0
+            LIST_PI=0
+            for i in "${MENU_SELECTED[@]}"; do
+                case "$i" in 0) LIST_CODEX=1 ;; 1) LIST_CLAUDE=1 ;; 2) LIST_PI=1 ;; esac
+            done
+            run_interactive_task list_content interactive
+            list_result=1
+            page=complete
+            ;;
+        remove_categories)
+            choose_items 5 "$remove_title / Content" 1 0 Rules Skills || {
+                [ "$?" -eq 2 ] || return "$session_status"
+                page=remove_scope
+                continue
+            }
+            [ "${#MENU_SELECTED[@]}" -gt 0 ] || {
+                printf 'No content selected; cancelled.\n'
+                page=complete
+                continue
+            }
+            REMOVE_RULES=0
+            REMOVE_SKILLS=0
+            for i in "${MENU_SELECTED[@]}"; do
+                if [ "$i" -eq 0 ]; then REMOVE_RULES=1; else REMOVE_SKILLS=1; fi
+            done
+            page=remove_agents
+            ;;
+        remove_scope)
+            choose_items 14 'Remove / Choose scope' 0 0 Global "$project_option" || {
+                [ "$?" -eq 2 ] || return "$session_status"
+                page=main
+                continue
+            }
+            if [ "${MENU_SELECTED[0]}" -eq 0 ]; then
+                REMOVE_SCOPE=global
+                remove_title='Remove / Global'
+            else
+                REMOVE_SCOPE=project
+                remove_title='Remove / Project'
+            fi
+            page=remove_categories
+            ;;
+        remove_agents)
+            local remove_agent_labels=(Codex 'Claude Code') remove_agent_defaults='1 0'
+            if [ "$REMOVE_SCOPE" = global ]; then
+                remove_agent_labels+=('Pi (rules only)')
+                remove_agent_defaults+=' 0'
+            elif [ "${MENU_CURSORS[4]:-0}" -gt 1 ]; then
+                MENU_CURSORS[4]=1
+            fi
+            choose_items 4 "$remove_title / Agents" 1 "$remove_agent_defaults" "${remove_agent_labels[@]}" || {
+                [ "$?" -eq 2 ] || return "$session_status"
+                page=remove_categories
+                continue
+            }
+            [ "${#MENU_SELECTED[@]}" -gt 0 ] || {
+                printf 'No agents selected; cancelled.\n'
+                page=complete
+                continue
+            }
+            REMOVE_CODEX=0
+            REMOVE_CLAUDE=0
+            REMOVE_PI=0
+            for i in "${MENU_SELECTED[@]}"; do
+                case "$i" in 0) REMOVE_CODEX=1 ;; 1) REMOVE_CLAUDE=1 ;; 2) REMOVE_PI=1 ;; esac
+            done
+            signature="$REMOVE_SCOPE/$PROJECT_TARGET/$REMOVE_CODEX/$REMOVE_CLAUDE/$REMOVE_PI/$REMOVE_RULES/$REMOVE_SKILLS/$(pi_rule_path)"
+            if [ "$removal_scanned" -eq 0 ] || [ "$signature" != "$removal_signature" ]; then
+                if ! scan_removal_inventory; then
+                    FAILED+=('Installed content scan failed')
+                    show_summary=1
+                    page=complete
                     continue
                 fi
-                if [ "$INSTALL_SCOPE" = global ] && [ "${#SELECTED_RULES[@]}" -gt 0 ]; then
-                    page=rule_targets
-                else
-                    if [ "$INSTALL_SCOPE" = project ]; then RULE_TARGETS=codex; fi
-                    page=after_rules
-                fi ;;
-            rule_targets)
-                choose_items 8 "$install_title / Agents for rules" 1 '1 0 0' Codex 'Claude Code' Pi || {
+                removal_signature="$signature"
+                removal_scanned=1
+            fi
+            page=remove_rules
+            ;;
+        remove_rules)
+            if [ "$REMOVE_RULES" -eq 1 ] && [ "${#REMOVAL_RULE_IDS[@]}" -gt 0 ]; then
+                choose_items 12 "$remove_title / Rules" 1 0 "${REMOVAL_RULE_LABELS[@]}" || {
                     [ "$?" -eq 2 ] || return "$session_status"
-                    page=rule_choices; continue
+                    page=remove_agents
+                    continue
                 }
-                [ "${#MENU_SELECTED[@]}" -gt 0 ] || { printf 'No rule targets selected; cancelled.\n'; page=complete; continue; }
-                RULE_TARGETS=""
-                for i in "${MENU_SELECTED[@]}"; do
-                    case "$i" in 0) destination=codex ;; 1) destination=claude ;; 2) destination=pi ;; esac
-                    RULE_TARGETS="${RULE_TARGETS:+$RULE_TARGETS }$destination"
-                done
-                page=after_rules ;;
-            after_rules)
-                if [ "$INSTALL_SKILLS" -eq 1 ]; then
-                    page=skill_repos
-                else
-                    SELECTED_SKILLS=()
-                    page=review
-                fi ;;
-            skill_repos)
-                repo_labels=()
-                repo_defaults=()
-                for i in "${!SKILL_SOURCE_GROUPS[@]}"; do
-                    repo_url="$(skill_source_url "${SKILL_SOURCE_GROUPS[i]}")"
-                    repo_labels+=("${repo_url#https://github.com/}")
-                    if [ "$INSTALL_SCOPE" = global ] && [ -n "${SKILL_SOURCE_DEFAULTS[i]}" ]; then
-                        repo_defaults+=(1)
-                    else
-                        repo_defaults+=(0)
+                REMOVAL_RULE_SELECTION=("${MENU_SELECTED[@]+"${MENU_SELECTED[@]}"}")
+            fi
+            page=remove_skills
+            ;;
+        remove_skills)
+            if [ "$REMOVE_SKILLS" -eq 1 ] && [ "${#REMOVAL_SKILL_IDS[@]}" -gt 0 ]; then
+                REPO_ITEM_LABELS=("${REMOVAL_SKILL_LABELS[@]}")
+                REPO_ITEM_GROUPS=("${REMOVAL_SKILL_GROUPS[@]}")
+                REPO_SELECTED=("${REMOVAL_SKILL_SELECTION[@]+"${REMOVAL_SKILL_SELECTION[@]}"}")
+                choose_skill_repositories 13 "$remove_title / Skills by repository" 31 || {
+                    menu_status=$?
+                    REMOVAL_SKILL_SELECTION=("${REPO_SELECTED[@]+"${REPO_SELECTED[@]}"}")
+                    [ "$menu_status" -eq 2 ] || return "$session_status"
+                    if [ "$REMOVE_RULES" -eq 1 ] && [ "${#REMOVAL_RULE_IDS[@]}" -gt 0 ]; then page=remove_rules; else page=remove_agents; fi
+                    continue
+                }
+                REMOVAL_SKILL_SELECTION=("${REPO_SELECTED[@]+"${REPO_SELECTED[@]}"}")
+            fi
+            preview_selected_removal || {
+                menu_status=$?
+                if [ "$menu_status" -eq 3 ]; then continue; fi
+                if [ "$menu_status" -eq 4 ]; then return "$session_status"; fi
+                if [ "$menu_status" -ne 2 ]; then
+                    FAILED+=('Removal preview failed; rescan required')
+                    show_summary=1
+                fi
+                page=complete
+                continue
+            }
+            page=remove_backup
+            ;;
+        remove_backup)
+            removal_backup=0
+            printf 'Create backup? [y/N] (b/Esc: back | q: exit): '
+            read_back_answer || return "$session_status"
+            case "$REPLY" in
+            y | Y)
+                removal_backup=1
+                page=remove_confirm
+                ;;
+            n | N | '') page=remove_confirm ;;
+            q | Q) return "$session_status" ;;
+            b | B)
+                if [ "$REMOVE_SKILLS" -eq 1 ] && [ "${#REMOVAL_SKILL_IDS[@]}" -gt 0 ]; then
+                    page=remove_skills
+                elif [ "$REMOVE_RULES" -eq 1 ] && [ "${#REMOVAL_RULE_IDS[@]}" -gt 0 ]; then
+                    page=remove_rules
+                else page=remove_agents; fi
+                continue
+                ;;
+            *) printf 'Please enter y or n (b/Esc: back | q: exit).\n' ;;
+            esac
+            ;;
+        remove_confirm)
+            printf '\n%s\n  Targets: %s\n' "$remove_title" "$REMOVAL_TARGET_COUNT"
+            if [ "$removal_backup" -eq 1 ]; then
+                printf '  Backup: create before removal\n'
+            else
+                printf '  Backup: none\n'
+            fi
+            printf 'Confirm removal? [Y/n] (b/Esc: back | q: exit): '
+            read_back_answer || return "$session_status"
+            case "$REPLY" in
+            y | Y | '') run_interactive_task removal_inventory remove "$removal_backup" ;;
+            q | Q) return "$session_status" ;;
+            b | B)
+                page=remove_backup
+                continue
+                ;;
+            *) printf 'Cancelled.\n' ;;
+            esac
+            page=complete
+            ;;
+        install_scope)
+            choose_items 7 'Install / Choose scope' 0 0 Global "$project_option" || {
+                [ "$?" -eq 2 ] || return "$session_status"
+                page=main
+                continue
+            }
+            if [ "${MENU_SELECTED[0]}" -eq 0 ]; then
+                scope=global
+                install_title='Install / Global'
+            else
+                scope=project
+                install_title='Install / Project'
+            fi
+            if [ "$scope" != "$INSTALL_SCOPE" ]; then
+                SELECTED_RULES=()
+                SELECTED_RULE_SOURCES=()
+                rules_visited=0
+                SKILL_NAMES=()
+                SKILL_SOURCES=()
+                SKILL_GROUPS=()
+                SKILL_PICKED=()
+                SKILL_EXPLICIT=()
+                MENU_VISITED[6]=0
+            fi
+            INSTALL_SCOPE="$scope"
+            page=tasks
+            ;;
+        tasks)
+            choose_items 1 "$install_title / Tasks" 1 0 "${task_labels[@]}" || {
+                [ "$?" -eq 2 ] || return "$session_status"
+                page=install_scope
+                continue
+            }
+            tasks=("${MENU_SELECTED[@]+"${MENU_SELECTED[@]}"}")
+            [ "${#tasks[@]}" -gt 0 ] || {
+                printf 'No tasks selected.\n'
+                page=complete
+                continue
+            }
+            AGENT_ITEMS=()
+            INSTALL_SKILLS=0
+            agent_requested=0
+            for task in "${tasks[@]}"; do
+                case "$task" in
+                0) AGENT_ITEMS+=(2) ;;
+                1) INSTALL_SKILLS=1 ;;
+                2) agent_requested=1 ;;
+                esac
+            done
+            if [ "$INSTALL_SKILLS" -eq 1 ] && ! preflight 4; then
+                FAILED+=('Installation preparation failed')
+                show_summary=1
+                page=complete
+                continue
+            fi
+            if [ "$agent_requested" -eq 1 ]; then page=agent_choices; else page=before_rules; fi
+            ;;
+        agent_choices)
+            choose_items 12 "$install_title / Agent CLIs" 1 '1 0 0' Codex 'Claude Code (with statusline)' 'Pi (with three packages)' || {
+                [ "$?" -eq 2 ] || return "$session_status"
+                page=tasks
+                continue
+            }
+            # Back/re-entry replaces the previous Agent choices, preserving Rules.
+            if [[ " ${AGENT_ITEMS[*]+${AGENT_ITEMS[*]}} " = *" 2 "* ]]; then AGENT_ITEMS=(2); else AGENT_ITEMS=(); fi
+            for i in "${MENU_SELECTED[@]+"${MENU_SELECTED[@]}"}"; do
+                case "$i" in 0) AGENT_ITEMS+=(0) ;; 1) AGENT_ITEMS+=(1) ;; 2) AGENT_ITEMS+=(5) ;; esac
+            done
+            if ! preflight "${AGENT_ITEMS[@]+"${AGENT_ITEMS[@]}"}"; then
+                FAILED+=('Installation preparation failed')
+                show_summary=1
+                page=complete
+                continue
+            fi
+            if [[ " ${AGENT_ITEMS[*]+${AGENT_ITEMS[*]}} " = *" 1 "* ]] && ! resolve_resource scripts/statusline.sh; then
+                FAILED+=('Installation preparation failed')
+                show_summary=1
+                page=complete
+                continue
+            fi
+            page=before_rules
+            ;;
+        before_rules)
+            if [[ " ${AGENT_ITEMS[*]+${AGENT_ITEMS[*]}} " = *" 2 "* ]]; then
+                page=rule_choices
+            else
+                SELECTED_RULES=()
+                SELECTED_RULE_SOURCES=()
+                rules_visited=0
+                page=after_rules
+            fi
+            ;;
+        rule_choices)
+            if [ "$RULE_CATALOG_PROJECT" -eq 0 ]; then
+                if ! load_rule_catalog project; then
+                    FAILED+=('project rule catalog unavailable')
+                    show_summary=1
+                    page=complete
+                    continue
+                fi
+            fi
+            if ! load_waza_rules; then
+                choose_items 13 "$install_title / Waza rules unavailable${WAZA_RULES_ERROR:+$'\n'$WAZA_RULES_ERROR}" 0 0 Retry 'Continue without Waza rules' Back || {
+                    [ "$?" -eq 2 ] || return "$session_status"
+                    page=tasks
+                    continue
+                }
+                case "${MENU_SELECTED[0]}" in
+                0) continue ;;
+                2)
+                    page=tasks
+                    continue
+                    ;;
+                esac
+                RULE_NAMES_WAZA=()
+            fi
+            rule_labels=()
+            rule_names=()
+            rule_sources=()
+            for i in "${RULE_NAMES_WAZA[@]+"${RULE_NAMES_WAZA[@]}"}"; do
+                rule_labels+=("${i#waza-}")
+                rule_names+=("$i")
+                rule_sources+=(waza)
+            done
+            for i in "${RULE_NAMES_GLOBAL[@]+"${RULE_NAMES_GLOBAL[@]}"}"; do
+                rule_labels+=("$i")
+                rule_names+=("$i")
+                rule_sources+=(global)
+            done
+            for i in "${RULE_NAMES_PROJECT[@]+"${RULE_NAMES_PROJECT[@]}"}"; do
+                rule_labels+=("$i")
+                rule_names+=("$i")
+                rule_sources+=(project)
+            done
+            if [ "${#rule_labels[@]}" -eq 0 ]; then
+                FAILED+=('No rules available')
+                show_summary=1
+                page=complete
+                continue
+            fi
+            REPO_ITEM_LABELS=("${rule_labels[@]}")
+            REPO_ITEM_GROUPS=()
+            REPO_SELECTED=()
+            for ((i = 0; i < ${#rule_names[@]}; i++)); do
+                source_scope="${rule_sources[i]}"
+                if [ "$source_scope" = waza ]; then REPO_ITEM_GROUPS+=(Waza); else REPO_ITEM_GROUPS+=(Gwyntoria); fi
+                if [ "$INSTALL_SCOPE" = global ] && [ "$rules_visited" -eq 0 ]; then
+                    case "$source_scope:${rule_names[i]}" in
+                    waza:waza-anti-patterns | waza:waza-clarity | waza:waza-durable-context | project:chinese-punctuation)
+                        REPO_SELECTED+=("$i")
+                        ;;
+                    esac
+                fi
+                for ((selected_rule = 0; selected_rule < ${#SELECTED_RULES[@]}; selected_rule++)); do
+                    if [ "${SELECTED_RULES[selected_rule]}" = "${rule_names[i]}" ] &&
+                        [ "${SELECTED_RULE_SOURCES[selected_rule]}" = "$source_scope" ]; then
+                        REPO_SELECTED+=("$i")
+                        break
                     fi
                 done
-                choose_items 6 "$install_title / Skill repositories" 1 "${repo_defaults[*]}" "${repo_labels[@]}" || {
-                    [ "$?" -eq 2 ] || return "$session_status"
-                    if [[ " ${AGENT_ITEMS[*]+${AGENT_ITEMS[*]}} " = *" 2 "* ]]; then
+            done
+            menu_status=0
+            choose_skill_repositories 9 "$install_title / Rules" 32 || menu_status=$?
+            rules_visited=1
+            SELECTED_RULES=()
+            SELECTED_RULE_SOURCES=()
+            for i in "${REPO_SELECTED[@]+"${REPO_SELECTED[@]}"}"; do
+                SELECTED_RULES+=("${rule_names[i]}")
+                SELECTED_RULE_SOURCES+=("${rule_sources[i]}")
+            done
+            if [ "$menu_status" -ne 0 ]; then
+                [ "$menu_status" -eq 2 ] || return "$session_status"
+                if [ "$agent_requested" -eq 1 ]; then page=agent_choices; else page=tasks; fi
+                continue
+            fi
+            if [ "$INSTALL_SCOPE" = global ] && [ "${#SELECTED_RULES[@]}" -gt 0 ]; then
+                page=rule_targets
+            else
+                if [ "$INSTALL_SCOPE" = project ]; then RULE_TARGETS=codex; fi
+                page=after_rules
+            fi
+            ;;
+        rule_targets)
+            choose_items 8 "$install_title / Agents for rules" 1 '1 0 0' Codex 'Claude Code' Pi || {
+                [ "$?" -eq 2 ] || return "$session_status"
+                page=rule_choices
+                continue
+            }
+            [ "${#MENU_SELECTED[@]}" -gt 0 ] || {
+                printf 'No rule targets selected; cancelled.\n'
+                page=complete
+                continue
+            }
+            RULE_TARGETS=""
+            for i in "${MENU_SELECTED[@]}"; do
+                case "$i" in 0) destination=codex ;; 1) destination=claude ;; 2) destination=pi ;; esac
+                RULE_TARGETS="${RULE_TARGETS:+$RULE_TARGETS }$destination"
+            done
+            page=after_rules
+            ;;
+        after_rules)
+            if [ "$INSTALL_SKILLS" -eq 1 ]; then
+                page=skill_repos
+            else
+                SELECTED_SKILLS=()
+                page=review
+            fi
+            ;;
+        skill_repos)
+            repo_labels=()
+            repo_defaults=()
+            for i in "${!SKILL_SOURCE_GROUPS[@]}"; do
+                repo_url="$(skill_source_url "${SKILL_SOURCE_GROUPS[i]}")"
+                repo_labels+=("${repo_url#https://github.com/}")
+                if [ "$INSTALL_SCOPE" = global ] && [ -n "${SKILL_SOURCE_DEFAULTS[i]}" ]; then
+                    repo_defaults+=(1)
+                else
+                    repo_defaults+=(0)
+                fi
+            done
+            choose_items 6 "$install_title / Skill repositories" 1 "${repo_defaults[*]}" "${repo_labels[@]}" || {
+                [ "$?" -eq 2 ] || return "$session_status"
+                if [[ " ${AGENT_ITEMS[*]+${AGENT_ITEMS[*]}} " = *" 2 "* ]]; then
+                    if [ "$INSTALL_SCOPE" = global ] && [ "${#SELECTED_RULES[@]}" -gt 0 ]; then page=rule_targets; else page=rule_choices; fi
+                elif [ "$agent_requested" -eq 1 ]; then page=agent_choices; else page=tasks; fi
+                continue
+            }
+            SELECTED_REPOS=("${MENU_SELECTED[@]+"${MENU_SELECTED[@]}"}")
+            # Cached failures come back first so a later visit still reports them.
+            FAILED=("${CATALOG_FAILURES[@]+"${CATALOG_FAILURES[@]}"}")
+            for i in "${SELECTED_REPOS[@]+"${SELECTED_REPOS[@]}"}"; do
+                if [ "$INSTALL_SCOPE" = global ]; then
+                    catalog_add_group "${SKILL_SOURCE_GROUPS[i]}" "${SKILL_SOURCE_DEFAULTS[i]}"
+                else
+                    catalog_add_group "${SKILL_SOURCE_GROUPS[i]}" ''
+                fi
+            done
+            [ "${#FAILED[@]}" -eq 0 ] || session_status=1
+            catalog_collect_selection
+            catalog_build_view
+            if [ "${#REPO_ITEM_LABELS[@]}" -gt 0 ]; then page=skills; else page=review; fi
+            ;;
+        skills)
+            choose_skill_repositories 2 "$install_title / Skills by repository" 32 1 || {
+                menu_status=$?
+                catalog_sync_selection
+                [ "$menu_status" -eq 2 ] || return "$session_status"
+                page=skill_repos
+                continue
+            }
+            catalog_sync_selection
+            if [ "${#SELECTED_SKILLS[@]}" -gt 0 ]; then page=targets; else page=review; fi
+            ;;
+        targets)
+            choose_items 3 "$install_title / Agents for skills" 1 '1 0' Codex 'Claude Code' || {
+                [ "$?" -eq 2 ] || return "$session_status"
+                page=skills
+                continue
+            }
+            TARGET_AGENTS=()
+            for i in "${MENU_SELECTED[@]+"${MENU_SELECTED[@]}"}"; do
+                if [ "$i" -eq 0 ]; then TARGET_AGENTS+=(codex); else TARGET_AGENTS+=(claude-code); fi
+            done
+            if [ "${#TARGET_AGENTS[@]}" -eq 0 ]; then
+                printf 'No skill targets selected; cancelled.\n'
+                page=complete
+                continue
+            fi
+            page=review
+            ;;
+        review)
+            if [[ " ${AGENT_ITEMS[*]+${AGENT_ITEMS[*]}} " = *" 2 "* ]]; then
+                choose_items 11 '' 0 0 Install Cancel || {
+                    menu_status=$?
+                    if [ "$menu_status" -eq 3 ]; then
+                        FAILED+=('Cannot prepare installation plan')
+                        show_summary=1
+                        page=complete
+                        continue
+                    fi
+                    [ "$menu_status" -eq 2 ] || return "$session_status"
+                    if [ "$INSTALL_SKILLS" -eq 1 ]; then
+                        if [ "${#SELECTED_SKILLS[@]}" -gt 0 ]; then page=targets; else page=skill_repos; fi
+                    else
                         if [ "$INSTALL_SCOPE" = global ] && [ "${#SELECTED_RULES[@]}" -gt 0 ]; then page=rule_targets; else page=rule_choices; fi
+                    fi
+                    continue
+                }
+                if [ "${MENU_SELECTED[0]}" -ne 0 ]; then
+                    printf 'Cancelled.\n'
+                    page=complete
+                    continue
+                fi
+            else
+                if ! print_install_plan; then
+                    FAILED+=('Cannot prepare installation plan')
+                    show_summary=1
+                    page=complete
+                    continue
+                fi
+                if [ "$((${#AGENT_ITEMS[@]} + ${#SELECTED_SKILLS[@]}))" -eq 0 ]; then
+                    show_summary=1
+                    page=complete
+                    continue
+                fi
+                printf 'Continue? [Y/n] (b/Esc: back | q: exit) '
+                read_back_answer || return "$session_status"
+                case "$REPLY" in
+                y | Y | '') ;;
+                q | Q) return "$session_status" ;;
+                b | B)
+                    if [ "$INSTALL_SKILLS" -eq 1 ]; then
+                        if [ "${#SELECTED_SKILLS[@]}" -gt 0 ]; then page=targets; else page=skill_repos; fi
                     elif [ "$agent_requested" -eq 1 ]; then page=agent_choices; else page=tasks; fi
                     continue
-                }
-                SELECTED_REPOS=("${MENU_SELECTED[@]+"${MENU_SELECTED[@]}"}")
-                # Cached failures come back first so a later visit still reports them.
-                FAILED=("${CATALOG_FAILURES[@]+"${CATALOG_FAILURES[@]}"}")
-                for i in "${SELECTED_REPOS[@]+"${SELECTED_REPOS[@]}"}"; do
-                    if [ "$INSTALL_SCOPE" = global ]; then
-                        catalog_add_group "${SKILL_SOURCE_GROUPS[i]}" "${SKILL_SOURCE_DEFAULTS[i]}"
-                    else
-                        catalog_add_group "${SKILL_SOURCE_GROUPS[i]}" ''
-                    fi
-                done
-                [ "${#FAILED[@]}" -eq 0 ] || session_status=1
-                catalog_collect_selection
-                catalog_build_view
-                if [ "${#REPO_ITEM_LABELS[@]}" -gt 0 ]; then page=skills; else page=review; fi ;;
-            skills)
-                choose_skill_repositories 2 "$install_title / Skills by repository" 32 1 || {
-                    menu_status=$?
-                    catalog_sync_selection
-                    [ "$menu_status" -eq 2 ] || return "$session_status"
-                    page=skill_repos; continue
-                }
-                catalog_sync_selection
-                if [ "${#SELECTED_SKILLS[@]}" -gt 0 ]; then page=targets; else page=review; fi ;;
-            targets)
-                choose_items 3 "$install_title / Agents for skills" 1 '1 0' Codex 'Claude Code' || {
-                    [ "$?" -eq 2 ] || return "$session_status"
-                    page=skills; continue
-                }
-                TARGET_AGENTS=()
-                for i in "${MENU_SELECTED[@]+"${MENU_SELECTED[@]}"}"; do
-                    if [ "$i" -eq 0 ]; then TARGET_AGENTS+=(codex); else TARGET_AGENTS+=(claude-code); fi
-                done
-                if [ "${#TARGET_AGENTS[@]}" -eq 0 ]; then
-                    printf 'No skill targets selected; cancelled.\n'; page=complete; continue
-                fi
-                page=review ;;
-            review)
-                if [[ " ${AGENT_ITEMS[*]+${AGENT_ITEMS[*]}} " = *" 2 "* ]]; then
-                    choose_items 11 '' 0 0 Install Cancel || {
-                        menu_status=$?
-                        if [ "$menu_status" -eq 3 ]; then
-                            FAILED+=('Cannot prepare installation plan'); show_summary=1; page=complete; continue
-                        fi
-                        [ "$menu_status" -eq 2 ] || return "$session_status"
-                        if [ "$INSTALL_SKILLS" -eq 1 ]; then
-                            if [ "${#SELECTED_SKILLS[@]}" -gt 0 ]; then page=targets; else page=skill_repos; fi
-                        else
-                            if [ "$INSTALL_SCOPE" = global ] && [ "${#SELECTED_RULES[@]}" -gt 0 ]; then page=rule_targets; else page=rule_choices; fi
-                        fi
-                        continue
-                    }
-                    if [ "${MENU_SELECTED[0]}" -ne 0 ]; then printf 'Cancelled.\n'; page=complete; continue; fi
-                else
-                    if ! print_install_plan; then FAILED+=('Cannot prepare installation plan'); show_summary=1; page=complete; continue; fi
-                    if [ "$((${#AGENT_ITEMS[@]} + ${#SELECTED_SKILLS[@]}))" -eq 0 ]; then
-                        show_summary=1; page=complete; continue
-                    fi
-                    printf 'Continue? [Y/n] (b/Esc: back | q: exit) '
-                    read_back_answer || return "$session_status"
-                    case "$REPLY" in
-                        y | Y | '') ;;
-                        q | Q) return "$session_status" ;;
-                        b | B)
-                            if [ "$INSTALL_SKILLS" -eq 1 ]; then
-                                if [ "${#SELECTED_SKILLS[@]}" -gt 0 ]; then page=targets; else page=skill_repos; fi
-                            elif [ "$agent_requested" -eq 1 ]; then page=agent_choices; else page=tasks; fi
-                            continue ;;
-                        *) printf 'Cancelled.\n'; page=complete; continue ;;
-                    esac
-                fi
-                run_interactive_task execute_plan
-                page=complete ;;
-            complete)
-                if [ "$INTERACTIVE_RESULT" -ne 0 ] || [ "${#FAILED[@]}" -gt 0 ]; then session_status=1; fi
-                if [ "$show_summary" -eq 1 ]; then print_summary || true; fi
-                if [ "$list_result" -eq 1 ]; then
-                    printf '\nEnter / Esc  Main menu    q  Exit '
-                else
-                    printf '\nPress Enter to return to the main menu (Esc: back | q: exit): '
-                fi
-                while :; do
-                    read_key || return "$session_status"
-                    case "$KEY" in
-                        '' | $'\e') break ;;
-                        q | Q) return "$session_status" ;;
-                    esac
-                done
-                # New actions start with defaults; Back within an action keeps selections.
-                # The catalog cache survives so a later run never refetches a repository.
-                SUCCEEDED=(); FAILED=(); MENU_SELECTED=(); MENU_CURSORS=(); MENU_CHOICES=(); MENU_VISITED=()
-                AGENT_ITEMS=(); SELECTED_SKILLS=(); SELECTED_RULES=(); SELECTED_RULE_SOURCES=()
-                SKILL_NAMES=(); SKILL_SOURCES=(); SKILL_GROUPS=(); SKILL_PICKED=(); SKILL_EXPLICIT=()
-                SELECTED_REPOS=(); VIEW_SKILL_INDICES=()
-                TARGET_AGENTS=(codex claude-code); RULE_TARGETS="codex claude pi"; INSTALL_SCOPE=global; rules_visited=0
-                REMOVE_CODEX=1; REMOVE_CLAUDE=1; REMOVE_PI=1; REMOVE_RULES=0; REMOVE_SKILLS=0; REMOVE_SCOPE=global
-                install_title='Install / Global'; remove_title='Remove / Global'
-                REMOVAL_RULE_SELECTION=(); REMOVAL_SKILL_SELECTION=(); removal_scanned=0
-                if [ -n "$REMOVAL_TEMP" ]; then rm -rf -- "$REMOVAL_TEMP"; REMOVAL_TEMP=""; fi
-                INTERACTIVE_RESULT=0; show_summary=0; list_result=0; INSTALL_SKILLS=0
-                LIST_RULES=0; LIST_SKILLS=0; LIST_MODE=local; LIST_SCOPE=both
-                LIST_CODEX=1; LIST_CLAUDE=1; LIST_PI=1
-                page=main ;;
+                    ;;
+                *)
+                    printf 'Cancelled.\n'
+                    page=complete
+                    continue
+                    ;;
+                esac
+            fi
+            run_interactive_task execute_plan
+            page=complete
+            ;;
+        complete)
+            if [ "$INTERACTIVE_RESULT" -ne 0 ] || [ "${#FAILED[@]}" -gt 0 ]; then session_status=1; fi
+            if [ "$show_summary" -eq 1 ]; then print_summary || true; fi
+            if [ "$list_result" -eq 1 ]; then
+                printf '\nEnter / Esc  Main menu    q  Exit '
+            else
+                printf '\nPress Enter to return to the main menu (Esc: back | q: exit): '
+            fi
+            while :; do
+                read_key || return "$session_status"
+                case "$KEY" in
+                '' | $'\e') break ;;
+                q | Q) return "$session_status" ;;
+                esac
+            done
+            # New actions start with defaults; Back within an action keeps selections.
+            # The catalog cache survives so a later run never refetches a repository.
+            SUCCEEDED=()
+            FAILED=()
+            MENU_SELECTED=()
+            MENU_CURSORS=()
+            MENU_CHOICES=()
+            MENU_VISITED=()
+            AGENT_ITEMS=()
+            SELECTED_SKILLS=()
+            SELECTED_RULES=()
+            SELECTED_RULE_SOURCES=()
+            SKILL_NAMES=()
+            SKILL_SOURCES=()
+            SKILL_GROUPS=()
+            SKILL_PICKED=()
+            SKILL_EXPLICIT=()
+            SELECTED_REPOS=()
+            VIEW_SKILL_INDICES=()
+            TARGET_AGENTS=(codex claude-code)
+            RULE_TARGETS="codex claude pi"
+            INSTALL_SCOPE=global
+            rules_visited=0
+            REMOVE_CODEX=1
+            REMOVE_CLAUDE=1
+            REMOVE_PI=1
+            REMOVE_RULES=0
+            REMOVE_SKILLS=0
+            REMOVE_SCOPE=global
+            install_title='Install / Global'
+            remove_title='Remove / Global'
+            REMOVAL_RULE_SELECTION=()
+            REMOVAL_SKILL_SELECTION=()
+            removal_scanned=0
+            if [ -n "$REMOVAL_TEMP" ]; then
+                rm -rf -- "$REMOVAL_TEMP"
+                REMOVAL_TEMP=""
+            fi
+            INTERACTIVE_RESULT=0
+            show_summary=0
+            list_result=0
+            INSTALL_SKILLS=0
+            LIST_RULES=0
+            LIST_SKILLS=0
+            LIST_MODE=local
+            LIST_SCOPE=both
+            LIST_CODEX=1
+            LIST_CLAUDE=1
+            LIST_PI=1
+            page=main
+            ;;
         esac
     done
 }
 
 main() {
     local parse_status i
-    AGENT_ITEMS=(); SELECTED_SKILLS=()
+    AGENT_ITEMS=()
+    SELECTED_SKILLS=()
     if [ "$#" -eq 0 ]; then
         # curl | bash uses stdin for the program. Read menu input from the
         # controlling terminal only after Bash has parsed the entrypoint.
@@ -2674,7 +3096,9 @@ main() {
         return $?
     fi
     if [ "$INSTALL_AGENT" -eq 1 ]; then
-        AGENT_ITEMS=(0 1 5); SELECTED_RULES=(); SELECTED_RULE_SOURCES=()
+        AGENT_ITEMS=(0 1 5)
+        SELECTED_RULES=()
+        SELECTED_RULE_SOURCES=()
         if [ -t 0 ] && [ -t 1 ]; then
             preflight "${AGENT_ITEMS[@]}" || return 1
             interactive_setup agent_choices
@@ -2686,7 +3110,7 @@ main() {
     if [ "$INSTALL_SKILLS" -eq 1 ]; then
         preflight 4
         load_catalog
-        for ((i=0; i<${#SKILL_NAMES[@]}; i++)); do SELECTED_SKILLS+=("$i"); done
+        for ((i = 0; i < ${#SKILL_NAMES[@]}; i++)); do SELECTED_SKILLS+=("$i"); done
     fi
     execute_plan
 }

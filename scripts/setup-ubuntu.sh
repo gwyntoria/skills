@@ -149,8 +149,11 @@ check_platform() {
     fi
     CPU_ARCH=$(uname -m) || return 1
     case "$CPU_ARCH" in
-    x86_64|aarch64|arm64) ;;
-    *) printf '错误：不支持架构 %s，仅支持 amd64 和 arm64。\n' "$CPU_ARCH" >&2; return 1 ;;
+    x86_64 | aarch64 | arm64) ;;
+    *)
+        printf '错误：不支持架构 %s，仅支持 amd64 和 arm64。\n' "$CPU_ARCH" >&2
+        return 1
+        ;;
     esac
     uid=$(id -u) || return 1
     if [ "$uid" -eq 0 ]; then
@@ -357,8 +360,8 @@ backup_shell_config() (
         if grep -Fqx -e "$SHELL_BLOCK_START" -e '# >>> env-setup-wsl.sh shell >>>' "$target"; then
             printf '提示：配置已含托管块，无法补建安装前原件备份；本次改动仍会留下带时间戳的备份。\n'
         elif ! temporary_backup=$(mktemp "$pristine.tmp.XXXXXX") ||
-             ! cp -p -- "$target" "$temporary_backup" ||
-             ! mv -T -- "$temporary_backup" "$pristine"; then
+            ! cp -p -- "$target" "$temporary_backup" ||
+            ! mv -T -- "$temporary_backup" "$pristine"; then
             printf '错误：无法备份原始配置：%s%s%s；原文件已保留。\n' "${BLUE:-}" "$pristine" "${RESET:-}" >&2
             return 1
         else
@@ -590,8 +593,11 @@ check_npm_prefix() {
     if command_exists npm; then
         prefix=$(npm config get prefix) || return "$?"
         case "$prefix" in
-        "$HOME/.local"|/usr|/usr/local|"$NVM_DIR"/*) ;;
-        *) printf '错误：已有自定义 npm prefix：%s，保留配置，请手动处理。\n' "$prefix" >&2; return 1 ;;
+        "$HOME/.local" | /usr | /usr/local | "$NVM_DIR"/*) ;;
+        *)
+            printf '错误：已有自定义 npm prefix：%s，保留配置，请手动处理。\n' "$prefix" >&2
+            return 1
+            ;;
         esac
     fi
 }
@@ -673,7 +679,8 @@ report_old_node_tools() (
         directory=${executable%/*}
         printf '\n旧 nvm 全局工具（%s，保留，不自动重装）：\n' "$directory"
         if ! inventory=$(PATH="$directory:$PATH" "$executable" ls --global --depth=0 --json); then
-            printf '清单读取失败，请手动核对。\n'; continue
+            printf '清单读取失败，请手动核对。\n'
+            continue
         fi
         if ! specifications=$(printf '%s' "$inventory" | "$directory/node" -e '
             let input = "";
@@ -684,7 +691,8 @@ report_old_node_tools() (
                     if (info.version) console.log(name + "@" + info.version);
                 }
             });'); then
-            printf '清单解析失败，请手动核对。\n'; continue
+            printf '清单解析失败，请手动核对。\n'
+            continue
         fi
         while IFS= read -r specification; do
             [ -n "$specification" ] || continue
@@ -808,7 +816,10 @@ migrate_node_environment() (
             cat "$marker_file" >"$staging"
             rm -f -- "$marker_file"
             marker_file=''
-            command=$(type -P "$language") || { printf '错误：需要 %s 检查迁移配置，请安装后重试。\n' "$language" >&2; return 1; }
+            command=$(type -P "$language") || {
+                printf '错误：需要 %s 检查迁移配置，请安装后重试。\n' "$language" >&2
+                return 1
+            }
             "$command" -n "$staging"
         fi
     done
@@ -867,7 +878,11 @@ run_step() {
     shift 3
     printf '\n==> %s%s%s\n' "$CYAN" "$label" "$RESET"
     set +e
-    ( set -e; set -o pipefail; "$@" )
+    (
+        set -e
+        set -o pipefail
+        "$@"
+    )
     result=$?
     set -e
     STEP_CODES[$id]="$result"
@@ -941,14 +956,16 @@ install_plugin() (
     fi
     mkdir -p "$OMZ_CUSTOM/plugins"
     case "$name" in
-    zsh-autosuggestions|zsh-syntax-highlighting)
-        git clone --depth=1 "https://github.com/zsh-users/$name.git" "$OMZ_CUSTOM/plugins/$name" ;;
+    zsh-autosuggestions | zsh-syntax-highlighting)
+        git clone --depth=1 "https://github.com/zsh-users/$name.git" "$OMZ_CUSTOM/plugins/$name"
+        ;;
     *)
         # Recover a missing bundled plugin without replacing an existing framework.
         temporary_file=$(mktemp -d)
         trap 'rm -rf -- "$temporary_file"' EXIT
         git clone --depth=1 https://github.com/ohmyzsh/ohmyzsh.git "$temporary_file/framework"
-        cp -R -- "$temporary_file/framework/plugins/$name" "$OMZ_CUSTOM/plugins/$name" ;;
+        cp -R -- "$temporary_file/framework/plugins/$name" "$OMZ_CUSTOM/plugins/$name"
+        ;;
     esac
     plugin_file "$name" >/dev/null
 )
@@ -973,7 +990,10 @@ install_plugins() {
 discover_zsh_path() {
     local variable="$1"
     local result="$2"
-    [ -f "$SHELL_RC" ] || { printf -v "$variable" '%s' "$result"; return 0; }
+    [ -f "$SHELL_RC" ] || {
+        printf -v "$variable" '%s' "$result"
+        return 0
+    }
     local line value
     local assignment="^[[:space:]]*(export[[:space:]]+)?$variable=(.*)$"
     local double_quoted='^"([^"]*)"[[:space:]]*(#.*)?$'
@@ -1012,9 +1032,11 @@ plugin_file() {
     local name="$1" directory
     for directory in "$OMZ_CUSTOM/plugins/$name" "$OMZ_DIR/plugins/$name"; do
         if [ -f "$directory/$name.plugin.zsh" ] && [ -r "$directory/$name.plugin.zsh" ]; then
-            printf '%s\n' "$directory/$name.plugin.zsh"; return 0
+            printf '%s\n' "$directory/$name.plugin.zsh"
+            return 0
         elif [ -f "$directory/_$name" ] && [ -r "$directory/_$name" ]; then
-            printf '%s\n' "$directory/_$name"; return 0
+            printf '%s\n' "$directory/_$name"
+            return 0
         fi
     done
     return 1
@@ -1026,7 +1048,8 @@ choose_plugins() {
         [ -z "$RESET" ] || printf '\033[H\033[2J'
         printf '\n选择 Zsh 插件\n'
         for id in "${!PLUGIN_NAMES[@]}"; do
-            mark=' '; [ "${PLUGIN_SELECTED[id]}" -eq 0 ] || mark=x
+            mark=' '
+            [ "${PLUGIN_SELECTED[id]}" -eq 0 ] || mark=x
             state=未安装 color="$YELLOW"
             if plugin_file "${PLUGIN_NAMES[id]}" >/dev/null; then state=已安装 color="$GREEN"; fi
             if [ "$focus" -eq "$id" ]; then printf '%s> ' "$FOCUS"; else printf '  '; fi
@@ -1038,11 +1061,15 @@ choose_plugins() {
         case "$key" in
         $'\e')
             IFS= read -rsn2 -t 0.2 key || :
-            case "$key" in '[A') focus=$(((focus + 7) % 8)) ;; '[B') focus=$(((focus + 1) % 8)) ;; esac ;;
+            case "$key" in '[A') focus=$(((focus + 7) % 8)) ;; '[B') focus=$(((focus + 1) % 8)) ;; esac
+            ;;
         ' ') if [ "$focus" -lt 7 ]; then PLUGIN_SELECTED[focus]=$((1 - PLUGIN_SELECTED[focus])); fi ;;
-        '') resolve_components; return 0 ;;
-        b|B) return 2 ;;
-        q|Q) return 1 ;;
+        '')
+            resolve_components
+            return 0
+            ;;
+        b | B) return 2 ;;
+        q | Q) return 1 ;;
         esac
     done
 }
@@ -1062,7 +1089,8 @@ choose_shell() {
         case "$key" in
         $'\e')
             IFS= read -rsn2 -t 0.2 key || :
-            case "$key" in '[A') focus=$(((focus + 2) % 3)) ;; '[B') focus=$(((focus + 1) % 3)) ;; esac ;;
+            case "$key" in '[A') focus=$(((focus + 2) % 3)) ;; '[B') focus=$(((focus + 1) % 3)) ;; esac
+            ;;
         '')
             case "$focus" in 0) SHELL_NAME=fish SHELL_LABEL=Fish ;; 1) SHELL_NAME=zsh SHELL_LABEL=Zsh ;; 2) SHELL_NAME=bash SHELL_LABEL=Bash ;; esac
             SHELL_RC="$HOME/.$SHELL_NAME"rc
@@ -1073,8 +1101,9 @@ choose_shell() {
                 discover_zsh_path ZSH_CUSTOM "${ZSH_CUSTOM:-$OMZ_DIR/custom}"
                 OMZ_CUSTOM="$ZSH_CUSTOM"
             fi
-            return 0 ;;
-        q|Q) return 1 ;;
+            return 0
+            ;;
+        q | Q) return 1 ;;
         esac
     done
 }
@@ -1171,7 +1200,10 @@ prepare_prompt_config() (
                     print "# <<< setup-ubuntu.sh prompt-theme <<<"
                 }
                 { print }
-            ' "$file" >"$staging"; then rm -f -- "$staging"; return 1; fi
+            ' "$file" >"$staging"; then
+                rm -f -- "$staging"
+                return 1
+            fi
             cat "$staging" >"$file"
             rm -f -- "$staging"
         fi
@@ -1337,7 +1369,10 @@ FISH
 )
 
 prepare_shell_config() (
-    if [ "$SHELL_NAME" = fish ]; then prepare_fish_config; return; fi
+    if [ "$SHELL_NAME" = fish ]; then
+        prepare_fish_config
+        return
+    fi
     local target directory filename temporary_file cleanup_command previous_file=''
     if [ -L "$SHELL_RC" ] && [ ! -e "$SHELL_RC" ]; then
         printf '错误：配置符号链接的目标不存在，保留原链接。\n' >&2
@@ -1483,7 +1518,10 @@ print_results() {
     for id in "${!STEP_LABELS[@]}"; do
         case "${STEP_STATES[id]}" in
         成功) color="$GREEN" ;;
-        失败) color="$RED"; failed=1 ;;
+        失败)
+            color="$RED"
+            failed=1
+            ;;
         *) color="$YELLOW" ;;
         esac
         printf '  %s[%s]%s %s%s%s\n' "$color" "${STEP_STATES[id]}" "$RESET" \
@@ -1545,7 +1583,8 @@ choose_components() {
         [ -z "$RESET" ] || printf '\033[H\033[2J'
         printf '\n选择安装组件（%s）\n' "$SHELL_LABEL"
         for id in "${!COMPONENT_LABELS[@]}"; do
-            mark=' '; reason=''
+            mark=' '
+            reason=''
             if [ "${SELECTED[id]}" -eq 1 ]; then
                 mark=x
                 if [ "${EXPLICIT[id]}" -eq 1 ]; then reason='手动选择'; else reason='自动补齐'; fi
@@ -1560,7 +1599,8 @@ choose_components() {
         case "$key" in
         $'\e')
             IFS= read -rsn2 -t 0.2 key || :
-            case "$key" in '[A') focus=$(((focus + ${#COMPONENT_LABELS[@]}) % (${#COMPONENT_LABELS[@]} + 1))) ;; '[B') focus=$(((focus + 1) % (${#COMPONENT_LABELS[@]} + 1))) ;; esac ;;
+            case "$key" in '[A') focus=$(((focus + ${#COMPONENT_LABELS[@]}) % (${#COMPONENT_LABELS[@]} + 1))) ;; '[B') focus=$(((focus + 1) % (${#COMPONENT_LABELS[@]} + 1))) ;; esac
+            ;;
         ' ')
             notice=''
             if [ "$focus" -lt "${#COMPONENT_LABELS[@]}" ]; then
@@ -1576,11 +1616,13 @@ choose_components() {
                             fi
                         done
                     fi
-                else EXPLICIT[focus]=1
+                else
+                    EXPLICIT[focus]=1
                 fi
-            fi ;;
+            fi
+            ;;
         '') return 0 ;;
-        q|Q) return 1 ;;
+        q | Q) return 1 ;;
         esac
     done
 }
@@ -1608,7 +1650,8 @@ run_install() {
     local picker_status
     while :; do
         if ! choose_components; then
-            printf '已取消，未执行安装计划。\n'; return 0
+            printf '已取消，未执行安装计划。\n'
+            return 0
         fi
         [ "$SHELL_NAME" = zsh ] || break
         picker_status=0
@@ -1616,14 +1659,17 @@ run_install() {
         case "$picker_status" in
         0) break ;;
         2) continue ;;
-        *) printf '已取消，未执行安装计划。\n'; return 0 ;;
+        *)
+            printf '已取消，未执行安装计划。\n'
+            return 0
+            ;;
         esac
     done
     printf '\n安装计划\n目标 shell：%s%s%s\n配置路径：%s%s%s\n' "$CYAN" "$SHELL_LABEL" "$RESET" "$BLUE" "$SHELL_RC" "$RESET"
     printf '系统：%s；架构：%s；环境：' "$UBUNTU_NAME" "$CPU_ARCH"
     if [ "$IS_WSL" -eq 1 ]; then printf 'WSL\n'; else printf '原生 Ubuntu\n'; fi
     if [ "$SHELL_NAME" = zsh ]; then
-        printf '必做：%sOh My Zsh%s，安装位置：%s%s%s（复用已有安装，不覆盖启动文件）。\n' "$CYAN" "$RESET" "$BLUE" "$OMZ_DIR" "$RESET"
+        printf '必做：%sOh My Zsh%s，安装位置：%s%s%s（复用已有���装，不覆盖启动文件）。\n' "$CYAN" "$RESET" "$BLUE" "$OMZ_DIR" "$RESET"
         if [ ! -s "$OMZ_DIR/oh-my-zsh.sh" ] && ! command_exists git; then
             printf '%sOh My Zsh 依赖 git：缺失时必须安装。%s\n' "$YELLOW" "$RESET"
         fi
@@ -1676,8 +1722,11 @@ run_install() {
     local reply
     IFS= read -r reply || reply=''
     case "$reply" in
-    y|Y) ;;
-    *) printf '已取消，未执行安装计划。\n'; return 0 ;;
+    y | Y) ;;
+    *)
+        printf '已取消，未执行安装计划。\n'
+        return 0
+        ;;
     esac
 
     if ! sudo -v; then
