@@ -86,7 +86,8 @@ STEP_LABELS=() STEP_STATES=() STEP_REMEDIES=() STEP_CODES=()
 readonly STEP_BREW=4 STEP_LAZYGIT=5 STEP_UV=6 STEP_NODE=7
 readonly STEP_USER_BIN=8 STEP_COMPLETION=9 STEP_LAZY_BREW=10
 readonly STEP_OMZ=14 STEP_FZF=15 STEP_PLUGIN_BASE=16 STEP_STARSHIP=24 STEP_NODE_MIGRATION=25
-readonly STEP_TEXTLINT=26
+readonly STEP_TEXTLINT=26 STEP_SHFMT=27
+readonly SHFMT_VERSION=v3.14.1
 
 # ------------------------------------------------------------
 # Output helpers
@@ -467,6 +468,36 @@ install_system_packages() {
         return 1
     fi
 }
+
+# Bash IDE passes -ln auto, which older Ubuntu shfmt packages reject.
+install_shfmt() (
+    if printf '#!/bin/bash\ntrue\n' | shfmt -ln auto >/dev/null 2>&1; then
+        shfmt --version
+        return
+    fi
+
+    local arch checksum staging
+    case "$CPU_ARCH" in
+    x86_64)
+        arch=amd64
+        checksum=76e77641faa025814b77f153b29796b8e6fa2fca03e0c76a691608b86c7ea7bf
+        ;;
+    aarch64 | arm64)
+        arch=arm64
+        checksum=5f2db09dae91fca848f7adbdd014632e921a383863a2ad7e0450ad3aba0c6489
+        ;;
+    *) return 1 ;;
+    esac
+
+    staging=$(mktemp "$LOCAL_BIN/.shfmt.XXXXXX") || return 1
+    trap 'unlink "$staging" 2>/dev/null || true' EXIT
+    curl -fsSL "https://github.com/mvdan/sh/releases/download/$SHFMT_VERSION/shfmt_${SHFMT_VERSION}_linux_$arch" -o "$staging" || return 1
+    printf '%s  %s\n' "$checksum" "$staging" | sha256sum -c - || return 1
+    chmod 755 "$staging" || return 1
+    printf '#!/bin/bash\ntrue\n' | "$staging" -ln auto >/dev/null || return 1
+    mv -fT -- "$staging" "$LOCAL_BIN/shfmt" || return 1
+    "$LOCAL_BIN/shfmt" --version
+)
 
 # Homebrew's installer prints shell setup instructions; it does not write profiles.
 ensure_homebrew() {
@@ -1716,6 +1747,7 @@ run_install() {
         printf '系统包：%s' "$CYAN"
         printf '%s ' "${SYSTEM_PACKAGES[@]}"
         printf '%s\n' "$RESET"
+        printf 'Bash IDE 依赖：ShellCheck 通过 apt 安装；shfmt 优先复用支持 -ln auto 的版本，否则将官方 %s 安装到 %s。\n' "$SHFMT_VERSION" "$LOCAL_BIN"
     fi
     printf '必做：准备 %s 和启动配置，在流程末尾设置为默认 shell。\n' "$SHELL_LABEL"
     printf '确认执行？[y/N] '
@@ -1767,6 +1799,13 @@ run_install() {
     fi
     run_step "$STEP_USER_BIN" '用户工具目录' "$rerun_command" configure_user_bin
     export PATH="$LOCAL_BIN:$PATH"
+    if [ "$SYSTEM_SELECTED" -eq 0 ]; then
+        skip_step "$STEP_SHFMT" 'shfmt（Bash IDE）' '用户未选择系统基础包'
+    elif [ "${STEP_STATES[STEP_USER_BIN]}" != '成功' ]; then
+        skip_step "$STEP_SHFMT" 'shfmt（Bash IDE）' '因依赖失败跳过' "$rerun_command"
+    else
+        run_step "$STEP_SHFMT" 'shfmt（Bash IDE）' "$rerun_command" install_shfmt
+    fi
     if ! command_exists brew && [ -x "$HOMEBREW_BIN" ]; then
         export PATH="${HOMEBREW_BIN%/*}:$PATH"
     fi
