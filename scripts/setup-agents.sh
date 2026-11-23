@@ -1082,13 +1082,17 @@ install_statusline() {
 }
 
 install_codex() {
-    if ! command -v codex >/dev/null 2>&1; then curl -fsSL https://chatgpt.com/codex/install.sh | sh; fi
+    if ! command -v codex >/dev/null 2>&1; then
+        curl -fsSL https://chatgpt.com/codex/install.sh | sh;
+    fi
     require_command codex
     printf '\033[32mCodex CLI: %s\033[0m\n' "$(command -v codex)"
 }
 
 install_claude() {
-    if ! command -v claude >/dev/null 2>&1; then curl -fsSL https://claude.ai/install.sh | bash; fi
+    if ! command -v claude >/dev/null 2>&1; then 
+        curl -fsSL https://claude.ai/install.sh | bash;
+    fi
     require_command claude
     printf '\033[32mClaude Code CLI: %s\033[0m\n' "$(command -v claude)"
 }
@@ -1097,7 +1101,7 @@ install_pi() {
     require_node
     require_command npm
     if ! command -v pi >/dev/null 2>&1; then
-        npm install -g --ignore-scripts @earendil-works/pi-coding-agent
+        curl -fsSL https://pi.dev/install.sh | sh
     fi
     require_command pi
     pi --version
