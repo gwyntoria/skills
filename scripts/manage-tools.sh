@@ -2712,10 +2712,10 @@ interactive_setup() {
     while :; do
         case "$page" in
         main)
-            choose_items 0 'AGENT CONFIG' 0 0 Agent 'Skill / Rule' Exit || return "$session_status"
+            choose_items 0 'AGENT CONFIG' 0 0 'Skill / Rule' Agent Exit || return "$session_status"
             case "${MENU_SELECTED[0]}" in
-            0) page=agent_menu ;;
-            1) page=content_menu ;;
+            0) page=content_menu ;;
+            1) page=agent_menu ;;
             2) return "$session_status" ;;
             esac
             ;;
