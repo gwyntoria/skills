@@ -2815,7 +2815,12 @@ interactive_setup() {
             REPO_SELECTED=()
             for ((i = 0; i < ${#rule_names[@]}; i++)); do
                 source_scope="${rule_sources[i]}"
-                if [ "$source_scope" = waza ]; then REPO_ITEM_GROUPS+=(Waza); else REPO_ITEM_GROUPS+=(Gwyntoria); fi
+                if [ "$source_scope" = waza ]; then
+                    REPO_ITEM_GROUPS+=(Waza)
+                else
+                    REPO_ITEM_GROUPS+=(Gwyntoria)
+                fi
+
                 if [ "$INSTALL_SCOPE" = global ] && [ "$rules_visited" -eq 0 ]; then
                     case "$source_scope:${rule_names[i]}" in
                     waza:waza-anti-patterns | waza:waza-clarity | waza:waza-durable-context)
