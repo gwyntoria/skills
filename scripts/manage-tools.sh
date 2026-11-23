@@ -1,17 +1,470 @@
 #!/usr/bin/env bash
 
-set -eu
+SCRIPT_SOURCE="${BASH_SOURCE[0]:-}"
+PROGRAM_NAME="${SCRIPT_SOURCE:-manage-tools.sh}"
+PROGRAM_NAME="${PROGRAM_NAME##*/}"
+UPDATE_ALL=0
+OPEN_AGENT_SETUP=0
+TITLE_STYLE=
+STEP_COLOR=
+DIVIDER_COLOR=
+COLOR_RESET=
 
-PROGRAM_NAME="setup-agents.sh"
-INSTALL_AGENT=0
-INSTALL_SKILLS=0
-LIST_SKILLS=0
-LIST_RULES=0
-LIST_MODE=local
-LIST_SCOPE=both
-LIST_CODEX=1
-LIST_CLAUDE=1
-LIST_PI=1
+PROGRESS_ENABLED=0
+PROGRESS_ROWS=0
+PROGRESS_COLS=0
+
+# 最后一行留给进度，其余行正常滚动；不接管子命令的输入输出。
+setup_progress() {
+    local dimensions
+    if ! [ -t 0 ] || ! [ -t 1 ] || ! [ -t 2 ] || [ "${TERM:-dumb}" = dumb ]; then
+        return
+    fi
+    dimensions=$(stty size 2>/dev/null) || return
+    read -r PROGRESS_ROWS PROGRESS_COLS <<<"$dimensions"
+    case "$PROGRESS_ROWS:$PROGRESS_COLS" in
+    *[!0-9:]* | :* | *:) return ;;
+    esac
+    if [ "$PROGRESS_ROWS" -lt 3 ] || [ "$PROGRESS_COLS" -lt 2 ]; then
+        return
+    fi
+
+    # 先腾出一行，再把光标放回滚动区，兼容启动时已在屏幕底部。
+    printf '\n\0337\033[1;%dr\0338\033[1A\r' "$((PROGRESS_ROWS - 1))" >&2
+    PROGRESS_ENABLED=1
+}
+
+restore_terminal() {
+    if [ "$PROGRESS_ENABLED" -eq 1 ]; then
+        printf '\0337\033[%d;1H\033[2K\033[r\0338' "$PROGRESS_ROWS" >&2
+        PROGRESS_ENABLED=0
+    fi
+}
+
+draw_progress() {
+    local current="$1"
+    local total="$2"
+    local name="$3"
+    local state="$4"
+    local step="${5:-}"
+    local width=20
+    local filled
+    local empty
+    local bar=
+    local text
+    local dimensions
+    local rows
+    local cols
+
+    if [ "$PROGRESS_ENABLED" -ne 1 ]; then
+        return
+    fi
+
+    # 在子命令结束后的安全边界重新读取尺寸，运行中不争用光标。
+    dimensions=$(stty size 2>/dev/null) || return
+    read -r rows cols <<<"$dimensions"
+    if [ "$rows" != "$PROGRESS_ROWS" ] || [ "$cols" != "$PROGRESS_COLS" ]; then
+        restore_terminal
+        setup_progress
+        [ "$PROGRESS_ENABLED" -eq 1 ] || return
+    fi
+
+    filled=$((current * width / total))
+    empty=$((width - filled))
+
+    while [ "$filled" -gt 0 ]; do
+        bar="${bar}#"
+        filled=$((filled - 1))
+    done
+    while [ "$empty" -gt 0 ]; do
+        bar="${bar}-"
+        empty=$((empty - 1))
+    done
+
+    text="[$bar] $current/$total  $name ($state)"
+    # 留出右侧一列，避免窄窗口中自动换行；一次写完再恢复日志光标。
+    text="${text:0:$((PROGRESS_COLS - 1))}"
+    if [ -n "$STEP_COLOR" ]; then
+        text=${text/" $current/$total"/" $STEP_COLOR$current/$total$COLOR_RESET"}
+        if [ -n "$step" ]; then
+            text=${text/"[Agents $step"/"[Agents $STEP_COLOR$step$COLOR_RESET"}
+        fi
+    fi
+    printf '\0337\033[%d;1H\033[2K%s\0338' \
+        "$PROGRESS_ROWS" "$text" >&2
+}
+
+usage() {
+    printf 'Usage: %s [all | config | -h | --help]\n' "$PROGRAM_NAME"
+    printf '\n'
+    printf 'Arguments:\n'
+    printf '  all         Include Claude, Pi and Hermes with their plugins/extensions\n'
+    printf '  config      Open the interactive Agent configuration menu\n'
+    printf '  -h, --help   Show this help message\n'
+    printf '\nDefault: update Skills, Codex (including Plugin Marketplace) and Homebrew.\n'
+}
+
+# 解析命令行选项。
+# 约定：0 继续执行，1 已打印 usage，2 选项错误。这里不自己 exit，
+# 退出码统一由 main 决定。
+parse_args() {
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+        all)
+            UPDATE_ALL=1
+            shift
+            ;;
+        config)
+            OPEN_AGENT_SETUP=1
+            shift
+            ;;
+        -h | --help)
+            usage
+            return 1
+            ;;
+        *)
+            printf 'Error: unknown option: %s\n\n' "$1" >&2
+            usage >&2
+            return 2
+            ;;
+        esac
+    done
+
+    if [ "$OPEN_AGENT_SETUP" -eq 1 ] && [ "$UPDATE_ALL" -eq 1 ]; then
+        printf 'Error: config cannot be combined with all.\n' >&2
+        return 2
+    fi
+
+    return 0
+}
+
+# 执行一个更新任务，把结果追加到 RESULTS。
+#
+# RESULTS 的每条记录是 tab 分隔的三段：<status>\t<name>\t<detail>
+# status 取 ok / fail / skip；detail 在 fail 时是退出码，skip 时是原因。
+#
+# 前置命令不存在算跳过，不算失败，所以这里始终返回 0。
+run_update() {
+    local name="$1"
+    local executable="$2"
+    local step='' step_prefix='' log_step_prefix=''
+    local elapsed
+    local status
+    local detail
+    local rc
+
+    shift 2
+    if [ "${IN_AGENTS:-0}" -eq 0 ]; then
+        TASK_CURRENT=$((TASK_CURRENT + 1))
+    else
+        AGENT_STEP=$((AGENT_STEP + 1))
+        step="#$AGENT_STEP"
+        step_prefix="[Agents $step] "
+        log_step_prefix="[Agents $STEP_COLOR$step$COLOR_RESET] "
+    fi
+
+    printf '\n'
+    printf '%s==================================================%s\n' "$DIVIDER_COLOR" "$COLOR_RESET"
+    printf '[%s] %s[%s/%s]%s %sStarting: %s%s%s\n' \
+        "$(date '+%H:%M:%S')" "$STEP_COLOR" "$TASK_CURRENT" "$TASK_TOTAL" "$COLOR_RESET" \
+        "$log_step_prefix" "$TITLE_STYLE" "$name" "$COLOR_RESET"
+    printf 'Command:'
+    printf ' %s' "$@"
+    printf '\n'
+    printf '%s==================================================%s\n' "$DIVIDER_COLOR" "$COLOR_RESET"
+
+    if ! command -v "$executable" >/dev/null 2>&1; then
+        printf '⚠️  Skipped: command '\''%s'\'' not found\n' "$executable"
+        status=skip
+        detail="command '$executable' unavailable in current PATH"
+    else
+        SECONDS=0
+        draw_progress "$TASK_CURRENT" "$TASK_TOTAL" "$step_prefix$name" "Running" "$step"
+
+        # 子命令直接使用终端，保留无换行提示和交互能力。
+        "$@"
+        rc=$?
+        elapsed=$SECONDS
+
+        if [ "$rc" -eq 0 ]; then
+            printf '✅ Completed: %s (%ss)\n' "$name" "$elapsed"
+            status=ok
+            detail=
+        else
+            printf '❌ Failed: %s (%ss)\n' "$name" "$elapsed"
+            printf 'Exit code: %s\n' "$rc"
+            status=fail
+            detail="$rc"
+        fi
+    fi
+
+    draw_progress "$TASK_CURRENT" "$TASK_TOTAL" "$step_prefix$name" "$status" "$step"
+
+    if [ "${IN_AGENTS:-0}" -eq 1 ]; then
+        AGENT_RESULTS+=("$status"$'\t'"$name"$'\t'"$detail")
+    else
+        RESULTS+=("$status"$'\t'"$name"$'\t'"$detail")
+    fi
+
+    # 单个任务失败后继续跑剩下的，让一次运行拿到全部结果。
+    return 0
+}
+
+# 插件/扩展独立于本体更新；旧版本缺少能力时仅跳过相应项目。
+run_pi_extensions() {
+    local executable="$1" help
+    if [ -n "$executable" ]; then
+        help=$("$executable" update --help 2>/dev/null) || help=
+        if [[ "$help" = *--extensions* ]]; then
+            run_update 'Pi Extensions' "$executable" "$executable" update --extensions
+            return
+        fi
+    fi
+    AGENT_RESULTS+=("skip"$'\t'"Pi Extensions"$'\t'"Pi unavailable or lacks update --extensions")
+}
+
+run_claude_plugins() {
+    local executable="$1" help plugins entries plugin scope rc
+    if [ -z "$executable" ]; then
+        AGENT_RESULTS+=("skip"$'\t'"Claude Plugin Marketplace"$'\t'"Claude unavailable in current PATH")
+        AGENT_RESULTS+=("skip"$'\t'"Claude Plugins"$'\t'"Claude unavailable in current PATH")
+        return
+    fi
+    help=$("$executable" plugin marketplace update --help 2>/dev/null) || help=
+    if [[ "$help" = *'marketplace update'* ]]; then
+        run_update 'Claude Plugin Marketplace' "$executable" "$executable" plugin marketplace update
+    else
+        AGENT_RESULTS+=("skip"$'\t'"Claude Plugin Marketplace"$'\t'"installed Claude lacks marketplace update")
+    fi
+    help=$("$executable" plugin list --help 2>/dev/null) || help=
+    if [[ "$help" != *--json* ]] || ! command -v python3 >/dev/null 2>&1; then
+        AGENT_RESULTS+=("skip"$'\t'"Claude Plugins"$'\t'"requires plugin list --json and Python 3")
+        return
+    fi
+    plugins=$("$executable" plugin list --json)
+    rc=$?
+    if [ "$rc" -ne 0 ]; then
+        AGENT_RESULTS+=("fail"$'\t'"Claude Plugins (list)"$'\t'"$rc")
+        return
+    fi
+    # 只解析官方 JSON，不读取 Claude 私有安装文件；忽略其他项目及非安装型插件。
+    entries=$(python3 -c '
+import json, os, sys
+plugins = json.load(sys.stdin)
+if not isinstance(plugins, list):
+    raise ValueError("expected an array from claude plugin list --json")
+entries = []
+for plugin in plugins:
+    if not isinstance(plugin, dict):
+        raise ValueError("invalid Claude plugin record")
+    scope = plugin.get("scope")
+    if scope not in ("user", "project", "local", "managed"):
+        continue
+    project = plugin.get("projectPath")
+    if scope in ("project", "local"):
+        if not isinstance(project, str) or os.path.realpath(project) != os.path.realpath(os.getcwd()):
+            continue
+    name = plugin.get("id")
+    if not isinstance(name, str) or not name or name.startswith("-") or any(c in name for c in "\t\r\n"):
+        raise ValueError("invalid Claude plugin id")
+    if name.endswith(("@inline", "@skills-dir", "@synced", "@builtin")):
+        continue
+    entry = (name, scope)
+    if entry not in entries:
+        entries.append(entry)
+for name, scope in entries:
+    print(name + "\t" + scope)
+' <<<"$plugins")
+    rc=$?
+    if [ "$rc" -ne 0 ]; then
+        AGENT_RESULTS+=("fail"$'\t'"Claude Plugins (parse list)"$'\t'"$rc")
+        return
+    fi
+    if [ -z "$entries" ]; then
+        AGENT_RESULTS+=("skip"$'\t'"Claude Plugins"$'\t'"no installed plugins in current context")
+        return
+    fi
+    while IFS=$'\t' read -r plugin scope; do
+        run_update "Claude Plugin $plugin [$scope]" "$executable" \
+            "$executable" plugin update "$plugin" --scope "$scope" <&3
+    done 3<&0 <<<"$entries"
+}
+
+run_agents() {
+    local IN_AGENTS=1
+    local AGENT_STEP=0
+    local -a names=('Codex')
+    local -a commands=(codex)
+    if [ "$UPDATE_ALL" -eq 1 ]; then
+        names+=('Claude Code' 'Pi' 'Hermes Agent')
+        commands+=(claude pi hermes)
+    fi
+    local -a paths=() reasons=()
+    local i executable help record status name detail
+    local success=0 failed=0 group_status group_detail
+    AGENT_RESULTS=()
+    TASK_CURRENT=$((TASK_CURRENT + 1))
+    printf '\n%s[%s/%s]%s Starting: %sAgents%s\n' \
+        "$STEP_COLOR" "$TASK_CURRENT" "$TASK_TOTAL" "$COLOR_RESET" "$TITLE_STYLE" "$COLOR_RESET"
+    draw_progress "$TASK_CURRENT" "$TASK_TOTAL" Agents Running
+    printf '\nAgent detection (current PATH):\n'
+
+    # 完成全部检测后再开始更新；帮助探针不执行更新。
+    for i in "${!commands[@]}"; do
+        executable=$(command -v "${commands[$i]}")
+        paths[i]="$executable"
+        reasons[i]=
+        if [ -z "$executable" ]; then
+            reasons[i]="command '${commands[$i]}' unavailable in current PATH"
+        else
+            help=$("$executable" --help 2>/dev/null) || help=
+            if ! [[ "$help" =~ (^|$'\n')[[:space:]]*(${commands[$i]}[[:space:]]+)?update([[:space:]|]|$) ]]; then
+                reasons[i]="installed CLI does not advertise 'update'; update manually"
+            elif [ "${commands[$i]}" = pi ]; then
+                help=$("$executable" update --help 2>/dev/null) || help=
+                if [[ "$help" != *--self* ]]; then
+                    reasons[i]='installed Pi lacks update --self; update manually'
+                fi
+            fi
+        fi
+        if [ -n "${reasons[$i]}" ]; then
+            printf '  %s: skipped (%s)\n' "${names[$i]}" "${reasons[$i]}"
+        else
+            printf '  %s: %s\n' "${names[$i]}" "$executable"
+        fi
+    done
+
+    for i in "${!commands[@]}"; do
+        if [ -n "${reasons[$i]}" ]; then
+            AGENT_RESULTS+=("skip"$'\t'"${names[$i]}"$'\t'"${reasons[$i]}")
+            case "${commands[$i]}" in
+            codex) AGENT_RESULTS+=("skip"$'\t'"Codex Plugin Marketplace"$'\t'"${reasons[$i]}") ;;
+            claude) run_claude_plugins "${paths[$i]}" ;;
+            pi) run_pi_extensions "${paths[$i]}" ;;
+            esac
+            continue
+        fi
+        executable="${paths[$i]}"
+        case "${commands[$i]}" in
+        codex)
+            run_update Codex "$executable" "$executable" update
+            run_update 'Codex Plugin Marketplace' "$executable" "$executable" plugin marketplace upgrade
+            ;;
+        claude)
+            run_update 'Claude Code' "$executable" "$executable" update
+            run_claude_plugins "$executable"
+            ;;
+        pi)
+            run_update Pi "$executable" "$executable" update --self
+            run_pi_extensions "$executable"
+            ;;
+        *) run_update "${names[$i]}" "$executable" "$executable" update ;;
+        esac
+    done
+
+    for record in "${AGENT_RESULTS[@]}"; do
+        IFS=$'\t' read -r status name detail <<<"$record"
+        case "$status" in
+        ok) success=$((success + 1)) ;;
+        fail) failed=$((failed + 1)) ;;
+        esac
+    done
+    group_detail=
+    if [ "$failed" -gt 0 ]; then
+        group_status=fail
+        group_detail=1
+    elif [ "$success" -gt 0 ]; then
+        group_status=ok
+    else
+        group_status=skip
+        group_detail='no Agent has a confirmed update method in current PATH'
+    fi
+    RESULTS+=("$group_status"$'\t'"Agents"$'\t'"$group_detail")
+    draw_progress "$TASK_CURRENT" "$TASK_TOTAL" Agents "$group_status"
+}
+
+# 外层固定三个任务；Agent 明细独立于外层计数。
+run_tasks() {
+    TASK_CURRENT=0
+    TASK_TOTAL=3
+    run_update Skills npx npx skills update -g -y
+    run_agents
+    run_update 'Homebrew Packages' brew brew upgrade --no-ask
+}
+
+# 把 RESULTS 渲染成尾部汇总。
+# 返回值就是脚本的退出码：有任务失败返回 1，只跳过或全部成功返回 0。
+report_results() {
+    local record
+    local status
+    local name
+    local detail
+    local success_count=0
+    local failed_count=0
+    local skipped_count=0
+    local -a success_items=()
+    local -a failed_items=()
+    local -a skipped_items=()
+
+    for record in "${RESULTS[@]}"; do
+        IFS=$'\t' read -r status name detail <<<"$record"
+
+        case "$status" in
+        ok)
+            success_count=$((success_count + 1))
+            success_items+=("  ✅ $name")
+            ;;
+        fail)
+            failed_count=$((failed_count + 1))
+            failed_items+=("  ❌ $name (exit code $detail)")
+            ;;
+        skip)
+            skipped_count=$((skipped_count + 1))
+            skipped_items+=("  ⚠️  $name: $detail")
+            ;;
+        esac
+    done
+
+    printf '\n'
+    printf '%s\n' "##################################################"
+    printf 'Update finished: %s\n' "$(date '+%Y-%m-%d %H:%M:%S')"
+    printf 'Succeeded: %s\n' "$success_count"
+    printf 'Failed: %s\n' "$failed_count"
+    printf 'Skipped: %s\n' "$skipped_count"
+    printf '%s\n' "##################################################"
+
+    if [ "${#success_items[@]}" -gt 0 ]; then
+        printf '\nSuccessful updates:\n'
+        printf '%s\n' "${success_items[@]}"
+    fi
+
+    if [ "${#failed_items[@]}" -gt 0 ]; then
+        printf '\nFailed updates:\n'
+        printf '%s\n' "${failed_items[@]}"
+    fi
+
+    if [ "${#skipped_items[@]}" -gt 0 ]; then
+        printf '\nSkipped updates:\n'
+        printf '%s\n' "${skipped_items[@]}"
+    fi
+
+    if [ "${#AGENT_RESULTS[@]}" -gt 0 ]; then
+        printf '\nAgent results:\n'
+        for record in "${AGENT_RESULTS[@]}"; do
+            IFS=$'\t' read -r status name detail <<<"$record"
+            printf '  %s: %s%s\n' "$name" "$status" "${detail:+ ($detail)}"
+        done
+    fi
+    printf '\n'
+
+    if [ "$failed_count" -gt 0 ]; then
+        return 1
+    fi
+
+    return 0
+}
+
+# Agent configuration
 
 # Resolve the script itself, independently of the caller's project directory.
 resolve_script_path() {
@@ -29,156 +482,8 @@ resolve_script_path() {
     directory="$(cd -P "$(dirname "$file")" && pwd -P)"
     printf '%s/%s\n' "$directory" "${file##*/}"
 }
-SCRIPT_PATH=""
-SCRIPT_DIR=""
-REPO=""
-# stdin execution has no source file; never infer a repository from the caller.
-if [ -n "${BASH_SOURCE[0]:-}" ]; then
-    PROGRAM_NAME="${0##*/}"
-    SCRIPT_PATH="$(resolve_script_path "${BASH_SOURCE[0]}")"
-    SCRIPT_DIR="${SCRIPT_PATH%/*}"
-    REPO="$(cd -- "$SCRIPT_DIR/.." && pwd -P)"
-fi
-PROJECT_TARGET="$(pwd -P)"
-SOURCE_ARCHIVE_URL=https://codeload.github.com/gwyntoria/skills/tar.gz/refs/heads/main
-RESOURCE_TEMP=""
-RESOURCE_PATH=""
-STATUSLINE_SOURCE=""
-INSTALL_SCOPE=global
-RULE_TARGETS="codex claude pi"
-SELECTED_RULES=()
-SELECTED_RULE_SOURCES=()
-RULE_NAMES_GLOBAL=()
-RULE_NAMES_PROJECT=()
-RULE_CATALOG_PROJECT=0
-RULE_NAMES_WAZA=()
-WAZA_RULES_PATH=""
-WAZA_RULES_COMMIT=""
-WAZA_RULES_ERROR=""
-
-WAZA_SKILLS_URL="https://github.com/tw93/waza"
-KAMI_SKILLS_URL="https://github.com/tw93/kami"
-MATTPOCOCK_SKILLS_URL="https://github.com/mattpocock/skills"
-MATTPOCOCK_SKILLS_PAGE_URL="https://www.aihero.dev/skills"
-HUMANLAYER_SKILLS_URL="https://github.com/humanlayer/skills"
-GWYNTORIA_SKILLS_URL="https://github.com/gwyntoria/skills"
-DISTILLY_SKILLS_URL="https://github.com/titanwings/distilly"
-# Parallel arrays keep this compatible with the Bash shipped by macOS.
-SKILL_SOURCE_GROUPS=(Waza Kami 'Matt Pocock' HumanLayer Gwyntoria Distilly)
-SKILL_SOURCE_DEFAULTS=(
-    'check health hunt learn read think ui write'
-    ''
-    'setup-matt-pocock-skills grill-with-docs to-spec to-tickets code-review improve-codebase-architecture implement-spec writing-for-agents codebase-design domain-modeling grilling tdd'
-    'show-me'
-    'how why'
-    ''
-)
-SKILL_NAMES=()
-SKILL_SOURCES=()
-SKILL_GROUPS=()
-SKILL_PICKED=()
-SKILL_EXPLICIT=()
-CATALOG_CACHE_GROUPS=()
-CATALOG_CACHE_NAMES=()
-CATALOG_FAILURES=()
-CATALOG_FETCHED_NAMES=""
-SELECTED_REPOS=()
-VIEW_SKILL_INDICES=()
-TARGET_AGENTS=(codex claude-code)
-SUCCEEDED=()
-FAILED=()
-MENU_SELECTED=()
-MENU_CURSORS=()
-MENU_CHOICES=()
-MENU_VISITED=()
-KEY=""
-REMOVE_CODEX=1
-REMOVE_CLAUDE=1
-REMOVE_PI=1
-REMOVE_RULES=0
-REMOVE_SKILLS=0
-REMOVE_SCOPE=global
-REMOVAL_TEMP=""
-REMOVAL_RULE_IDS=()
-REMOVAL_RULE_LABELS=()
-REMOVAL_SKILL_IDS=()
-REMOVAL_SKILL_LABELS=()
-REMOVAL_SKILL_GROUPS=()
-REMOVAL_TARGET_COUNT=0
-REMOVAL_RULE_SELECTION=()
-REMOVAL_SKILL_SELECTION=()
-REPO_ITEM_LABELS=()
-REPO_ITEM_GROUPS=()
-REPO_SELECTED=()
-REPO_EXPLICIT=()
 
 log() { printf '\n==> %s\n' "$1"; }
-
-usage() {
-    cat <<EOF
-Usage: $PROGRAM_NAME [--install-cli] [--install-skills] | {--list|--list-skills|--list-rules} [--local|--remote] [--global|--project]
-
-No arguments: open the interactive menu (requires a terminal).
-  --install-cli     Choose Agent CLIs (default: Codex); without a terminal, install all with bundled components
-  --install-skills  Install/update all configured skills; preserve existing skills
-  --list            List installed rules and skills (default: --local)
-  --list-skills     List skills only
-  --list-rules      List rules only
-  --local           Show installed content, without network access
-  --remote          Show available content by source
-  --global          Limit local listing to global installations
-  --project         Limit local listing to the current project
-  -h, --help        Show help
-
-The Agent menu offers Install, Cleanup, and Uninstall. Agent Install defaults to Codex.
-The Skill / Rule menu offers Install, Remove, List, and Remove all backups.
-EOF
-}
-
-parse_args() {
-    local local_mode=0 remote_mode=0 global_scope=0 project_scope=0
-    while [ "$#" -gt 0 ]; do
-        case "$1" in
-        --install-cli) INSTALL_AGENT=1 ;;
-        --install-skills) INSTALL_SKILLS=1 ;;
-        --list)
-            LIST_SKILLS=1
-            LIST_RULES=1
-            ;;
-        --list-skills) LIST_SKILLS=1 ;;
-        --list-rules) LIST_RULES=1 ;;
-        --local) local_mode=1 ;;
-        --remote) remote_mode=1 ;;
-        --global) global_scope=1 ;;
-        --project) project_scope=1 ;;
-        -h | --help)
-            usage
-            return 1
-            ;;
-        *)
-            printf 'Error: unknown option: %s\n' "$1" >&2
-            return 2
-            ;;
-        esac
-        shift
-    done
-    if [ "$((LIST_SKILLS + LIST_RULES))" -eq 0 ]; then return 0; fi
-    if [ "$((INSTALL_AGENT + INSTALL_SKILLS))" -gt 0 ]; then
-        printf 'Error: --list cannot be combined with installation options.\n' >&2
-        return 2
-    fi
-    if [ "$((local_mode + remote_mode))" -gt 1 ] || [ "$((global_scope + project_scope))" -gt 1 ]; then
-        printf 'Error: conflicting list modes or scopes.\n' >&2
-        return 2
-    fi
-    [ "$remote_mode" -eq 0 ] || LIST_MODE=remote
-    if [ "$LIST_MODE" = remote ] && [ "$((global_scope + project_scope))" -gt 0 ]; then
-        printf 'Error: --global/--project require local listing.\n' >&2
-        return 2
-    fi
-    [ "$global_scope" -eq 0 ] || LIST_SCOPE=global
-    [ "$project_scope" -eq 0 ] || LIST_SCOPE=project
-}
 
 require_command() {
     if ! command -v "$1" >/dev/null 2>&1; then
@@ -413,12 +718,8 @@ print_catalog() {
     for ((i = 0; i < ${#SKILL_NAMES[@]}; i++)); do
         if [ "$previous" != "${SKILL_GROUPS[i]}" ]; then
             previous="${SKILL_GROUPS[i]}"
-            if [ "${1:-}" = interactive ]; then
-                list_heading "Skills · $previous"
-                printf '%s\n' "${SKILL_SOURCES[i]}"
-            else
-                printf '\n%s (%s):\n' "$previous" "${SKILL_SOURCES[i]}"
-            fi
+            list_heading "Skills · $previous"
+            printf '%s\n' "${SKILL_SOURCES[i]}"
         fi
         printf '  %s\n' "${SKILL_NAMES[i]}"
     done
@@ -1178,8 +1479,6 @@ install_pi() {
     pi --version
 }
 
-PI_PACKAGES=(npm:pi-web-access npm:pi-subagents npm:pi-powerline-footer)
-
 # No stty mode changes: read -s restores echo even on cancellation/signals.
 read_key() {
     local suffix=""
@@ -1584,19 +1883,16 @@ choose_skill_repositories_page() {
 # Listing follows links for inspection only; it never uses removal manifests or writes installations.
 print_installed_content() {
     require_node || return 1
-    node - "$HOME" "$PROJECT_TARGET" "$LIST_SCOPE" "$LIST_RULES" "$LIST_SKILLS" "$LIST_CODEX" "$LIST_CLAUDE" "$LIST_PI" "$(pi_rule_path)" "${1:-}" "${list_color:-0}" <<'JS'
+    node - "$HOME" "$PROJECT_TARGET" "$LIST_SCOPE" "$LIST_RULES" "$LIST_SKILLS" "$LIST_CODEX" "$LIST_CLAUDE" "$LIST_PI" "$(pi_rule_path)" "$list_color" <<'JS'
 const fs = require('fs');
 const path = require('path');
-const [home, project, scope, rules, skills, codex, claude, pi, piPath, format, color] = process.argv.slice(2);
-const interactive = format === 'interactive';
+const [home, project, scope, rules, skills, codex, claude, pi, piPath, color] = process.argv.slice(2);
 const paint = (code, text) => color === '1' ? `\x1b[${code}m${text}\x1b[0m` : text;
 const rows = [];
 function printGroup(title, count) {
-    if (interactive) {
-        console.log(`\n${paint('1;36', `${title} (${count})`)}`);
-        for (const item of rows.splice(0)) console.log(item);
-    }
-    if (!count) console.log(interactive ? '  None' : '      None');
+    console.log(`\n${paint('1;36', `${title} (${count})`)}`);
+    for (const item of rows.splice(0)) console.log(item);
+    if (!count) console.log('  None');
 }
 const display = value => JSON.stringify(String(value)).slice(1, -1);
 function stat(file) {
@@ -1613,15 +1909,11 @@ function source(text) {
 function row(name, origin, file) {
     let link = '';
     if (fs.lstatSync(file).isSymbolicLink()) link = ` -> ${display(fs.readlinkSync(file))}`;
-    if (interactive) {
-        const warning = ' (broken link)';
-        const provenance = origin.endsWith(warning)
-            ? display(origin.slice(0, -warning.length)) + paint('33', warning)
-            : display(origin);
-        rows.push(`  ${paint('1', display(name))}  [${provenance}]\n    ${display(file)}${link}`);
-    } else {
-        console.log(`      ${display(name)} [${display(origin)}]\n        ${display(file)}${link}`);
-    }
+    const warning = ' (broken link)';
+    const provenance = origin.endsWith(warning)
+        ? display(origin.slice(0, -warning.length)) + paint('33', warning)
+        : display(origin);
+    rows.push(`  ${paint('1', display(name))}  [${provenance}]\n    ${display(file)}${link}`);
 }
 function ruleFiles(directory, ancestors = new Set()) {
     const info = stat(directory);
@@ -1641,8 +1933,7 @@ function ruleFiles(directory, ancestors = new Set()) {
 for (const [label, root] of [['global', home], ['project', project]]) {
     if (scope !== 'both' && scope !== label) continue;
     const scopeTitle = label === 'global' ? 'Global' : 'Project';
-    if (interactive) console.log(`\n${paint('1;36', `Installed · ${scopeTitle}`)}\n${display(root)}`);
-    else console.log(`\n${scopeTitle} (${display(root)}):`);
+    console.log(`\n${paint('1;36', `Installed · ${scopeTitle}`)}\n${display(root)}`);
     let records = {};
     if (skills === '1') {
         const lock = path.join(root, label === 'global' ? '.agents/.skill-lock.json' : 'skills-lock.json');
@@ -1651,9 +1942,7 @@ for (const [label, root] of [['global', home], ['project', project]]) {
     }
     for (const kind of ['Rules', 'Skills']) {
         if ((kind === 'Rules' ? rules : skills) !== '1') continue;
-        if (!interactive) console.log(`  ${kind}:`);
         if (kind === 'Rules' && label === 'project') {
-            if (!interactive) console.log('    Shared project rules:');
             const directory = path.join(root, 'docs/rules');
             let count = 0;
             if (stat(directory)?.isDirectory()) {
@@ -1671,7 +1960,6 @@ for (const [label, root] of [['global', home], ['project', project]]) {
         }
         for (const [agent, enabled] of [['Codex', codex], ['Claude', claude], ['Pi', pi]]) {
             if (enabled !== '1' || (agent === 'Pi' && (kind === 'Skills' || label === 'project'))) continue;
-            if (!interactive) console.log(`    ${agent}:`);
             let count = 0;
             if (kind === 'Rules') {
                 const file = agent === 'Codex' ? path.join(root, '.codex/AGENTS.md') :
@@ -1714,55 +2002,40 @@ list_heading() {
     fi
 }
 
-list_content() (
-    local format="${1:-}" list_color=0 name failed=0 rule_indent="    "
-    if [ "$format" = interactive ] && [ -t 1 ] && [ "${TERM:-dumb}" != dumb ]; then
+list_content() {
+    local list_color=0 name failed=0
+    if [ -t 1 ] && [ "${TERM:-dumb}" != dumb ]; then
         printf '\033[H\033[2J'
         if [ -z "${NO_COLOR:-}" ]; then list_color=1; fi
     fi
     if [ "$LIST_MODE" = local ]; then
-        print_installed_content "$format"
-        exit $?
+        print_installed_content
+        return $?
     fi
     trap cleanup_setup_resources EXIT
-    if [ "$format" = interactive ]; then
-        list_heading 'Available · Remote'
-        rule_indent="  "
-    else
-        printf '\nRemote available content:\n'
-    fi
+    list_heading 'Available · Remote'
     if [ "$LIST_RULES" -eq 1 ]; then
-        if [ "$format" != interactive ]; then printf '\nRules:\n'; fi
         # Remote means the published catalog, even when invoked from a checkout.
         REPO=""
         if load_rule_catalog global; then
-            if [ "$format" = interactive ]; then
-                list_heading 'Rules · Gwyntoria'
-                printf '%s\n' "$GWYNTORIA_SKILLS_URL"
-            else
-                printf '  Gwyntoria (%s):\n' "$GWYNTORIA_SKILLS_URL"
-            fi
-            for name in "${RULE_NAMES_GLOBAL[@]+"${RULE_NAMES_GLOBAL[@]}"}"; do printf '%s%s\n' "$rule_indent" "$name"; done
+            list_heading 'Rules · Gwyntoria'
+            printf '%s\n' "$GWYNTORIA_SKILLS_URL"
+            for name in "${RULE_NAMES_GLOBAL[@]+"${RULE_NAMES_GLOBAL[@]}"}"; do printf '  %s\n' "$name"; done
         else failed=1; fi
         if load_waza_rules; then
-            if [ "$format" = interactive ]; then
-                list_heading 'Rules · Waza'
-                printf '%s\n' "$WAZA_SKILLS_URL"
-            else
-                printf '  Waza (%s):\n' "$WAZA_SKILLS_URL"
-            fi
-            for name in "${RULE_NAMES_WAZA[@]+"${RULE_NAMES_WAZA[@]}"}"; do printf '%s%s\n' "$rule_indent" "$name"; done
+            list_heading 'Rules · Waza'
+            printf '%s\n' "$WAZA_RULES_URL"
+            for name in "${RULE_NAMES_WAZA[@]+"${RULE_NAMES_WAZA[@]}"}"; do printf '  %s\n' "$name"; done
         else failed=1; fi
     fi
     if [ "$LIST_SKILLS" -eq 1 ]; then
-        if [ "$format" != interactive ]; then printf '\nSkills:\n'; fi
-        preflight 4 || exit 1
+        preflight 4 || return 1
         load_catalog
-        print_catalog "$format"
+        print_catalog
         [ "${#FAILED[@]}" -eq 0 ] || failed=1
     fi
-    exit "$failed"
-)
+    return "$failed"
+}
 
 # The private manifest binds selection IDs to scanned paths and content hashes.
 # No source checkout or network access is required to remove installed content.
@@ -2426,7 +2699,7 @@ interactive_setup() {
     trap cleanup_setup_resources EXIT
     trap 'exit 130' INT
     trap 'exit 143' TERM
-    local page="${1:-main}" i task menu_status removal_scanned=0 removal_signature="" signature removal_backup=0
+    local page=main i task menu_status removal_scanned=0 removal_signature="" signature removal_backup=0
     local session_status=0 INTERACTIVE_RESULT=0 show_summary=0 list_result=0
     local repo_labels=() repo_defaults=() repo_url
     local rule_labels=() rule_names=() rule_sources=() source_scope selected_rule
@@ -2436,7 +2709,6 @@ interactive_setup() {
     local tasks=() agent_requested=0 scope rules_visited=0 project_option
     local install_title='Install / Global' remove_title='Remove / Global'
     printf -v project_option 'Project\n    %q' "$PROJECT_TARGET"
-    [ "$page" != agent_choices ] || agent_requested=1
     while :; do
         case "$page" in
         main)
@@ -2548,7 +2820,7 @@ interactive_setup() {
                 page=list_scope
             else
                 LIST_MODE=remote
-                run_interactive_task list_content interactive
+                run_interactive_task list_content
                 list_result=1
                 page=complete
             fi
@@ -2583,7 +2855,7 @@ interactive_setup() {
             for i in "${MENU_SELECTED[@]}"; do
                 case "$i" in 0) LIST_CODEX=1 ;; 1) LIST_CLAUDE=1 ;; 2) LIST_PI=1 ;; esac
             done
-            run_interactive_task list_content interactive
+            run_interactive_task list_content
             list_result=1
             page=complete
             ;;
@@ -3137,57 +3409,158 @@ interactive_setup() {
     done
 }
 
-main() {
-    local parse_status i
+run_agent_setup() (
+    set -eu
+    local script_path="" script_dir
+    REPO=""
+    if [ -n "$SCRIPT_SOURCE" ]; then
+        script_path="$(resolve_script_path "$SCRIPT_SOURCE")"
+        script_dir="${script_path%/*}"
+        REPO="$(cd -- "$script_dir/.." && pwd -P)"
+    elif [ ! -t 0 ] && [ -t 1 ]; then
+        # Bash has parsed the entry point; stdin can now carry menu input.
+        { exec 0</dev/tty; } 2>/dev/null || true
+    fi
+    if [ ! -t 0 ] || [ ! -t 1 ]; then
+        printf 'Error: Agent configuration requires an interactive terminal.\n' >&2
+        return 2
+    fi
+
+    PROJECT_TARGET="$(pwd -P)"
+    INSTALL_SKILLS=0
+    LIST_SKILLS=0
+    LIST_RULES=0
+    LIST_MODE=local
+    LIST_SCOPE=both
+    LIST_CODEX=1
+    LIST_CLAUDE=1
+    LIST_PI=1
+
+    SOURCE_ARCHIVE_URL=https://codeload.github.com/gwyntoria/skills/tar.gz/refs/heads/main
+    RESOURCE_TEMP=""
+    RESOURCE_PATH=""
+    STATUSLINE_SOURCE=""
+    INSTALL_SCOPE=global
+    RULE_TARGETS="codex claude pi"
+    SELECTED_RULES=()
+    SELECTED_RULE_SOURCES=()
+    RULE_NAMES_GLOBAL=()
+    RULE_NAMES_PROJECT=()
+    RULE_CATALOG_PROJECT=0
+    RULE_NAMES_WAZA=()
+    WAZA_RULES_PATH=""
+    WAZA_RULES_COMMIT=""
+    WAZA_RULES_ERROR=""
+
+    WAZA_SKILLS_URL="https://github.com/tw93/waza"
+    KAMI_SKILLS_URL="https://github.com/tw93/kami"
+    MATTPOCOCK_SKILLS_URL="https://github.com/mattpocock/skills"
+    MATTPOCOCK_SKILLS_PAGE_URL="https://www.aihero.dev/skills"
+    HUMANLAYER_SKILLS_URL="https://github.com/humanlayer/skills"
+    GWYNTORIA_SKILLS_URL="https://github.com/gwyntoria/skills"
+    DISTILLY_SKILLS_URL="https://github.com/titanwings/distilly"
+    # Parallel arrays keep this compatible with the Bash shipped by macOS.
+    SKILL_SOURCE_GROUPS=(Waza Kami 'Matt Pocock' HumanLayer Gwyntoria Distilly)
+    SKILL_SOURCE_DEFAULTS=(
+        'check health hunt learn read think ui write'
+        ''
+        'setup-matt-pocock-skills grill-with-docs to-spec to-tickets code-review improve-codebase-architecture implement-spec writing-for-agents codebase-design domain-modeling grilling tdd'
+        'show-me'
+        'how why'
+        ''
+    )
+    SKILL_NAMES=()
+    SKILL_SOURCES=()
+    SKILL_GROUPS=()
+    SKILL_PICKED=()
+    SKILL_EXPLICIT=()
+    CATALOG_CACHE_GROUPS=()
+    CATALOG_CACHE_NAMES=()
+    CATALOG_FAILURES=()
+    CATALOG_FETCHED_NAMES=""
+    SELECTED_REPOS=()
+    VIEW_SKILL_INDICES=()
+    TARGET_AGENTS=(codex claude-code)
+    SUCCEEDED=()
+    FAILED=()
+    MENU_SELECTED=()
+    MENU_CURSORS=()
+    MENU_CHOICES=()
+    MENU_VISITED=()
+    KEY=""
+    REMOVE_CODEX=1
+    REMOVE_CLAUDE=1
+    REMOVE_PI=1
+    REMOVE_RULES=0
+    REMOVE_SKILLS=0
+    REMOVE_SCOPE=global
+    REMOVAL_TEMP=""
+    REMOVAL_RULE_IDS=()
+    REMOVAL_RULE_LABELS=()
+    REMOVAL_SKILL_IDS=()
+    REMOVAL_SKILL_LABELS=()
+    REMOVAL_SKILL_GROUPS=()
+    REMOVAL_TARGET_COUNT=0
+    REMOVAL_RULE_SELECTION=()
+    REMOVAL_SKILL_SELECTION=()
+    REPO_ITEM_LABELS=()
+    REPO_ITEM_GROUPS=()
+    REPO_SELECTED=()
+    REPO_EXPLICIT=()
+    PI_PACKAGES=(npm:pi-web-access npm:pi-subagents npm:pi-powerline-footer)
     AGENT_ITEMS=()
     SELECTED_SKILLS=()
-    if [ "$#" -eq 0 ]; then
-        # curl | bash uses stdin for the program. Read menu input from the
-        # controlling terminal only after Bash has parsed the entrypoint.
-        if [ -z "$SCRIPT_PATH" ] && [ ! -t 0 ] && [ -t 1 ]; then
-            if ! { exec 0</dev/tty; } 2>/dev/null; then
-                printf 'Error: interactive setup requires a terminal. Use --install-cli, --install-skills, or --list.\n' >&2
-                return 2
-            fi
-        fi
-        if [ ! -t 0 ] || [ ! -t 1 ]; then
-            printf 'Error: interactive setup requires a terminal. Use --install-cli, --install-skills, or --list.\n' >&2
-            return 2
-        fi
-        interactive_setup
-        return $?
+
+    trap 'exit 129' HUP
+    interactive_setup
+)
+
+main() {
+    local parse_rc
+
+    parse_args "$@"
+    parse_rc=$?
+
+    # 0 继续；1 已打印 usage，按成功退出；其余是选项错误。
+    case "$parse_rc" in
+    0) ;;
+    1) return 0 ;;
+    *) return 2 ;;
+    esac
+
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    trap 'exit 129' HUP
+
+    if [ "$OPEN_AGENT_SETUP" -eq 1 ]; then
+        run_agent_setup
+        return "$?"
     fi
-    parse_args "$@" || {
-        parse_status=$?
-        [ "$parse_status" -ne 1 ] || return 0
-        return "$parse_status"
-    }
-    if [ "$((LIST_SKILLS + LIST_RULES))" -gt 0 ]; then
-        list_content plain
-        return $?
+
+    # RESULTS 是 run_update 和 report_results 之间唯一的交接面。
+    RESULTS=()
+    AGENT_RESULTS=()
+
+    if [ -t 1 ] && [ "${TERM:-dumb}" != dumb ] && [ -z "${NO_COLOR:-}" ]; then
+        TITLE_STYLE=$'\033[1m'
+        STEP_COLOR=$'\033[33m'
+        DIVIDER_COLOR=$'\033[90m'
+        COLOR_RESET=$'\033[0m'
     fi
-    if [ "$INSTALL_AGENT" -eq 1 ]; then
-        AGENT_ITEMS=(0 1 5)
-        SELECTED_RULES=()
-        SELECTED_RULE_SOURCES=()
-        if [ -t 0 ] && [ -t 1 ]; then
-            preflight "${AGENT_ITEMS[@]}" || return 1
-            interactive_setup agent_choices
-            return $?
-        fi
-        printf 'No terminal available; installing all Agents and bundled components.\n'
-    fi
-    preflight "${AGENT_ITEMS[@]+"${AGENT_ITEMS[@]}"}"
-    if [ "$INSTALL_SKILLS" -eq 1 ]; then
-        preflight 4
-        load_catalog
-        for ((i = 0; i < ${#SKILL_NAMES[@]}; i++)); do SELECTED_SKILLS+=("$i"); done
-    fi
-    execute_plan
+
+    trap restore_terminal EXIT
+    setup_progress
+
+    printf '\n'
+    printf '%s\n' "##################################################"
+    printf 'Update started: %s\n' "$(date '+%Y-%m-%d %H:%M:%S')"
+    printf '%s\n' "##################################################"
+
+    run_tasks
+
+    restore_terminal
+    # report_results 的返回值就是脚本的退出码。
+    report_results
 }
 
-if [ -z "${BASH_SOURCE[0]:-}" ] || [ "${BASH_SOURCE[0]}" = "$0" ]; then
-    main "$@"
-    # stdin may now be /dev/tty; do not let Bash read it as more program text.
-    exit $?
-fi
+main "$@"

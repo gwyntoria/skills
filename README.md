@@ -120,7 +120,7 @@ claude plugin install gwyn-space-skills-writing@gwyn-space
 | [`code-comments.md`](rules/code-comments.md) | 跨语言的接口契约、数据含义、流程与分支注释规则 |
 | [`writing-repo.md`](rules/writing-repo.md) | Markdown 写作仓库的资源路径、引用方式和格式检查规则 |
 
-> 规则可通过 [`scripts/setup-agents.sh`](scripts/setup-agents.sh) 的交互菜单安装和卸载。安装器还会动态获取 [Waza 的规则](https://github.com/tw93/Waza/tree/main/rules)。
+> 规则可通过 [`scripts/manage-tools.sh`](scripts/manage-tools.sh) 的 `config` 交互菜单安装和卸载。安装器还会动态获取 [Waza 的规则](https://github.com/tw93/Waza/tree/main/rules)。
 
 ## Scripts
 
@@ -128,22 +128,21 @@ claude plugin install gwyn-space-skills-writing@gwyn-space
 
 | 脚本 | 运行环境 | 说明 |
 | --- | --- | --- |
-| [`setup-agents.sh`](scripts/setup-agents.sh) | macOS / Linux | 分入口管理 Agent CLI、Skills 和 Rules，支持非交互安装以及本地和远程内容清单 |
 | [`setup-ubuntu.sh`](scripts/setup-ubuntu.sh) | Ubuntu（原生 / WSL） | 通过中文 TUI 选择基础包、开发环境与 AI 工具，选择 Fish/Zsh/Bash（默认 Fish）、准备启动配置并切换默认 shell |
-| [`update-tools.sh`](scripts/update-tools.sh) | macOS / Linux | 依次更新 Skills、Agents 和 Homebrew（使用 `brew upgrade --no-ask` 自动确认）；Agents 默认仅更新 Codex 及其插件市场，传入 `all` 才加入 Claude（含插件市场和插件）、Pi（含扩展）及 Hermes；末尾汇总结果。单独传入 `config` 会从 GitHub 下载 `setup-agents.sh` 并打开交互菜单 |
+| [`manage-tools.sh`](scripts/manage-tools.sh) | macOS / Linux | 依次更新 Skills、Agents 和 Homebrew（使用 `brew upgrade --no-ask` 自动确认）；Agents 默认仅更新 Codex 及其插件市场，传入 `all` 才加入 Claude（含插件市场和插件）、Pi（含扩展）及 Hermes；末尾汇总结果。传入 `config` 打开交互菜单，安装、清理或卸载 Agent CLI，以及安装、移除或查看 Skills 和 Rules |
 | [`list-skills.sh`](scripts/list-skills.sh) | 仓库维护 | 列出仓库内全部 skill 路径，并检查是否有重名 |
 | [`statusline.sh`](scripts/statusline.sh) | Claude Code | 状态栏脚本，显示模型与思考等级、目录与 Git 分支、上下文余量、输入输出 token、速率限制和版本 |
 
 Ubuntu 安装器面向仍受常规安全维护的 Ubuntu Desktop、Server（含 SSH）和 WSL Ubuntu，支持 amd64/arm64，需以有 sudo 权限的普通用户运行；不支持 root、容器和无人值守安装。Windows Terminal 目录同步仅在 WSL 下配置。第三方组件与软件包仍取决于当前架构、版本及已启用的软件源，不自动开启软件源；失败项会给出手动处理提示。
 
-可在交互终端执行如下命令打开 Agent 和 Ubuntu 配置菜单：
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/gwyntoria/skills/refs/heads/main/scripts/setup-agents.sh | bash
-```
+可在交互终端执行如下命令打开 Ubuntu 和 Agent 配置菜单：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/gwyntoria/skills/refs/heads/main/scripts/setup-ubuntu.sh | bash
+```
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/gwyntoria/skills/refs/heads/main/scripts/manage-tools.sh | bash -s -- config
 ```
 
 ## License
