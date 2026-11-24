@@ -51,42 +51,12 @@ print_skill_targets() {
     done
 }
 
-preflight() {
-    local item
-    for item in "$@"; do
-        case "$item" in
-        0) require_command curl || return 1 ;;
-        1)
-            require_command curl || return 1
-            require_python "Claude statusline configuration" || return 1
-            ;;
-        2) : ;;
-        3) require_python "Claude statusline configuration" || return 1 ;;
-        5)
-            require_node || return 1
-            require_command npm || return 1
-            ;;
-        4) require_skill_catalog || return 1 ;;
-        esac
-    done
-}
-
 execute_plan() {
-    local item other source previous handled index source_scope rules_directory before package
+    local item other source previous handled index source_scope rules_directory
     local completed_sources=() names=()
     for item in "${AGENT_ITEMS[@]+"${AGENT_ITEMS[@]}"}"; do
         case "$item" in
-        0) run_item 'Codex CLI' install_codex ;;
-        1)
-            before=${#FAILED[@]}
-            run_item 'Claude Code CLI' install_claude
-            if [ "${#FAILED[@]}" -eq "$before" ]; then
-                if snapshot_resource scripts/statusline.sh >/dev/null; then
-                    run_item 'Claude statusline' install_statusline
-                else FAILED+=('Claude statusline: resource unavailable'); fi
-            else FAILED+=('Claude statusline: skipped because Claude installation failed'); fi
-            ;;
-        2)
+        rules)
             for ((index = 0; index < ${#SELECTED_RULES[@]}; index++)); do
                 other="${SELECTED_RULES[index]}"
                 source_scope="${SELECTED_RULE_SOURCES[index]:-$INSTALL_SCOPE}"
@@ -98,22 +68,7 @@ execute_plan() {
                     "$other" "$INSTALL_SCOPE" "$RULE_TARGETS" install "$source_scope" "$rules_directory"
             done
             ;;
-        5)
-            before=${#FAILED[@]}
-            run_item 'Pi CLI' install_pi
-            if [ "${#FAILED[@]}" -eq "$before" ]; then
-                for package in "${PI_PACKAGES[@]}"; do run_item "$package" pi install "$package"; done
-            else
-                for package in "${PI_PACKAGES[@]}"; do FAILED+=("$package: skipped because Pi installation failed"); done
-            fi
-            ;;
-        3)
-            if ! snapshot_resource scripts/statusline.sh >/dev/null; then
-                FAILED+=('Claude statusline: resource unavailable')
-                continue
-            fi
-            run_item 'Claude statusline' install_statusline
-            ;;
+        *) install_agent_with_bundles "$item" ;;
         esac
     done
     for item in "${SELECTED_SKILLS[@]+"${SELECTED_SKILLS[@]}"}"; do
@@ -141,7 +96,7 @@ execute_plan() {
 
 print_install_plan() {
     local i destination index source_scope rules_directory rule_targets="$RULE_TARGETS" user_clis="" scope_title=Global
-    local labels=('Codex CLI' 'Claude Code CLI' 'Rules' 'Claude statusline' 'Skills' 'Pi CLI')
+    local label
     printf '\nExecution plan'
     if [ "$INSTALL_SCOPE" = project ]; then
         printf ' (project-relative destinations)'
@@ -152,12 +107,11 @@ print_install_plan() {
     fi
     printf ':\n'
     for i in "${AGENT_ITEMS[@]+"${AGENT_ITEMS[@]}"}"; do
-        if [ "$i" -ne 2 ]; then
-            printf '  \033[32m%s\033[0m\n' "${labels[i]}"
-            user_clis="${user_clis:+$user_clis, }${labels[i]}"
-        fi
-        if [ "$i" -eq 1 ]; then printf '    Claude statusline (bundled)\n'; fi
-        if [ "$i" -eq 5 ]; then printf '    %s (bundled)\n' "${PI_PACKAGES[@]}"; fi
+        if [ "$i" = rules ]; then continue; fi
+        label="$(agent_install_label "$i")"
+        printf '  \033[32m%s\033[0m\n' "$label"
+        user_clis="${user_clis:+$user_clis, }$label"
+        print_agent_bundles "$i"
     done
     if [ "${#SELECTED_RULES[@]}" -gt 0 ]; then
         for ((index = 0; index < ${#SELECTED_RULES[@]}; index++)); do

@@ -23,6 +23,8 @@ if [ "$MODE" = config ]; then
     source "$MODULE_DIR/rules/rules.sh" || exit 1
     # shellcheck source=scripts/manage-tools/agents/install.sh
     source "$MODULE_DIR/agents/install.sh" || exit 1
+    # shellcheck source=scripts/manage-tools/agents/actions.sh
+    source "$MODULE_DIR/agents/actions.sh" || exit 1
     # shellcheck source=scripts/manage-tools/content/list.sh
     source "$MODULE_DIR/content/list.sh" || exit 1
     # shellcheck source=scripts/manage-tools/content/removal.sh

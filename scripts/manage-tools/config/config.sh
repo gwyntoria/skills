@@ -31,8 +31,8 @@ interactive_setup() {
     local repo_labels=() repo_defaults=() repo_url
     local rule_labels=() rule_names=() rule_sources=() source_scope selected_rule bundled_rules
     local task_labels=('Rules' 'Skills')
-    local lifecycle_action command_name command_paths statusline_source lifecycle_status
-    local lifecycle_agents=(codex claude pi)
+    local lifecycle_action
+    local agent_names=(codex claude pi) selected_agents=()
     local tasks=() agent_requested=0 scope rules_visited=0 project_option
     local install_title='Install / Global' remove_title='Remove / Global'
     printf -v project_option 'Project\n    %q' "$PROJECT_TARGET"
@@ -79,23 +79,9 @@ interactive_setup() {
                 page=agent_menu
                 continue
             fi
-            if require_python "Agent $lifecycle_action"; then
-                lifecycle_status=0
-                for i in "${MENU_SELECTED[@]}"; do
-                    command_name="${lifecycle_agents[i]}"
-                    command_paths=$(type -aP "$command_name" || true)
-                    statusline_source=""
-                    if [ "$command_name" = claude ] && [ -f "$HOME/.claude/statusline.sh" ]; then
-                        statusline_source="$(snapshot_resource scripts/statusline.sh)" || statusline_source=""
-                    fi
-                    printf '\nAgent / %s / %s\n' "$lifecycle_action" "$command_name"
-                    run_interactive_task python3 -B "$MODULE_DIR/agents/lifecycle.py" "$lifecycle_action" "$command_name" "$command_paths" "$statusline_source" "${PI_PACKAGES[@]}"
-                    if [ "$INTERACTIVE_RESULT" -ne 0 ]; then lifecycle_status=1; fi
-                done
-                INTERACTIVE_RESULT="$lifecycle_status"
-            else
-                INTERACTIVE_RESULT=1
-            fi
+            selected_agents=()
+            for i in "${MENU_SELECTED[@]}"; do selected_agents+=("${agent_names[i]}"); done
+            run_agent_lifecycles "$lifecycle_action" "${selected_agents[@]}"
             page=complete
             ;;
         content_menu)
@@ -381,11 +367,11 @@ interactive_setup() {
             agent_requested=0
             for task in "${tasks[@]}"; do
                 case "$task" in
-                0) AGENT_ITEMS+=(2) ;;
+                0) AGENT_ITEMS+=(rules) ;;
                 1) INSTALL_SKILLS=1 ;;
                 esac
             done
-            if [ "$INSTALL_SKILLS" -eq 1 ] && ! preflight 4; then
+            if [ "$INSTALL_SKILLS" -eq 1 ] && ! require_skill_catalog; then
                 FAILED+=('Installation preparation failed')
                 show_summary=1
                 page=complete
@@ -400,16 +386,8 @@ interactive_setup() {
                 continue
             }
             AGENT_ITEMS=()
-            for i in "${MENU_SELECTED[@]+"${MENU_SELECTED[@]}"}"; do
-                case "$i" in 0) AGENT_ITEMS+=(0) ;; 1) AGENT_ITEMS+=(1) ;; 2) AGENT_ITEMS+=(5) ;; esac
-            done
-            if ! preflight "${AGENT_ITEMS[@]+"${AGENT_ITEMS[@]}"}"; then
-                FAILED+=('Installation preparation failed')
-                show_summary=1
-                page=complete
-                continue
-            fi
-            if [[ " ${AGENT_ITEMS[*]+${AGENT_ITEMS[*]}} " = *" 1 "* ]] && ! snapshot_resource scripts/statusline.sh >/dev/null; then
+            for i in "${MENU_SELECTED[@]}"; do AGENT_ITEMS+=("${agent_names[i]}"); done
+            if ! preflight_agent_install "${AGENT_ITEMS[@]}"; then
                 FAILED+=('Installation preparation failed')
                 show_summary=1
                 page=complete
@@ -418,7 +396,7 @@ interactive_setup() {
             page=before_rules
             ;;
         before_rules)
-            if [[ " ${AGENT_ITEMS[*]+${AGENT_ITEMS[*]}} " = *" 2 "* ]]; then
+            if [[ " ${AGENT_ITEMS[*]+${AGENT_ITEMS[*]}} " = *" rules "* ]]; then
                 page=rule_choices
             else
                 SELECTED_RULES=()
@@ -562,7 +540,7 @@ interactive_setup() {
             done
             choose_items 6 "$install_title / Skill repositories" 1 "${repo_defaults[*]}" "${repo_labels[@]}" || {
                 [ "$?" -eq 2 ] || return "$session_status"
-                if [[ " ${AGENT_ITEMS[*]+${AGENT_ITEMS[*]}} " = *" 2 "* ]]; then
+                if [[ " ${AGENT_ITEMS[*]+${AGENT_ITEMS[*]}} " = *" rules "* ]]; then
                     if [ "$INSTALL_SCOPE" = global ] && [ "${#SELECTED_RULES[@]}" -gt 0 ]; then page=rule_targets; else page=rule_choices; fi
                 elif [ "$agent_requested" -eq 1 ]; then page=agent_choices; else page=tasks; fi
                 continue
@@ -611,7 +589,7 @@ interactive_setup() {
             page=review
             ;;
         review)
-            if [[ " ${AGENT_ITEMS[*]+${AGENT_ITEMS[*]}} " = *" 2 "* ]]; then
+            if [[ " ${AGENT_ITEMS[*]+${AGENT_ITEMS[*]}} " = *" rules "* ]]; then
                 choose_items 11 '' 0 0 Install Cancel || {
                     menu_status=$?
                     if [ "$menu_status" -eq 3 ]; then
@@ -781,7 +759,6 @@ run_agent_setup() (
     REPO_ITEM_GROUPS=()
     REPO_SELECTED=()
     REPO_EXPLICIT=()
-    PI_PACKAGES=(npm:pi-web-access npm:pi-subagents npm:pi-powerline-footer)
     AGENT_ITEMS=()
     SELECTED_SKILLS=()
 
