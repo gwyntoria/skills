@@ -380,7 +380,7 @@ interactive_setup() {
             page=before_rules
             ;;
         agent_choices)
-            choose_items 12 'Agent / Install' 1 '1 0 0' Codex 'Claude Code (with statusline)' 'Pi (with three packages)' || {
+            choose_items 12 'Agent / Install' 1 0 Codex 'Claude Code (with statusline)' 'Pi (with three packages)' || {
                 [ "$?" -eq 2 ] || return "$session_status"
                 page=agent_menu
                 continue
