@@ -1,18 +1,11 @@
-# The private manifest binds picker selections to scanned paths and fingerprints.
-removal_inventory() {
-    run_python "Skill / Rule removal" content/removal.py "$HOME" "$PROJECT_TARGET" "$REMOVE_SCOPE" "$REMOVAL_TEMP/inventory.json" "$(pi_rule_path)" "$@"
-}
+# Only remove temporary directories created by this session.
+REMOVAL_TEMP=""
+REMOVAL_SIGNATURE=""
 
-scan_removal_inventory() {
-    local rows id kind group label
-    require_python "Skill / Rule removal" || return 1
+reset_removal() {
     if [ -n "$REMOVAL_TEMP" ]; then rm -rf -- "$REMOVAL_TEMP"; fi
-    REMOVAL_TEMP="$(mktemp -d)" || return 1
-    trap cleanup_setup_resources EXIT
-    trap 'exit 130' INT
-    trap 'exit 143' TERM
-    removal_inventory scan "$REMOVE_CODEX" "$REMOVE_CLAUDE" "$REMOVE_RULES" "$REMOVE_SKILLS" "$REMOVE_PI" || return 1
-    rows=$(removal_inventory rows) || return 1
+    REMOVAL_TEMP=""
+    REMOVAL_SIGNATURE=""
     REMOVAL_RULE_IDS=()
     REMOVAL_RULE_LABELS=()
     REMOVAL_SKILL_IDS=()
@@ -20,9 +13,27 @@ scan_removal_inventory() {
     REMOVAL_SKILL_GROUPS=()
     REMOVAL_RULE_SELECTION=()
     REMOVAL_SKILL_SELECTION=()
-    MENU_VISITED[12]=0
-    MENU_CURSORS[12]=0
-    MENU_CURSORS[13]=0
+    REMOVAL_TARGET_COUNT=0
+}
+
+# The private manifest binds picker selections to scanned paths and fingerprints.
+removal_inventory() {
+    run_python "Skill / Rule removal" content/removal.py "$HOME" "$PROJECT_TARGET" "$REMOVAL_SCOPE" "$REMOVAL_TEMP/inventory.json" "$(pi_rule_path)" "$@"
+}
+
+# Return 0 for a fresh inventory, 2 for a reused inventory, or 1 on failure.
+prepare_removal_inventory() {
+    local scope="$1" codex="$2" claude="$3" rules="$4" skills="$5" pi="$6"
+    local signature rows id kind group label
+    printf -v signature '%q ' "$@" "$PROJECT_TARGET" "$(pi_rule_path)"
+    if [ "$signature" = "$REMOVAL_SIGNATURE" ]; then return 2; fi
+
+    reset_removal
+    require_python "Skill / Rule removal" || return 1
+    REMOVAL_TEMP="$(mktemp -d)" || return 1
+    REMOVAL_SCOPE="$scope"
+    removal_inventory scan "$codex" "$claude" "$rules" "$skills" "$pi" || return 1
+    rows=$(removal_inventory rows) || return 1
     while IFS=$'\t' read -r id kind group label; do
         [ -n "$id" ] || continue
         if [ "$kind" = rules ]; then
@@ -34,6 +45,16 @@ scan_removal_inventory() {
             REMOVAL_SKILL_GROUPS+=("$group")
         fi
     done <<<"$rows"
+    REMOVAL_SIGNATURE="$signature"
+}
+
+select_removal_entries() {
+    local kind="$1"
+    shift
+    case "$kind" in
+    rules) REMOVAL_RULE_SELECTION=("$@") ;;
+    skills) REMOVAL_SKILL_SELECTION=("$@") ;;
+    esac
 }
 
 preview_selected_removal() {
@@ -67,6 +88,10 @@ preview_selected_removal() {
     # The first line counts actual manifest entries, including opted-in links.
     REMOVAL_TARGET_COUNT="${preview%%$'\n'*}"
     printf '\n%s\n' "${preview#*$'\n'}"
+}
+
+apply_selected_removal() {
+    removal_inventory remove "$1"
 }
 
 list_setup_backups() {

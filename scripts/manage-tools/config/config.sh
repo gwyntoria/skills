@@ -1,7 +1,7 @@
 cleanup_setup_resources() {
     if [ -t 1 ]; then printf '\033[?25h'; fi
     if [ -n "$WAZA_TEMP" ]; then rm -rf -- "$WAZA_TEMP"; fi
-    if [ -n "$REMOVAL_TEMP" ]; then rm -rf -- "$REMOVAL_TEMP"; fi
+    reset_removal
 }
 
 resolve_resource() {
@@ -37,7 +37,8 @@ interactive_setup() {
     trap cleanup_setup_resources EXIT
     trap 'exit 130' INT
     trap 'exit 143' TERM
-    local page=main i task menu_status removal_scanned=0 removal_signature="" signature removal_backup=0
+    local page=main i task menu_status removal_backup=0
+    local REMOVE_SCOPE=global REMOVE_CODEX=1 REMOVE_CLAUDE=1 REMOVE_PI=1 REMOVE_RULES=0 REMOVE_SKILLS=0
     local session_status=0 INTERACTIVE_RESULT=0 show_summary=0 list_result=0
     local repo_labels=() repo_defaults=() repo_url
     local rule_labels=() rule_names=() rule_sources=() source_scope selected_rule
@@ -118,7 +119,7 @@ interactive_setup() {
             case "${MENU_SELECTED[0]}" in
             0) page=install_scope ;;
             1)
-                removal_scanned=0
+                reset_removal
                 page=remove_scope
                 ;;
             2) page=list_categories ;;
@@ -253,43 +254,48 @@ interactive_setup() {
             for i in "${MENU_SELECTED[@]}"; do
                 case "$i" in 0) REMOVE_CODEX=1 ;; 1) REMOVE_CLAUDE=1 ;; 2) REMOVE_PI=1 ;; esac
             done
-            signature="$REMOVE_SCOPE/$PROJECT_TARGET/$REMOVE_CODEX/$REMOVE_CLAUDE/$REMOVE_PI/$REMOVE_RULES/$REMOVE_SKILLS/$(pi_rule_path)"
-            if [ "$removal_scanned" -eq 0 ] || [ "$signature" != "$removal_signature" ]; then
-                if ! scan_removal_inventory; then
-                    FAILED+=('Installed content scan failed')
-                    show_summary=1
-                    page=complete
-                    continue
-                fi
-                removal_signature="$signature"
-                removal_scanned=1
-            fi
+            menu_status=0
+            prepare_removal_inventory "$REMOVE_SCOPE" "$REMOVE_CODEX" "$REMOVE_CLAUDE" "$REMOVE_RULES" "$REMOVE_SKILLS" "$REMOVE_PI" || menu_status=$?
+            case "$menu_status" in
+            0)
+                MENU_VISITED[12]=0
+                MENU_CURSORS[12]=0
+                MENU_CURSORS[13]=0
+                ;;
+            2) ;;
+            *)
+                FAILED+=('Installed content scan failed')
+                show_summary=1
+                page=complete
+                continue
+                ;;
+            esac
             page=remove_rules
             ;;
         remove_rules)
-            if [ "$REMOVE_RULES" -eq 1 ] && [ "${#REMOVAL_RULE_IDS[@]}" -gt 0 ]; then
+            if [ "${#REMOVAL_RULE_LABELS[@]}" -gt 0 ]; then
                 choose_items 12 "$remove_title / Rules" 1 0 "${REMOVAL_RULE_LABELS[@]}" || {
                     [ "$?" -eq 2 ] || return "$session_status"
                     page=remove_agents
                     continue
                 }
-                REMOVAL_RULE_SELECTION=("${MENU_SELECTED[@]+"${MENU_SELECTED[@]}"}")
+                select_removal_entries rules "${MENU_SELECTED[@]}"
             fi
             page=remove_skills
             ;;
         remove_skills)
-            if [ "$REMOVE_SKILLS" -eq 1 ] && [ "${#REMOVAL_SKILL_IDS[@]}" -gt 0 ]; then
+            if [ "${#REMOVAL_SKILL_LABELS[@]}" -gt 0 ]; then
                 REPO_ITEM_LABELS=("${REMOVAL_SKILL_LABELS[@]}")
                 REPO_ITEM_GROUPS=("${REMOVAL_SKILL_GROUPS[@]}")
                 REPO_SELECTED=("${REMOVAL_SKILL_SELECTION[@]+"${REMOVAL_SKILL_SELECTION[@]}"}")
-                choose_skill_repositories 13 "$remove_title / Skills by repository" 31 || {
-                    menu_status=$?
-                    REMOVAL_SKILL_SELECTION=("${REPO_SELECTED[@]+"${REPO_SELECTED[@]}"}")
+                menu_status=0
+                choose_skill_repositories 13 "$remove_title / Skills by repository" 31 || menu_status=$?
+                select_removal_entries skills "${REPO_SELECTED[@]}"
+                if [ "$menu_status" -ne 0 ]; then
                     [ "$menu_status" -eq 2 ] || return "$session_status"
-                    if [ "$REMOVE_RULES" -eq 1 ] && [ "${#REMOVAL_RULE_IDS[@]}" -gt 0 ]; then page=remove_rules; else page=remove_agents; fi
+                    if [ "${#REMOVAL_RULE_LABELS[@]}" -gt 0 ]; then page=remove_rules; else page=remove_agents; fi
                     continue
-                }
-                REMOVAL_SKILL_SELECTION=("${REPO_SELECTED[@]+"${REPO_SELECTED[@]}"}")
+                fi
             fi
             preview_selected_removal || {
                 menu_status=$?
@@ -316,9 +322,9 @@ interactive_setup() {
             n | N | '') page=remove_confirm ;;
             q | Q) return "$session_status" ;;
             b | B)
-                if [ "$REMOVE_SKILLS" -eq 1 ] && [ "${#REMOVAL_SKILL_IDS[@]}" -gt 0 ]; then
+                if [ "${#REMOVAL_SKILL_LABELS[@]}" -gt 0 ]; then
                     page=remove_skills
-                elif [ "$REMOVE_RULES" -eq 1 ] && [ "${#REMOVAL_RULE_IDS[@]}" -gt 0 ]; then
+                elif [ "${#REMOVAL_RULE_LABELS[@]}" -gt 0 ]; then
                     page=remove_rules
                 else page=remove_agents; fi
                 continue
@@ -336,7 +342,7 @@ interactive_setup() {
             printf 'Confirm removal? [Y/n] (b/Esc: back | q: exit): '
             read_back_answer || return "$session_status"
             case "$REPLY" in
-            y | Y | '') run_interactive_task removal_inventory remove "$removal_backup" ;;
+            y | Y | '') run_interactive_task apply_selected_removal "$removal_backup" ;;
             q | Q) return "$session_status" ;;
             b | B)
                 page=remove_backup
@@ -722,13 +728,7 @@ interactive_setup() {
             REMOVE_SCOPE=global
             install_title='Install / Global'
             remove_title='Remove / Global'
-            REMOVAL_RULE_SELECTION=()
-            REMOVAL_SKILL_SELECTION=()
-            removal_scanned=0
-            if [ -n "$REMOVAL_TEMP" ]; then
-                rm -rf -- "$REMOVAL_TEMP"
-                REMOVAL_TEMP=""
-            fi
+            reset_removal
             INTERACTIVE_RESULT=0
             show_summary=0
             list_result=0
@@ -807,21 +807,6 @@ run_agent_setup() (
     MENU_CHOICES=()
     MENU_VISITED=()
     KEY=""
-    REMOVE_CODEX=1
-    REMOVE_CLAUDE=1
-    REMOVE_PI=1
-    REMOVE_RULES=0
-    REMOVE_SKILLS=0
-    REMOVE_SCOPE=global
-    REMOVAL_TEMP=""
-    REMOVAL_RULE_IDS=()
-    REMOVAL_RULE_LABELS=()
-    REMOVAL_SKILL_IDS=()
-    REMOVAL_SKILL_LABELS=()
-    REMOVAL_SKILL_GROUPS=()
-    REMOVAL_TARGET_COUNT=0
-    REMOVAL_RULE_SELECTION=()
-    REMOVAL_SKILL_SELECTION=()
     REPO_ITEM_LABELS=()
     REPO_ITEM_GROUPS=()
     REPO_SELECTED=()
