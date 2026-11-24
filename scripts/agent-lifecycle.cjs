@@ -496,6 +496,70 @@ function scanRoot(root, profile) {
   }
 }
 
+function claudeOldVersions() {
+  const root = path.join(
+    env.XDG_DATA_HOME || path.join(home, ".local/share"),
+    "claude/versions",
+  );
+  if (!safe(root) || !stat(root)?.isDirectory()) return;
+
+  const launcher = path.join(home, ".local/bin/claude");
+  const activeVersions = () => {
+    if (!safe(launcher) || !stat(launcher)?.isSymbolicLink()) return;
+    const active = fs.realpathSync(launcher);
+    if (path.dirname(active) !== root || !safe(active) || !stat(active)?.isFile())
+      return;
+    return [active, ...paths.filter((file) => fs.existsSync(file)).map(
+      (file) => fs.realpathSync(file),
+    )];
+  };
+  const versions = () => fs.readdirSync(root)
+    .filter((name) => /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(name))
+    .map((name) => path.join(root, name))
+    .filter((file) => {
+      const info = stat(file);
+      return info?.isFile() && info.nlink === 1 && (info.mode & 0o100) && safe(file);
+    })
+    .sort((a, b) => stat(b).mtimeMs - stat(a).mtimeMs || b.localeCompare(a));
+  const candidates = () => {
+    try {
+      const active = activeVersions();
+      return active ? versions().filter((file) => !active.includes(file)).slice(1) : [];
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+      return [];
+    }
+  };
+  const available = candidates();
+  if (!available.length) return;
+
+  // lsof exits 1 without diagnostics when no process holds the file.
+  const isUnused = (file) => {
+    const probe = spawnSync("lsof", ["-t", "--", file], {
+      encoding: "utf8",
+      timeout: 3000,
+    });
+    return !probe.error && probe.status === 1 && !probe.stdout && !probe.stderr;
+  };
+  for (const file of available) {
+    if (!isUnused(file)) {
+      warnings.add(`Skipped in-use or unverifiable Claude version ${show(file)}`);
+      continue;
+    }
+    const item = removal(file, "Remove old Claude Code native version");
+    if (!item) continue;
+    optional.push({
+      ...item,
+      apply() {
+        if (!candidates().includes(file) || !isUnused(file))
+          throw Error(`Claude version is now protected or unverifiable ${show(file)}`);
+        item.check();
+        item.apply();
+      },
+    });
+  }
+}
+
 function statusline() {
   const script = path.join(home, ".claude/statusline.sh");
   const settingsFile = path.join(home, ".claude/settings.json");
@@ -834,7 +898,10 @@ async function main() {
         removal(path.join(root, cache), "Remove model catalog cache"),
       );
   }
-  if (agent === "claude") statusline();
+  if (agent === "claude") {
+    if (!uninstall) claudeOldVersions();
+    statusline();
+  }
   if (agent === "pi" && executable)
     piPackages(managed?.launcher || executable, configured);
 
