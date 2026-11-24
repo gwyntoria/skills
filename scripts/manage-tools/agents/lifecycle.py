@@ -32,6 +32,7 @@ NPM_PACKAGES = {
     "claude": ("@anthropic-ai/claude-code",),
     "pi": ("@earendil-works/pi-coding-agent", "@mariozechner/pi-coding-agent"),
 }
+BREW_PREFIXES = ("/opt/homebrew", "/usr/local", "/home/linuxbrew/.linuxbrew")
 UNINSTALL_GUIDE = {
     "codex": "https://developers.openai.com/codex/cli",
     "claude": "https://code.claude.com/docs/en/setup#uninstall-claude-code",
@@ -187,8 +188,11 @@ class Lifecycle:
             marker.get("kind") != "pi-managed-install"
             or marker.get("schemaVersion") != 1
             or marker.get("layout") != "releases-v1"
+            or not isinstance(entry, str)
+            or not os.path.isabs(entry)
             or (
                 is_alias
+                and not (self.uninstall and executable == launcher)
                 and not self.verified_pi_uninstall_alias(
                     executable_info, launcher, entrypoint
                 )
@@ -201,7 +205,7 @@ class Lifecycle:
             if (
                 path == launcher
                 or not is_link(info(path))
-                or real(path) != launcher
+                or realpath(path) != launcher
             ):
                 continue
             if self.user.safe(path):
@@ -243,11 +247,22 @@ class Lifecycle:
                 return Installation("Claude native", [executable], install)
         return self.npm_installation(executable)
 
-    def npm_installation(self, executable):
+    def npm_installation(self, executable, *, external_pi=False):
         prefix = dirname(dirname(executable))
         for name in NPM_PACKAGES[self.agent]:
             folder = join(prefix, "lib/node_modules", name)
-            metadata = self.user.json(join(folder, "package.json"))
+            manifest = join(folder, "package.json")
+            if external_pi:
+                if realpath(manifest) != manifest or not is_file(
+                    info(manifest)
+                ):
+                    continue
+                with open(manifest, encoding="utf-8") as stream:
+                    metadata = json.load(stream)
+                if not isinstance(metadata, dict):
+                    continue
+            else:
+                metadata = self.user.json(manifest)
             entry = metadata.get("bin")
             if isinstance(entry, dict):
                 entry = entry.get(self.agent)
@@ -260,7 +275,11 @@ class Lifecycle:
             ):
                 continue
             target = normpath(join(folder, entry))
-            if not within(folder, target) or link_target(executable) != target:
+            if (
+                not within(folder, target)
+                or link_target(executable) != target
+                or (external_pi and real(target) != target)
+            ):
                 continue
             npm = join(prefix, "bin/npm")
             manager = npm if info(npm) else "npm"
@@ -290,6 +309,144 @@ class Lifecycle:
                 f"npm {name} (prefix {show(prefix)})", command=command
             )
         return None
+
+    def brew_prefix_pi(self, path, target):
+        prefix = dirname(dirname(path))
+        brew = join(prefix, "bin/brew")
+        cellar = join(prefix, "Cellar/pi-coding-agent")
+        keg = join(cellar, os.path.relpath(target, cellar).split(os.sep)[0])
+        if (
+            not within(cellar, target)
+            or realpath(join(keg, "bin/pi")) != target
+            or not os.access(brew, os.X_OK)
+        ):
+            return self.npm_installation(
+                path, external_pi=not within(self.home, path)
+            )
+
+        def uninstall_formula():
+            run(
+                brew,
+                ["uninstall", "--formula", "pi-coding-agent"],
+                interactive=True,
+            )
+            if info(path):
+                raise ValueError(f"Homebrew entry remains {show(path)}")
+
+        return Installation(
+            "Homebrew pi-coding-agent",
+            command=checked_command(
+                f"Uninstall Homebrew pi-coding-agent at {show(path)}",
+                path,
+                uninstall_formula,
+            ),
+        )
+
+    def pi_uninstall(self):
+        prefixes = {*BREW_PREFIXES, join(self.home, ".linuxbrew")}
+        brew_prefix = os.environ.get("HOMEBREW_PREFIX")
+        if brew_prefix and os.path.isabs(brew_prefix):
+            prefixes.add(normpath(brew_prefix))
+        brew_entries = {join(prefix, "bin/pi") for prefix in prefixes}
+        candidates = list(
+            dict.fromkeys(
+                [
+                    *self.command_paths,
+                    join(self.home, ".local/bin/pi"),
+                    *sorted(brew_entries),
+                    *(join(root, "bin/pi") for root in self.roots),
+                ]
+            )
+        )
+        installations = {}
+        links = {}
+        for path in candidates:
+            if (
+                not os.path.isabs(path)
+                or basename(path) != "pi"
+                or not info(path)
+            ):
+                continue
+            if not os.path.isfile(path):
+                self.warn(f"Unprocessed Pi entry {show(path)}")
+                continue
+            target = real(path)
+            links[path] = target
+            if target in installations:
+                continue
+            installation = self.managed_pi(path) or self.cli_installation(path)
+            if (
+                not installation
+                and path in brew_entries
+                and is_link(info(path))
+            ):
+                installation = self.brew_prefix_pi(path, target)
+            if installation:
+                installations[target] = path, installation
+                for entry in installation.files + installation.outside_links:
+                    links[entry] = target
+
+        if not installations:
+            raise ValueError(
+                "No verified Pi installation found. Checked: "
+                + ", ".join(map(show, candidates))
+            )
+        return self.pi_uninstall_steps(installations, links, brew_entries)
+
+    def pi_alias_step(self, path, target, brew_entries):
+        entry = info(path)
+        if not is_link(entry) or not (
+            self.user.safe(path)
+            or (
+                path in brew_entries
+                and not within(self.home, path)
+                and entry.st_uid == os.getuid()
+                and real(dirname(path)) == dirname(path)
+                and os.access(dirname(path), os.W_OK)
+            )
+        ):
+            self.warn(f"Unprocessed Pi entry {show(path)}")
+            return None
+        before = identity(path)
+        parent = identity(dirname(path))
+
+        def unlink_alias():
+            if (
+                identity(path) != before
+                or identity(dirname(path)) != parent
+                or (os.path.exists(path) and real(path) != target)
+            ):
+                raise ValueError(f"Pi entry changed {show(path)}")
+            os.unlink(path)
+
+        return checked_command(
+            f"Remove Pi launcher link {show(path)}", path, unlink_alias
+        )
+
+    def pi_uninstall_steps(self, installations, links, brew_entries):
+        aliases = []
+        steps = []
+        preview = []
+        for path, installation in installations.values():
+            preview.append(f"Selected CLI {show(path)} ({installation.method})")
+            steps.extend(self.cli_steps(installation))
+        for path, target in links.items():
+            if target not in installations:
+                self.warn(f"Unrecognized Pi entry {show(path)}")
+                continue
+            primary, installation = installations[target]
+            if path in installation.files or (
+                path == primary and installation.command
+            ):
+                continue
+            alias = self.pi_alias_step(path, target, brew_entries)
+            if alias:
+                aliases.append(alias)
+        primary, installation = next(iter(installations.values()))
+        preview.append(
+            "Removing Pi settings also removes extension enablement records."
+        )
+        return installation.launcher or primary, preview, aliases + steps
 
     def scan_root(self, root):
         if not self.user.safe(root):
@@ -740,10 +897,6 @@ class Lifecycle:
             preview.append(
                 "Claude desktop and IDE clients may share these data paths."
             )
-        elif self.agent == "pi":
-            preview.append(
-                "Removing Pi settings also removes extension enablement records."
-            )
         return preview
 
     def selected_items(self):
@@ -813,11 +966,15 @@ class Lifecycle:
         executable = self.command_paths[0] if self.command_paths else None
         managed = (
             self.managed_pi(executable)
-            if executable and self.agent == "pi"
+            if executable and self.agent == "pi" and not self.uninstall
             else None
         )
         installation = None
-        if self.uninstall:
+        cli = []
+        pi_uninstall = self.uninstall and self.agent == "pi"
+        if pi_uninstall:
+            executable, preview, cli = self.pi_uninstall()
+        elif self.uninstall:
             installation = (
                 (managed or self.cli_installation(executable))
                 if executable
@@ -835,7 +992,9 @@ class Lifecycle:
         self.collect_cleanup(executable, managed)
         if self.uninstall:
             self.collect_uninstall(executable)
-            preview = self.uninstall_preview(installation, executable)
+            if installation:
+                preview = self.uninstall_preview(installation, executable)
+                cli = self.cli_steps(installation)
         else:
             preview = list(self.warnings)
             if not self.optional:
@@ -848,7 +1007,6 @@ class Lifecycle:
         if selected is None:
             print("Cancelled.")
             return
-        cli = self.cli_steps(installation)
         plan = [
             *self.credentials,
             *(item for item in selected if item.needs_cli),

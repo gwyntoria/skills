@@ -37,7 +37,7 @@ install_pi() {
     require_node
     require_command npm
     if ! command -v pi >/dev/null 2>&1; then
-        curl -fsSL https://pi.dev/install.sh | sh
+        npm install --global --ignore-scripts @earendil-works/pi-coding-agent
     fi
     require_command pi
     pi --version
