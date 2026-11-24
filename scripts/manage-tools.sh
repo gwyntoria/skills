@@ -9,12 +9,12 @@ SOURCE_ARCHIVE_URL=https://codeload.github.com/gwyntoria/skills/tar.gz/refs/head
 SOURCE_TEMP=""
 
 usage() {
-    printf 'Usage: %s [-a | all | -c | config | -h | help]\n' "$PROGRAM_NAME"
+    printf 'Usage: %s [-a | update-all | -c | config | -h | help]\n' "$PROGRAM_NAME"
     printf '\n'
     printf 'Arguments:\n'
-    printf '  -a, all     Also update Claude, Pi and Hermes, including supported plugins and extensions\n'
-    printf '  -c, config  Download configuration resources and open the Agent menu (requires an interactive terminal)\n'
-    printf '  -h, help    Show this help message\n'
+    printf '  -a, update-all  Also update Claude, Pi and Hermes, including supported plugins and extensions\n'
+    printf '  -c, config      Open the Agent menu using local repository modules or GitHub main (requires an interactive terminal)\n'
+    printf '  -h, help        Show this help message\n'
     printf '\nDefault: update Skills, Codex (including Plugin Marketplace) and Homebrew.\n'
     printf 'Updates run directly from the installed script.\n'
 }
@@ -25,7 +25,7 @@ usage() {
 parse_args() {
     while [ "$#" -gt 0 ]; do
         case "$1" in
-        -a | all)
+        -a | update-all)
             UPDATE_ALL=1
             shift
             ;;
@@ -46,11 +46,28 @@ parse_args() {
     done
 
     if [ "$OPEN_AGENT_SETUP" -eq 1 ] && [ "$UPDATE_ALL" -eq 1 ]; then
-        printf 'Error: config cannot be combined with all.\n' >&2
+        printf 'Error: config cannot be combined with update-all.\n' >&2
         return 2
     fi
 
     return 0
+}
+
+resolve_script_path() {
+    local file="$1" directory link hops=0 CDPATH=""
+    case "$file" in /*) ;; *) file="./$file" ;; esac
+    while [ -L "$file" ]; do
+        [ "$hops" -lt 40 ] || {
+            printf 'Too many script symlinks\n' >&2
+            return 1
+        }
+        hops=$((hops + 1))
+        directory="$(cd -P -- "$(dirname "$file")" && pwd -P)" || return 1
+        link="$(readlink "$file")" || return 1
+        case "$link" in /*) file="$link" ;; *) file="$directory/$link" ;; esac
+    done
+    directory="$(cd -P -- "$(dirname "$file")" && pwd -P)" || return 1
+    printf '%s/%s\n' "$directory" "${file##*/}"
 }
 
 load_remote_source() {
@@ -542,7 +559,7 @@ report_results() {
 }
 
 main() {
-    local parse_rc input_fd=0 MODULE_ENTRY=""
+    local parse_rc script_path input_fd=0 MODULE_ENTRY=""
     parse_args "$@"
     parse_rc=$?
     case "$parse_rc" in
@@ -563,6 +580,13 @@ main() {
         if [ ! -t "$input_fd" ] || [ ! -t 1 ]; then
             printf 'Error: Agent configuration requires an interactive terminal.\n' >&2
             return 2
+        fi
+        if [ -n "$SCRIPT_SOURCE" ]; then
+            script_path="$(resolve_script_path "$SCRIPT_SOURCE")" || return 1
+            MODULE_ENTRY="${script_path%/*}/manage-tools/main.sh"
+        fi
+        if [ -f "$MODULE_ENTRY" ]; then
+            exec "$BASH" "$MODULE_ENTRY" local config "$SOURCE_ARCHIVE_URL" <&"$input_fd"
         fi
         load_remote_source || return 1
         "$BASH" "$MODULE_ENTRY" archive config "$SOURCE_ARCHIVE_URL" <&"$input_fd"

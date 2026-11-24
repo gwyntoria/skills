@@ -144,10 +144,28 @@ class Lifecycle:
             )
         )
 
+    def verified_pi_uninstall_alias(
+        self, executable_info, launcher, entrypoint
+    ):
+        entry = entrypoint.get("path")
+        if (
+            not self.uninstall
+            or not is_link(executable_info)
+            or entrypoint.get("type") != "symlink"
+            or not isinstance(entry, str)
+            or not self.user.safe(entry)
+            or not is_link(info(entry))
+        ):
+            return False
+        try:
+            return real(entry) == launcher
+        except FileNotFoundError:
+            return False
+
     def managed_pi(self, executable):
-        entry = info(executable)
-        if entry is None or (
-            not self.user.safe(executable) and not is_link(entry)
+        executable_info = info(executable)
+        if executable_info is None or (
+            not self.user.safe(executable) and not is_link(executable_info)
         ):
             return None
         launcher = real(executable)
@@ -164,16 +182,22 @@ class Lifecycle:
         if not isinstance(entrypoint, dict):
             return None
         entry = entrypoint.get("path")
+        is_alias = entry not in (launcher, executable)
         if (
             marker.get("kind") != "pi-managed-install"
             or marker.get("schemaVersion") != 1
             or marker.get("layout") != "releases-v1"
-            or entry not in (launcher, executable)
+            or (
+                is_alias
+                and not self.verified_pi_uninstall_alias(
+                    executable_info, launcher, entrypoint
+                )
+            )
         ):
             return None
         files = [launcher]
         outside_links = []
-        for path in dict.fromkeys([executable, entry]):
+        for path in dict.fromkeys([entry if is_alias else executable, entry]):
             if (
                 path == launcher
                 or not is_link(info(path))
@@ -686,15 +710,18 @@ class Lifecycle:
                     self.custom_pi_sessions(directory)
 
     def uninstall_preview(self, installation, executable):
-        preview = [
-            f"Selected CLI {show(installation.launcher or executable)} ({installation.method})"
-        ]
+        selected = installation.launcher or executable
+        preview = [f"Selected CLI {show(selected)} ({installation.method})"]
         for path in installation.outside_links:
             self.warn(
                 f"Launcher link {show(path)} is outside the permitted removal scope and will remain after its target is removed"
             )
-        for path in self.command_paths[1:]:
-            if path in installation.files:
+        for path in self.command_paths:
+            if (
+                path == selected
+                or path in installation.files
+                or path in installation.outside_links
+            ):
                 continue
             try:
                 target = real(path)
