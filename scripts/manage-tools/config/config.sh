@@ -30,7 +30,7 @@ interactive_setup() {
     local session_status=0 INTERACTIVE_RESULT=0 show_summary=0 list_result=0
     local list_rules list_skills list_scope
     local repo_labels=() repo_defaults=() repo_url
-    local rule_labels=() rule_names=() rule_sources=() source_scope selected_rule catalog_status
+    local rule_labels=() rule_names=() rule_sources=() source_scope default_rule selected_rule catalog_status
     local task_labels=('Rules' 'Skills')
     local lifecycle_action
     local agent_names=(codex claude pi) selected_agents=()
@@ -460,11 +460,11 @@ interactive_setup() {
                 fi
 
                 if [ "$INSTALL_SCOPE" = global ] && [ "$rules_visited" -eq 0 ]; then
-                    case "$source_scope:${rule_names[i]}" in
-                    waza:waza-anti-patterns | waza:waza-clarity | waza:waza-durable-context)
+                    for default_rule in "${RULE_SOURCE_DEFAULTS[@]}"; do
+                        [ "$default_rule" = "$source_scope:${rule_names[i]}" ] || continue
                         REPO_SELECTED+=("$i")
-                        ;;
-                    esac
+                        break
+                    done
                 fi
                 for ((selected_rule = 0; selected_rule < ${#SELECTED_RULES[@]}; selected_rule++)); do
                     if [ "${SELECTED_RULES[selected_rule]}" = "${rule_names[i]}" ] &&
@@ -720,11 +720,16 @@ run_agent_setup() (
     HUMANLAYER_SKILLS_URL="https://github.com/humanlayer/skills"
     GWYNTORIA_SKILLS_URL="https://github.com/gwyntoria/skills"
     DISTILLY_SKILLS_URL="https://github.com/titanwings/distilly"
+    RULE_SOURCE_DEFAULTS=(
+        waza:waza-anti-patterns
+        # waza:waza-clarity
+        waza:waza-durable-context
+    )
     SKILL_SOURCE_GROUPS=(Waza Kami 'Matt Pocock' HumanLayer Gwyntoria Distilly)
     SKILL_SOURCE_DEFAULTS=(
         'check health hunt learn read think ui write'
         ''
-        'setup-matt-pocock-skills grill-with-docs to-spec to-tickets code-review improve-codebase-architecture implement-spec writing-for-agents codebase-design domain-modeling grilling tdd'
+        'setup-matt-pocock-skills grill-with-docs to-spec to-tickets improve-codebase-architecture implement-spec writing-for-agents codebase-design wayfinder'
         'show-me'
         'how why'
         ''
