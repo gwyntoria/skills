@@ -3,16 +3,16 @@
 
 from __future__ import annotations
 
-import argparse
-import collections
-import datetime as dt
-import json
 import re
-import shlex
-import subprocess
 import sys
-from pathlib import Path
+import json
+import shlex
+import argparse
+import datetime as dt
+import subprocess
+import collections
 from typing import Any
+from pathlib import Path
 
 
 CRISIS_PATTERN = re.compile(r"revert|hotfix|emergency|rollback", re.IGNORECASE)
@@ -39,7 +39,9 @@ def run_git(repo: Path, args: list[str]) -> str:
     result = subprocess.run(command, capture_output=True, check=False)
     if result.returncode != 0:
         stderr = result.stderr.decode("utf-8", errors="replace").strip()
-        raise ScanError(f"{' '.join(shlex.quote(part) for part in command)}: {stderr}")
+        raise ScanError(
+            f"{' '.join(shlex.quote(part) for part in command)}: {stderr}"
+        )
     return result.stdout.decode("utf-8", errors="replace")
 
 
@@ -100,8 +102,13 @@ def count_paths(output: str, top: int) -> list[dict[str, Any]]:
     Returns:
         Ranked path/count objects.
     """
-    counts = collections.Counter(line for line in output.splitlines() if line.strip())
-    return [{"path": path, "touches": count} for path, count in counts.most_common(top)]
+    counts = collections.Counter(
+        line for line in output.splitlines() if line.strip()
+    )
+    return [
+        {"path": path, "touches": count}
+        for path, count in counts.most_common(top)
+    ]
 
 
 def parse_shortlog(output: str) -> list[dict[str, Any]]:
@@ -117,10 +124,14 @@ def parse_shortlog(output: str) -> list[dict[str, Any]]:
     for line in output.splitlines():
         match = re.match(r"\s*(\d+)\s+(.+)", line)
         if match:
-            contributors.append({"name": match.group(2), "commits": int(match.group(1))})
+            contributors.append(
+                {"name": match.group(2), "commits": int(match.group(1))}
+            )
     total = sum(item["commits"] for item in contributors)
     for item in contributors:
-        item["share_percent"] = round(item["commits"] * 100 / total, 1) if total else 0.0
+        item["share_percent"] = (
+            round(item["commits"] * 100 / total, 1) if total else 0.0
+        )
     return contributors
 
 
@@ -139,7 +150,9 @@ def shift_month(month: str, offset: int) -> str:
     return f"{index // 12:04d}-{index % 12 + 1:02d}"
 
 
-def activity_summary(months: collections.Counter[str], max_months: int) -> dict[str, Any]:
+def activity_summary(
+    months: collections.Counter[str], max_months: int
+) -> dict[str, Any]:
     """Summarize lifetime and recent monthly activity.
 
     Args:
@@ -150,16 +163,27 @@ def activity_summary(months: collections.Counter[str], max_months: int) -> dict[
         Lifetime bounds, recent rows, and adjacent six-month totals.
     """
     if not months:
-        return {"first_month": None, "last_month": None, "months": [], "recent_6": 0, "previous_6": 0}
+        return {
+            "first_month": None,
+            "last_month": None,
+            "months": [],
+            "recent_6": 0,
+            "previous_6": 0,
+        }
     ordered = sorted(months)
     current = dt.date.today().strftime("%Y-%m")
-    visible = [shift_month(current, offset) for offset in range(-(max_months - 1), 1)]
+    visible = [
+        shift_month(current, offset) for offset in range(-(max_months - 1), 1)
+    ]
     recent_keys = [shift_month(current, offset) for offset in range(-5, 1)]
     previous_keys = [shift_month(current, offset) for offset in range(-11, -5)]
     return {
         "first_month": ordered[0],
         "last_month": ordered[-1],
-        "months": [{"month": month, "commits": months.get(month, 0)} for month in visible],
+        "months": [
+            {"month": month, "commits": months.get(month, 0)}
+            for month in visible
+        ],
         "recent_6": sum(months.get(month, 0) for month in recent_keys),
         "previous_6": sum(months.get(month, 0) for month in previous_keys),
     }
@@ -198,12 +222,27 @@ def collect(args: argparse.Namespace) -> dict[str, Any]:
     scopes = normalize_scope(root, repo_arg, args.scope)
     paths = pathspecs(scopes, args.exclude)
 
-    churn_args = ["log", "--format=", "--name-only", f"--since={args.since}", "--", *paths]
+    churn_args = [
+        "log",
+        "--format=",
+        "--name-only",
+        f"--since={args.since}",
+        "--",
+        *paths,
+    ]
     churn = count_paths(run_git(root, churn_args), args.top)
 
     lifetime_shortlog_args = ["shortlog", "-sn", "--no-merges", "HEAD"]
-    recent_shortlog_args = ["shortlog", "-sn", "--no-merges", f"--since={args.since}", "HEAD"]
-    lifetime_contributors = parse_shortlog(run_git(root, lifetime_shortlog_args))
+    recent_shortlog_args = [
+        "shortlog",
+        "-sn",
+        "--no-merges",
+        f"--since={args.since}",
+        "HEAD",
+    ]
+    lifetime_contributors = parse_shortlog(
+        run_git(root, lifetime_shortlog_args)
+    )
     recent_contributors = parse_shortlog(run_git(root, recent_shortlog_args))
 
     bug_args = [
@@ -233,17 +272,25 @@ def collect(args: argparse.Namespace) -> dict[str, Any]:
     monthly_args = ["log", "--format=%ad", "--date=format:%Y-%m"]
     month_counts = collections.Counter(run_git(root, monthly_args).splitlines())
 
-    crisis_args = ["log", "--format=%h%x09%ad%x09%s", "--date=short", f"--since={args.since}"]
+    crisis_args = [
+        "log",
+        "--format=%h%x09%ad%x09%s",
+        "--date=short",
+        f"--since={args.since}",
+    ]
     crisis_lines = []
     for line in run_git(root, crisis_args).splitlines():
         if CRISIS_PATTERN.search(line):
             commit_hash, date, subject = (line.split("\t", 2) + ["", ""])[:3]
-            crisis_lines.append({"commit": commit_hash, "date": date, "subject": subject})
+            crisis_lines.append(
+                {"commit": commit_hash, "date": date, "subject": subject}
+            )
 
     branch = run_git(root, ["branch", "--show-current"]).strip() or "DETACHED"
     head = run_git(root, ["rev-parse", "HEAD"]).strip()
     overlap = sorted(
-        set(item["path"] for item in churn) & set(item["path"] for item in bug_files),
+        set(item["path"] for item in churn)
+        & set(item["path"] for item in bug_files),
         key=lambda path: (
             -next(item["touches"] for item in churn if item["path"] == path),
             path,
@@ -252,7 +299,9 @@ def collect(args: argparse.Namespace) -> dict[str, Any]:
 
     recent_names = {item["name"] for item in recent_contributors}
     absent_lifetime_leaders = [
-        item["name"] for item in lifetime_contributors[:5] if item["name"] not in recent_names
+        item["name"]
+        for item in lifetime_contributors[:5]
+        if item["name"] not in recent_names
     ]
 
     return {
@@ -265,7 +314,11 @@ def collect(args: argparse.Namespace) -> dict[str, Any]:
             "exclude": args.exclude,
             "top": args.top,
             "path_scoped_signals": ["churn", "bug_hotspots"],
-            "repository_wide_signals": ["contributors", "monthly_activity", "crisis_commits"],
+            "repository_wide_signals": [
+                "contributors",
+                "monthly_activity",
+                "crisis_commits",
+            ],
             "lifetime_commits": commit_count(root),
             "window_commits": commit_count(root, args.since),
         },
@@ -292,7 +345,8 @@ def collect(args: argparse.Namespace) -> dict[str, Any]:
             **activity_summary(month_counts, args.max_months),
         },
         "crisis_commits": {
-            "command": git_command(crisis_args) + " | filter: revert|hotfix|emergency|rollback",
+            "command": git_command(crisis_args)
+            + " | filter: revert|hotfix|emergency|rollback",
             "count": len(crisis_lines),
             "commits": crisis_lines,
         },
@@ -306,15 +360,42 @@ def parse_args() -> argparse.Namespace:
         Parsed arguments.
     """
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--repo", default=".", help="Git repository or a subdirectory used as the default scope")
-    parser.add_argument("--since", default="1 year ago", help="Git date expression for the current window")
-    parser.add_argument("--scope", action="append", default=[], help="Included repository-relative path; repeat as needed")
-    parser.add_argument("--exclude", action="append", default=[], help="Excluded repository-relative path; repeat as needed")
-    parser.add_argument("--top", type=int, default=20, help="Number of hotspot paths to retain")
-    parser.add_argument("--max-months", type=int, default=24, help="Recent calendar months to include")
+    parser.add_argument(
+        "--repo",
+        default=".",
+        help="Git repository or a subdirectory used as the default scope",
+    )
+    parser.add_argument(
+        "--since",
+        default="1 year ago",
+        help="Git date expression for the current window",
+    )
+    parser.add_argument(
+        "--scope",
+        action="append",
+        default=[],
+        help="Included repository-relative path; repeat as needed",
+    )
+    parser.add_argument(
+        "--exclude",
+        action="append",
+        default=[],
+        help="Excluded repository-relative path; repeat as needed",
+    )
+    parser.add_argument(
+        "--top", type=int, default=20, help="Number of hotspot paths to retain"
+    )
+    parser.add_argument(
+        "--max-months",
+        type=int,
+        default=24,
+        help="Recent calendar months to include",
+    )
     parsed = parser.parse_args()
     if parsed.top < 1 or parsed.max_months < 12:
-        parser.error("--top must be positive and --max-months must be at least 12")
+        parser.error(
+            "--top must be positive and --max-months must be at least 12"
+        )
     return parsed
 
 

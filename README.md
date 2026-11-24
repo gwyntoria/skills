@@ -133,8 +133,6 @@ claude plugin install gwyn-space-skills-writing@gwyn-space
 | [`list-skills.sh`](scripts/list-skills.sh) | 仓库维护 | 列出仓库内全部 skill 路径，并检查是否有重名 |
 | [`statusline.sh`](scripts/statusline.sh) | Claude Code | 状态栏脚本，显示模型与思考等级、目录与 Git 分支、上下文余量、输入输出 token、速率限制和版本 |
 
-Ubuntu 安装器面向仍受常规安全维护的 Ubuntu Desktop、Server（含 SSH）和 WSL Ubuntu，支持 amd64/arm64，需以有 sudo 权限的普通用户运行；不支持 root、容器和无人值守安装。Windows Terminal 目录同步仅在 WSL 下配置。第三方组件与软件包仍取决于当前架构、版本及已启用的软件源，不自动开启软件源；失败项会给出手动处理提示。
-
 可在交互终端执行如下命令打开 Ubuntu 和 Agent 配置菜单：
 
 ```bash

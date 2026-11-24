@@ -1,0 +1,20 @@
+target-version = "py310"
+line-length = 80
+fix = true
+
+# 独立脚本通过模块名导入同目录的 Python 文件。
+src = ["scripts/manage-tools/agents", "scripts/manage-tools/content"]
+
+[lint]
+select = ["E", "F", "W", "C90", "I"]
+# 换行和制表符缩进由格式化器处理。
+ignore = ["E501", "W191"]
+
+[lint.isort]
+combine-as-imports = true
+length-sort = true
+lines-after-imports = 2
+
+[format]
+docstring-code-format = true
+line-ending = "lf"
