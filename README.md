@@ -130,7 +130,6 @@ claude plugin install gwyn-space-skills-writing@gwyn-space
 | --- | --- | --- |
 | [`setup-ubuntu.sh`](scripts/setup-ubuntu.sh) | Ubuntu（原生 / WSL） | 通过中文 TUI 选择基础包、开发环境与 AI 工具，选择 Fish/Zsh/Bash（默认 Fish）、准备启动配置并切换默认 shell |
 | [`manage-tools.sh`](scripts/manage-tools.sh) | macOS / Linux | 依次更新 Skills、Agents 和 Homebrew（使用 `brew upgrade --no-ask` 自动确认）；Agents 默认仅更新 Codex 及其插件市场，传入 `all` 才加入 Claude（含插件市场和插件）、Pi（含扩展）及 Hermes；末尾汇总结果。传入 `config` 打开交互菜单，安装、清理或卸载 Agent CLI，以及安装、移除或查看 Skills 和 Rules |
-| [`list-skills.sh`](scripts/list-skills.sh) | 仓库维护 | 列出仓库内全部 skill 路径，并检查是否有重名 |
 | [`statusline.sh`](scripts/statusline.sh) | Claude Code | 状态栏脚本，显示模型与思考等级、目录与 Git 分支、上下文余量、输入输出 token、速率限制和版本 |
 
 可在交互终端执行如下命令打开 Ubuntu 和 Agent 配置菜单：
