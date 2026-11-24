@@ -6,6 +6,7 @@ import re
 PROFILES = {
     "codex": {
         "fallback": ".codex",
+        "uninstall_directory": ".codex",
         "override": "CODEX_HOME",
         "entries": [
             "config.toml",
@@ -57,6 +58,7 @@ PROFILES = {
     },
     "claude": {
         "fallback": ".claude",
+        "uninstall_directory": ".claude",
         "override": "CLAUDE_CONFIG_DIR",
         "entries": [
             "settings.json",
@@ -104,6 +106,7 @@ PROFILES = {
     },
     "pi": {
         "fallback": ".pi/agent",
+        "uninstall_directory": ".pi",
         "override": "PI_CODING_AGENT_DIR",
         "entries": [
             "settings.json",

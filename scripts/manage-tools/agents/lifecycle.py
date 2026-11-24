@@ -310,7 +310,7 @@ class Lifecycle:
             elif name in self.profile["content"]:
                 self.scan_content(path)
             elif name not in self.profile["retained"]:
-                self.warn(f"Unrecognized Agent entry {show(path)}")
+                self.warnings[f"Unrecognized Agent entry {show(path)}"] = path
 
     def scan_content(self, path):
         entry = info(path)
@@ -875,6 +875,47 @@ class Lifecycle:
             print("Cancelled.")
             return
         self.run_plan(plan)
+        if self.uninstall:
+            self.finish_uninstall()
+
+    def finish_uninstall(self):
+        root = join(self.home, self.profile["uninstall_directory"])
+        if any(
+            path is None or not within(root, path)
+            for path in self.warnings.values()
+        ):
+            raise ValueError("Uninstall left unprocessed paths listed above")
+        if not self.remove_agent_directory(root) and self.warnings:
+            raise ValueError("Uninstall left unprocessed paths listed above")
+
+    def remove_agent_directory(self, root):
+        entry = info(root)
+        if entry is None:
+            return False
+        if not is_dir(entry):
+            message = f"Unprocessed Agent directory {show(root)}"
+            self.warn(message)
+            print(message)
+            return False
+
+        previous_warnings = self.warnings.copy()
+        step = self.user.removal(root, "Delete entire Agent directory", True)
+        if step is None:
+            for message in self.warnings:
+                if message not in previous_warnings:
+                    print(message)
+            return False
+
+        print(f"\n  {step.description}")
+        print(
+            "This permanently deletes all remaining contents, including "
+            "items you did not select, without a backup."
+        )
+        if ask("Delete this directory? [y/N]: ").lower() != "y":
+            print(f"Kept Agent directory {show(root)}")
+            return False
+        self.run_plan([step])
+        return True
 
     def run_plan(self, plan):
         # Validate the whole preview before commands rewrite settings or credentials.
@@ -883,8 +924,6 @@ class Lifecycle:
         for item in plan:
             item.apply()
             print(f"Completed: {item.description}")
-        if self.warnings and self.uninstall:
-            raise ValueError("Uninstall left unprocessed paths listed above")
 
 
 def stop(signum, _frame):
