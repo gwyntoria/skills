@@ -195,6 +195,7 @@ class UserPaths:
             # permitted location and type after those commands have run.
             if (
                 not self.safe(path)
+                or (is_dir(current) and identity(path) != before)
                 or identity(parent) != parent_before
                 or stat.S_IFMT(current.st_mode) != stat.S_IFMT(entry.st_mode)
                 or (

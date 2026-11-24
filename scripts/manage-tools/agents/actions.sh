@@ -92,7 +92,11 @@ run_agent_lifecycles() {
         if [ "$agent" = claude ] && [ -f "$HOME/.claude/statusline.sh" ]; then
             statusline_source="$(agent_statusline_source)" || statusline_source=""
         fi
-        printf '\nAgent / %s / %s\n' "$action" "$agent"
+        if [ -t 1 ] && [ "${TERM:-dumb}" != dumb ] && [ -z "${NO_COLOR:-}" ]; then
+            printf '\n\033[1;36mAgent / %s / %s\033[0m\n' "$action" "$agent"
+        else
+            printf '\nAgent / %s / %s\n' "$action" "$agent"
+        fi
         run_interactive_task python3 -B "$MODULE_DIR/agents/lifecycle.py" \
             "$action" "$agent" "$command_paths" "$statusline_source" "${PI_BUNDLED_PACKAGES[@]}"
         if [ "$INTERACTIVE_RESULT" -ne 0 ]; then status=1; fi

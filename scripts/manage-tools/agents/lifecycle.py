@@ -58,9 +58,19 @@ def link_target(path):
     return normpath(join(dirname(path), os.readlink(path)))
 
 
+def color(text, sgr):
+    if (
+        sys.stdout.isatty()
+        and os.environ.get("TERM", "dumb") != "dumb"
+        and not os.environ.get("NO_COLOR")
+    ):
+        return f"\033[{sgr}m{text}\033[0m"
+    return text
+
+
 def ask(prompt):
     try:
-        return input(prompt).strip()
+        return input(color(prompt, "1;33")).strip()
     except EOFError:
         return ""
 
@@ -110,6 +120,7 @@ class Lifecycle:
         self.home = os.environ.get("HOME")
         self.warnings = {}
         self.user = UserPaths(self.home, self.uninstall, self.warnings)
+        self.whole_directory = None
         self.required = []
         self.optional = []
         self.credentials = []
@@ -127,6 +138,16 @@ class Lifecycle:
 
     def warn(self, message):
         self.warnings[message] = None
+
+    def covered_by_directory(self, path):
+        return (
+            self.whole_directory
+            and (
+                path == self.whole_directory
+                or within(self.whole_directory, path)
+            )
+            and normpath(path) == path
+        )
 
     def add(self, steps, path, label, recursive=False):
         item = self.user.removal(path, label, recursive)
@@ -391,7 +412,7 @@ class Lifecycle:
                 "No verified Pi installation found. Checked: "
                 + ", ".join(map(show, candidates))
             )
-        return self.pi_uninstall_steps(installations, links, brew_entries)
+        return installations, links, brew_entries
 
     def pi_alias_step(self, path, target, brew_entries):
         entry = info(path)
@@ -438,6 +459,8 @@ class Lifecycle:
             if path in installation.files or (
                 path == primary and installation.command
             ):
+                continue
+            if self.covered_by_directory(path):
                 continue
             alias = self.pi_alias_step(path, target, brew_entries)
             if alias:
@@ -589,7 +612,11 @@ class Lifecycle:
             cache,
             "Reset statusline usage high-water mark",
         )
-        if not self.user.safe(script) or not is_file(info(script)):
+        if (
+            self.covered_by_directory(script)
+            or not self.user.safe(script)
+            or not is_file(info(script))
+        ):
             return
         if not self.owns_statusline(script):
             if not self.uninstall:
@@ -685,10 +712,14 @@ class Lifecycle:
                 yield source
 
     def pi_packages(self, executable, root):
-        if (
-            not self.user.safe(root)
-            or not self.user.safe(executable)
-            or not self.user.safe(real(executable))
+        # Uninstall has already verified the CLI through pi_uninstall(),
+        # including supported installations outside the user's home.
+        if not self.user.safe(root) or (
+            not self.uninstall
+            and (
+                not self.user.safe(executable)
+                or not self.user.safe(real(executable))
+            )
         ):
             return
         settings_path = join(root, "settings.json")
@@ -722,6 +753,8 @@ class Lifecycle:
                 self.warn(
                     f"Unprocessed Pi package {show(source)} uses custom npm storage or command"
                 )
+                continue
+            if self.covered_by_directory(npm):
                 continue
             before = identity(settings_path)
             command = checked_command(
@@ -844,7 +877,8 @@ class Lifecycle:
                 and not info(join(root, ".git"))
             ):
                 self.logout(executable, root)
-            self.scan_root(root)
+            if not self.covered_by_directory(realpath(root)):
+                self.scan_root(root)
         if self.agent == "claude":
             self.add(
                 self.required,
@@ -861,7 +895,7 @@ class Lifecycle:
                 path for path in sessions if isinstance(path, str) and path
             ):
                 directory = self.expand_home(path)
-                if all(
+                if not self.covered_by_directory(realpath(directory)) and all(
                     directory != join(root, "sessions") for root in self.roots
                 ):
                     self.custom_pi_sessions(directory)
@@ -930,12 +964,14 @@ class Lifecycle:
         steps = [
             self.user.removal(path, "Remove CLI launcher")
             for path in installation.files
+            if not self.covered_by_directory(path)
         ]
-        steps.append(
-            self.user.removal(
-                installation.root, "Remove CLI installation", True
+        if not self.covered_by_directory(installation.root):
+            steps.append(
+                self.user.removal(
+                    installation.root, "Remove CLI installation", True
+                )
             )
-        )
         if any(step is None for step in steps):
             raise ValueError("Cannot verify CLI removal paths")
         return steps
@@ -969,32 +1005,15 @@ class Lifecycle:
             if executable and self.agent == "pi" and not self.uninstall
             else None
         )
-        installation = None
         cli = []
-        pi_uninstall = self.uninstall and self.agent == "pi"
-        if pi_uninstall:
-            executable, preview, cli = self.pi_uninstall()
-        elif self.uninstall:
-            installation = (
-                (managed or self.cli_installation(executable))
-                if executable
-                else None
+        directory_step = None
+        if self.uninstall:
+            executable, preview, cli, directory_step = self.plan_uninstall(
+                executable
             )
-            if not installation:
-                if executable:
-                    raise ValueError(
-                        f"Manual uninstall required for {show(executable)}. Use its original installer or package manager. {UNINSTALL_GUIDE[self.agent]}"
-                    )
-                raise ValueError(
-                    f"No {self.agent} CLI found on PATH; cannot verify or clear CLI-managed credentials"
-                )
-
         self.collect_cleanup(executable, managed)
         if self.uninstall:
             self.collect_uninstall(executable)
-            if installation:
-                preview = self.uninstall_preview(installation, executable)
-                cli = self.cli_steps(installation)
         else:
             preview = list(self.warnings)
             if not self.optional:
@@ -1014,6 +1033,13 @@ class Lifecycle:
             *cli,
             *self.required,
         ]
+        if directory_step:
+            if self.warnings:
+                raise ValueError(
+                    "Cannot verify complete uninstall:\n"
+                    + "\n".join(self.warnings)
+                )
+            plan.append(directory_step)
         self.apply_plan(plan, preview)
 
     def apply_plan(self, plan, preview):
@@ -1023,57 +1049,69 @@ class Lifecycle:
             return
         if self.uninstall:
             for message in self.warnings:
-                print(message)
-        print("\nExecution preview")
+                print(color(message, "33"))
+        print("\n" + color("Execution preview", "1;36"))
         if self.uninstall:
-            print("This permanently removes the listed data without a backup.")
+            print(
+                color(
+                    "This permanently removes the listed data without a backup.",
+                    "1;31",
+                )
+            )
         for item in plan:
             print(f"  {item.description}")
         if ask("Apply these changes? [y/N]: ").lower() != "y":
             print("Cancelled.")
             return
         self.run_plan(plan)
-        if self.uninstall:
-            self.finish_uninstall()
+        if self.uninstall and self.warnings:
+            raise ValueError("Uninstall left unprocessed paths listed above")
 
-    def finish_uninstall(self):
+    def plan_uninstall(self, executable):
+        if self.agent == "pi":
+            installations, links, brew_entries = self.pi_uninstall()
+            directory_step = self.choose_agent_directory()
+            executable, preview, cli = self.pi_uninstall_steps(
+                installations, links, brew_entries
+            )
+        else:
+            if not executable:
+                raise ValueError(
+                    f"No {self.agent} CLI found on PATH; cannot verify or clear CLI-managed credentials"
+                )
+            installation = self.cli_installation(executable)
+            if not installation:
+                raise ValueError(
+                    f"Manual uninstall required for {show(executable)}. Use its original installer or package manager. {UNINSTALL_GUIDE[self.agent]}"
+                )
+            directory_step = self.choose_agent_directory()
+            preview = self.uninstall_preview(installation, executable)
+            cli = self.cli_steps(installation)
+        return executable, preview, cli, directory_step
+
+    def choose_agent_directory(self):
         root = join(self.home, self.profile["uninstall_directory"])
-        if any(
-            path is None or not within(root, path)
-            for path in self.warnings.values()
-        ):
-            raise ValueError("Uninstall left unprocessed paths listed above")
-        if not self.remove_agent_directory(root) and self.warnings:
-            raise ValueError("Uninstall left unprocessed paths listed above")
-
-    def remove_agent_directory(self, root):
         entry = info(root)
         if entry is None:
-            return False
+            return None
         if not is_dir(entry):
-            message = f"Unprocessed Agent directory {show(root)}"
-            self.warn(message)
-            print(message)
-            return False
-
-        previous_warnings = self.warnings.copy()
+            self.warn(f"Unprocessed Agent directory {show(root)}")
+            return None
+        print(
+            f"Include the entire Agent directory {color(show(root), '1;33')} in the uninstall plan?"
+        )
+        print(
+            "This includes all files, sessions and custom content. Choose No for individual cleanup."
+        )
+        if ask("Include entire directory? [y/N]: ").lower() != "y":
+            return None
         step = self.user.removal(root, "Delete entire Agent directory", True)
         if step is None:
-            for message in self.warnings:
-                if message not in previous_warnings:
-                    print(message)
-            return False
-
-        print(f"\n  {step.description}")
-        print(
-            "This permanently deletes all remaining contents, including "
-            "items you did not select, without a backup."
-        )
-        if ask("Delete this directory? [y/N]: ").lower() != "y":
-            print(f"Kept Agent directory {show(root)}")
-            return False
-        self.run_plan([step])
-        return True
+            raise ValueError(
+                "\n".join(self.warnings) or f"Cannot verify {show(root)}"
+            )
+        self.whole_directory = root
+        return step
 
     def run_plan(self, plan):
         # Validate the whole preview before commands rewrite settings or credentials.
@@ -1081,7 +1119,7 @@ class Lifecycle:
             item.check()
         for item in plan:
             item.apply()
-            print(f"Completed: {item.description}")
+            print(color("Completed:", "32"), item.description)
 
 
 def stop(signum, _frame):
