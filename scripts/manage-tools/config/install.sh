@@ -72,7 +72,7 @@ preflight() {
 }
 
 execute_plan() {
-    local item other source previous handled index source_scope before package
+    local item other source previous handled index source_scope rules_directory before package
     local completed_sources=() names=()
     for item in "${AGENT_ITEMS[@]+"${AGENT_ITEMS[@]}"}"; do
         case "$item" in
@@ -81,7 +81,7 @@ execute_plan() {
             before=${#FAILED[@]}
             run_item 'Claude Code CLI' install_claude
             if [ "${#FAILED[@]}" -eq "$before" ]; then
-                if resolve_resource scripts/statusline.sh; then
+                if snapshot_resource scripts/statusline.sh >/dev/null; then
                     run_item 'Claude statusline' install_statusline
                 else FAILED+=('Claude statusline: resource unavailable'); fi
             else FAILED+=('Claude statusline: skipped because Claude installation failed'); fi
@@ -90,11 +90,12 @@ execute_plan() {
             for ((index = 0; index < ${#SELECTED_RULES[@]}; index++)); do
                 other="${SELECTED_RULES[index]}"
                 source_scope="${SELECTED_RULE_SOURCES[index]:-$INSTALL_SCOPE}"
-                if ! resolve_rule_source "$source_scope"; then
+                if ! resolve_rule_source "$source_scope" rules_directory; then
                     FAILED+=("$source_scope rule: $other (resource unavailable)")
                     continue
                 fi
-                run_item "$INSTALL_SCOPE rule: $other ($RULE_TARGETS)" apply_rule "$other" "$INSTALL_SCOPE" "$RULE_TARGETS" install "$source_scope"
+                run_item "$INSTALL_SCOPE rule: $other ($RULE_TARGETS)" apply_rule \
+                    "$other" "$INSTALL_SCOPE" "$RULE_TARGETS" install "$source_scope" "$rules_directory"
             done
             ;;
         5)
@@ -107,7 +108,7 @@ execute_plan() {
             fi
             ;;
         3)
-            if ! resolve_resource scripts/statusline.sh; then
+            if ! snapshot_resource scripts/statusline.sh >/dev/null; then
                 FAILED+=('Claude statusline: resource unavailable')
                 continue
             fi
@@ -139,7 +140,7 @@ execute_plan() {
 }
 
 print_install_plan() {
-    local i destination index source_scope rule_targets="$RULE_TARGETS" user_clis="" scope_title=Global
+    local i destination index source_scope rules_directory rule_targets="$RULE_TARGETS" user_clis="" scope_title=Global
     local labels=('Codex CLI' 'Claude Code CLI' 'Rules' 'Claude statusline' 'Skills' 'Pi CLI')
     printf '\nExecution plan'
     if [ "$INSTALL_SCOPE" = project ]; then
@@ -162,13 +163,13 @@ print_install_plan() {
         for ((index = 0; index < ${#SELECTED_RULES[@]}; index++)); do
             i="${SELECTED_RULES[index]}"
             source_scope="${SELECTED_RULE_SOURCES[index]:-$INSTALL_SCOPE}"
-            resolve_rule_source "$source_scope" || return 1
+            resolve_rule_source "$source_scope" rules_directory || return 1
             if [ "$source_scope" = waza ]; then
                 printf '  Rule source: GitHub tw93/Waza @ main -> %s (rules/%s.md)\n' "$WAZA_RULES_COMMIT" "${i#waza-}"
-            elif [ "$SOURCE_KIND" = archive ]; then
+            elif snapshot_is_published; then
                 printf '  Rule source: GitHub gwyntoria/skills @ main (rules/%s.md)\n' "$i"
             else
-                printf '  Rule source: %s/%s.md\n' "$RESOURCE_PATH" "$i"
+                printf '  Rule source: %s/%s.md\n' "$rules_directory" "$i"
             fi
             if [ "$INSTALL_SCOPE" = project ]; then
                 printf '    \033[32mDestination: docs/rules/%s.md\033[0m\n' "$i"

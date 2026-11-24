@@ -109,18 +109,19 @@ fetch_waza_rule() {
 }
 
 resolve_rule_source() {
+    local source_directory
     if [ "$1" = waza ]; then
         load_waza_rules || return 1
-        RESOURCE_PATH="$WAZA_RULES_PATH"
+        source_directory="$WAZA_RULES_PATH"
     else
-        resolve_resource rules
+        source_directory="$(snapshot_resource rules)" || return 1
     fi
+    printf -v "$2" '%s' "$source_directory"
 }
 
 load_rule_catalog() {
-    local scope="$1" file name title names=()
-    resolve_resource rules || return 1
-    for file in "$RESOURCE_PATH"/*.md; do
+    local scope="$1" directory="$2" file name title names=()
+    for file in "$directory"/*.md; do
         [ -f "$file" ] || continue
         name="${file##*/}"
         name="${name%.md}"
@@ -158,11 +159,11 @@ pi_rule_path() {
 }
 
 apply_rule() {
-    if [ "${4:-install}" = install ]; then
-        resolve_rule_source "${5:-$2}" || return 1
-        if [ "${5:-$2}" = waza ]; then fetch_waza_rule "$1" || return 1; fi
+    local action="$4" source_scope="$5" rules_directory="$6"
+    if [ "$action" = install ] && [ "$source_scope" = waza ]; then
+        fetch_waza_rule "$1" || return 1
     fi
-    rule_engine "$1" "$2" "$3" "${4:-install}" "$RESOURCE_PATH" "${5:-$2}"
+    rule_engine "$1" "$2" "$3" "$action" "$rules_directory" "$source_scope"
 }
 
 # The rule engine owns its helpers only inside this subshell.
@@ -556,25 +557,14 @@ rule_engine() (
     run
 )
 
-published_rule_catalog() (
-    if [ "$SOURCE_KIND" = archive ]; then
-        load_rule_catalog global || return 1
-    else
-        # Remote List displays published rules even from a modified checkout.
-        require_command curl || return 1
-        require_command tar || return 1
-        local published
-        published="$(mktemp -d)" || return 1
-        trap 'rm -rf -- "$published"' EXIT
-        trap 'exit 130' INT
-        trap 'exit 143' TERM
-        trap 'exit 129' HUP
-        curl -fLsS "$SOURCE_ARCHIVE_URL" -o "$published/source.tar.gz" || return 1
-        tar -xzf "$published/source.tar.gz" -C "$published" -- skills-main/rules || return 1
-        REPO="$published/skills-main"
-        load_rule_catalog global || return 1
-    fi
+published_rule_catalog() {
+    with_published_rules print_rule_names
+}
+
+print_rule_names() {
+    local RULE_NAMES_GLOBAL=()
+    load_rule_catalog global "$1" || return 1
     if [ "${#RULE_NAMES_GLOBAL[@]}" -gt 0 ]; then
         printf '%s\n' "${RULE_NAMES_GLOBAL[@]}"
     fi
-)
+}

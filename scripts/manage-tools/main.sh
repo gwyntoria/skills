@@ -1,10 +1,7 @@
 #!/usr/bin/env bash
 
-SOURCE_KIND="$1"
 MODE="$2"
-SOURCE_ARCHIVE_URL="$3"
 MODULE_DIR="$(cd -P -- "${BASH_SOURCE[0]%/*}" && pwd -P)" || exit 1
-REPO="$(cd -- "$MODULE_DIR/../.." && pwd -P)" || exit 1
 
 # shellcheck source=scripts/manage-tools/common.sh
 source "$MODULE_DIR/common.sh" || exit 1
@@ -13,6 +10,9 @@ trap 'exit 143' TERM
 trap 'exit 129' HUP
 
 if [ "$MODE" = config ]; then
+    # shellcheck source=scripts/manage-tools/snapshot.sh
+    source "$MODULE_DIR/snapshot.sh" || exit 1
+    initialize_snapshot "$1" "$3" || exit 1
     # shellcheck source=scripts/manage-tools/config/menu.sh
     source "$MODULE_DIR/config/menu.sh" || exit 1
     # shellcheck source=scripts/manage-tools/config/install.sh

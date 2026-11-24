@@ -4,19 +4,6 @@ cleanup_setup_resources() {
     reset_removal
 }
 
-resolve_resource() {
-    local relative="$1"
-    RESOURCE_PATH="$REPO/$relative"
-    case "$relative" in
-    rules) [ -d "$RESOURCE_PATH" ] ;;
-    scripts/statusline.sh) [ -f "$RESOURCE_PATH" ] ;;
-    *) return 2 ;;
-    esac || {
-        printf 'Invalid resource: %s\n' "$RESOURCE_PATH" >&2
-        return 1
-    }
-}
-
 # Capture action failures outside a conditional, which would disable errexit inside its file writes and backup steps.
 run_interactive_task() {
     set +e
@@ -42,7 +29,7 @@ interactive_setup() {
     local session_status=0 INTERACTIVE_RESULT=0 show_summary=0 list_result=0
     local list_rules list_skills list_scope
     local repo_labels=() repo_defaults=() repo_url
-    local rule_labels=() rule_names=() rule_sources=() source_scope selected_rule
+    local rule_labels=() rule_names=() rule_sources=() source_scope selected_rule bundled_rules
     local task_labels=('Rules' 'Skills')
     local lifecycle_action command_name command_paths statusline_source lifecycle_status
     local lifecycle_agents=(codex claude pi)
@@ -98,8 +85,8 @@ interactive_setup() {
                     command_name="${lifecycle_agents[i]}"
                     command_paths=$(type -aP "$command_name" || true)
                     statusline_source=""
-                    if [ "$command_name" = claude ] && [ -f "$HOME/.claude/statusline.sh" ] && resolve_resource scripts/statusline.sh; then
-                        statusline_source="$RESOURCE_PATH"
+                    if [ "$command_name" = claude ] && [ -f "$HOME/.claude/statusline.sh" ]; then
+                        statusline_source="$(snapshot_resource scripts/statusline.sh)" || statusline_source=""
                     fi
                     printf '\nAgent / %s / %s\n' "$lifecycle_action" "$command_name"
                     run_interactive_task python3 -B "$MODULE_DIR/agents/lifecycle.py" "$lifecycle_action" "$command_name" "$command_paths" "$statusline_source" "${PI_PACKAGES[@]}"
@@ -422,7 +409,7 @@ interactive_setup() {
                 page=complete
                 continue
             fi
-            if [[ " ${AGENT_ITEMS[*]+${AGENT_ITEMS[*]}} " = *" 1 "* ]] && ! resolve_resource scripts/statusline.sh; then
+            if [[ " ${AGENT_ITEMS[*]+${AGENT_ITEMS[*]}} " = *" 1 "* ]] && ! snapshot_resource scripts/statusline.sh >/dev/null; then
                 FAILED+=('Installation preparation failed')
                 show_summary=1
                 page=complete
@@ -442,7 +429,7 @@ interactive_setup() {
             ;;
         rule_choices)
             if [ "$RULE_CATALOG_PROJECT" -eq 0 ]; then
-                if ! load_rule_catalog project; then
+                if ! bundled_rules="$(snapshot_resource rules)" || ! load_rule_catalog project "$bundled_rules"; then
                     FAILED+=('project rule catalog unavailable')
                     show_summary=1
                     page=complete
@@ -743,7 +730,6 @@ run_agent_setup() (
     INSTALL_SKILLS=0
 
     WAZA_TEMP=""
-    RESOURCE_PATH=""
     INSTALL_SCOPE=global
     RULE_TARGETS="codex claude pi"
     SELECTED_RULES=()

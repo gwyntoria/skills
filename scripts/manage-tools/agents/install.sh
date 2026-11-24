@@ -5,8 +5,7 @@ install_statusline() {
     local claude_dir="$HOME/.claude"
     local settings_file="$claude_dir/settings.json"
     local statusline_source
-    resolve_resource scripts/statusline.sh || return 1
-    statusline_source="$RESOURCE_PATH"
+    statusline_source="$(snapshot_resource scripts/statusline.sh)" || return 1
     printf '\033[32mStatusline target: %s/statusline.sh\nSettings target: %s\033[0m\n' "$claude_dir" "$settings_file"
 
     mkdir -p "$claude_dir"
