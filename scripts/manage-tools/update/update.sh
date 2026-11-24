@@ -1,6 +1,33 @@
-PROGRESS_ENABLED=0
-PROGRESS_ROWS=0
-PROGRESS_COLS=0
+run_tool_updates() {
+    local mode="$1"
+    local UPDATE_ALL=0 IN_AGENTS=0
+    local TITLE_STYLE= STEP_COLOR= DIVIDER_COLOR= COLOR_RESET=
+    local PROGRESS_ENABLED=0 PROGRESS_ROWS=0 PROGRESS_COLS=0
+    local TASK_CURRENT TASK_TOTAL
+    local -a RESULTS=() AGENT_RESULTS=()
+
+    if [ "$mode" = all ]; then UPDATE_ALL=1; fi
+    if [ -t 1 ] && [ "${TERM:-dumb}" != dumb ] && [ -z "${NO_COLOR:-}" ]; then
+        TITLE_STYLE=$'\033[1m'
+        STEP_COLOR=$'\033[33m'
+        DIVIDER_COLOR=$'\033[90m'
+        COLOR_RESET=$'\033[0m'
+    fi
+
+    # 中断时由 EXIT 恢复滚动区，正常完成时先恢复再打印汇总。
+    trap restore_terminal EXIT
+    setup_progress
+
+    printf '\n'
+    printf '%s\n' "##################################################"
+    printf 'Update started: %s\n' "$(date '+%Y-%m-%d %H:%M:%S')"
+    printf '%s\n' "##################################################"
+
+    run_tasks
+    restore_terminal
+    trap - EXIT
+    report_results
+}
 
 # 最后一行留给进度，其余行正常滚动；不接管子命令的输入输出。
 setup_progress() {

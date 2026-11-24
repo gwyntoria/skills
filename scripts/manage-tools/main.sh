@@ -35,33 +35,4 @@ fi
 
 # shellcheck source=scripts/manage-tools/update/update.sh
 source "$MODULE_DIR/update/update.sh" || exit 1
-UPDATE_ALL=0
-if [ "$MODE" = all ]; then UPDATE_ALL=1; fi
-TITLE_STYLE=
-STEP_COLOR=
-DIVIDER_COLOR=
-COLOR_RESET=
-# RESULTS 是 run_update 和 report_results 之间唯一的交接面。
-RESULTS=()
-AGENT_RESULTS=()
-
-if [ -t 1 ] && [ "${TERM:-dumb}" != dumb ] && [ -z "${NO_COLOR:-}" ]; then
-    TITLE_STYLE=$'\033[1m'
-    STEP_COLOR=$'\033[33m'
-    DIVIDER_COLOR=$'\033[90m'
-    COLOR_RESET=$'\033[0m'
-fi
-
-trap restore_terminal EXIT
-setup_progress
-
-printf '\n'
-printf '%s\n' "##################################################"
-printf 'Update started: %s\n' "$(date '+%Y-%m-%d %H:%M:%S')"
-printf '%s\n' "##################################################"
-
-run_tasks
-
-restore_terminal
-# report_results 的返回值就是脚本的退出码。
-report_results
+run_tool_updates "$MODE"
