@@ -3,16 +3,16 @@
 
 from __future__ import annotations
 
-import argparse
-import collections
-import datetime as dt
-import json
 import re
-import shlex
-import subprocess
 import sys
-from pathlib import Path
+import json
+import shlex
+import argparse
+import datetime as dt
+import subprocess
+import collections
 from typing import Any
+from pathlib import Path
 
 
 CRISIS_PATTERN = re.compile(r"revert|hotfix|emergency|rollback", re.IGNORECASE)
