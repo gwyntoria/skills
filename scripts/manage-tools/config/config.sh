@@ -1,4 +1,5 @@
 cleanup_setup_resources() {
+    cleanup_loading_batch
     if [ -t 1 ]; then printf '\033[?25h'; fi
     if [ -n "$WAZA_TEMP" ]; then rm -rf -- "$WAZA_TEMP"; fi
     reset_removal
@@ -29,7 +30,7 @@ interactive_setup() {
     local session_status=0 INTERACTIVE_RESULT=0 show_summary=0 list_result=0
     local list_rules list_skills list_scope
     local repo_labels=() repo_defaults=() repo_url
-    local rule_labels=() rule_names=() rule_sources=() source_scope selected_rule bundled_rules
+    local rule_labels=() rule_names=() rule_sources=() source_scope selected_rule catalog_status
     local task_labels=('Rules' 'Skills')
     local lifecycle_action
     local agent_names=(codex claude pi) selected_agents=()
@@ -371,12 +372,6 @@ interactive_setup() {
                 1) INSTALL_SKILLS=1 ;;
                 esac
             done
-            if [ "$INSTALL_SKILLS" -eq 1 ] && ! require_skill_catalog; then
-                FAILED+=('Installation preparation failed')
-                show_summary=1
-                page=complete
-                continue
-            fi
             page=before_rules
             ;;
         agent_choices)
@@ -406,15 +401,15 @@ interactive_setup() {
             fi
             ;;
         rule_choices)
-            if [ "$RULE_CATALOG_PROJECT" -eq 0 ]; then
-                if ! bundled_rules="$(snapshot_resource rules)" || ! load_rule_catalog project "$bundled_rules"; then
-                    FAILED+=('project rule catalog unavailable')
-                    show_summary=1
-                    page=complete
-                    continue
-                fi
+            catalog_status=0
+            load_install_rule_catalogs || catalog_status=$?
+            if [ "$catalog_status" -eq 2 ]; then
+                FAILED+=('project rule catalog unavailable')
+                show_summary=1
+                page=complete
+                continue
             fi
-            if ! load_waza_rules; then
+            if [ "$catalog_status" -eq 1 ]; then
                 choose_items 13 "$install_title / Waza rules unavailable${WAZA_RULES_ERROR:+$'\n'$WAZA_RULES_ERROR}" 0 0 Retry 'Continue without Waza rules' Back || {
                     [ "$?" -eq 2 ] || return "$session_status"
                     page=tasks
@@ -546,15 +541,10 @@ interactive_setup() {
                 continue
             }
             SELECTED_REPOS=("${MENU_SELECTED[@]+"${MENU_SELECTED[@]}"}")
-            # Cached failures come back first so a later visit still reports them.
+            if ! load_selected_skill_catalogs; then
+                CATALOG_FAILURES+=('Skill catalog preparation failed')
+            fi
             FAILED=("${CATALOG_FAILURES[@]+"${CATALOG_FAILURES[@]}"}")
-            for i in "${SELECTED_REPOS[@]+"${SELECTED_REPOS[@]}"}"; do
-                if [ "$INSTALL_SCOPE" = global ]; then
-                    catalog_add_group "${SKILL_SOURCE_GROUPS[i]}" "${SKILL_SOURCE_DEFAULTS[i]}"
-                else
-                    catalog_add_group "${SKILL_SOURCE_GROUPS[i]}" ''
-                fi
-            done
             [ "${#FAILED[@]}" -eq 0 ] || session_status=1
             catalog_collect_selection
             catalog_build_view
@@ -708,12 +698,15 @@ run_agent_setup() (
     INSTALL_SKILLS=0
 
     WAZA_TEMP=""
+    # shellcheck disable=SC2034
+    LOADING_DIR=""
     INSTALL_SCOPE=global
     RULE_TARGETS="codex claude pi"
     SELECTED_RULES=()
     SELECTED_RULE_SOURCES=()
     RULE_NAMES_GLOBAL=()
     RULE_NAMES_PROJECT=()
+    # shellcheck disable=SC2034
     RULE_CATALOG_PROJECT=0
     RULE_NAMES_WAZA=()
     WAZA_RULES_PATH=""
@@ -741,10 +734,9 @@ run_agent_setup() (
     SKILL_GROUPS=()
     SKILL_PICKED=()
     SKILL_EXPLICIT=()
-    CATALOG_CACHE_GROUPS=()
     CATALOG_CACHE_NAMES=()
     CATALOG_FAILURES=()
-    CATALOG_FETCHED_NAMES=""
+    # shellcheck disable=SC2034
     SELECTED_REPOS=()
     VIEW_SKILL_INDICES=()
     TARGET_AGENTS=(codex claude-code)

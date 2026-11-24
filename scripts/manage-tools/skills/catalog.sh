@@ -16,28 +16,21 @@ install_agent_skills() (
         --agent "${TARGET_AGENTS[@]}" "${scope_args[@]+"${scope_args[@]}"}" --yes
 )
 
-# The catalog uses npx for repository listings and Python to parse their output.
-require_skill_catalog() {
-    require_command curl || return 1
-    require_python "Skills catalog" || return 1
-    require_node || return 1
-    require_command npx
+# Download only the skill documents from repositories whose assets make a full
+# archive disproportionately large.
+fetch_tree_skill_names() {
+    local repo="${1#https://github.com/}" tree="$LOAD_JOB_DIR/tree.json"
+    local paths="$LOAD_JOB_DIR/paths" blob path number=0
+    loading_download "https://api.github.com/repos/$repo/git/trees/HEAD?recursive=1" "$tree" 'Downloading tree' || return 1
+    run_python 'Skills catalog' skills/parse_catalog.py tree "$tree" >"$paths" || return 1
+    while IFS= read -r blob; do
+        number=$((number + 1))
+        path="$LOAD_JOB_DIR/skill-$number.json"
+        loading_download "https://api.github.com/repos/$repo/git/blobs/$blob" "$path" "Downloading SKILL.md ($number)" || return 1
+        run_python 'Skills catalog' skills/parse_catalog.py blob "$path" || return 1
+    done <"$paths"
+    [ "$number" -gt 0 ]
 }
-
-# skills add --list is read-only. Restrict parsing to its Available Skills
-# section and reject empty/unrecognised output rather than hiding a failure.
-fetch_repository_skill_names() {
-    local output
-    output=$(NO_COLOR=1 npx --yes skills add "$1" --list </dev/null) || return $?
-    printf '%s\n' "$output" | run_python "Skills catalog" skills/parse_catalog.py cli
-}
-
-fetch_mattpocock_skill_names() (
-    set -o pipefail
-
-    curl -fsSL --connect-timeout 10 --max-time 60 "$MATTPOCOCK_SKILLS_PAGE_URL" |
-        run_python "Matt Pocock skills catalog" skills/parse_catalog.py homepage
-)
 
 skill_source_url() {
     case "$1" in
@@ -51,63 +44,53 @@ skill_source_url() {
     esac
 }
 
-catalog_report_failure() {
-    CATALOG_FAILURES+=("$1")
-    FAILED+=("$1")
+queue_skill_catalogs() {
+    local index group source kind
+    CATALOG_LOAD_IDS=()
+    for index in "$@"; do
+        [ -z "${CATALOG_CACHE_NAMES[index]+loaded}" ] || continue
+        group="${SKILL_SOURCE_GROUPS[index]}"
+        source="$(skill_source_url "$group")" || return 1
+        case "$group" in
+        Kami) kind=skill_tree ;;
+        'Matt Pocock')
+            kind=skill_homepage
+            source="$MATTPOCOCK_SKILLS_PAGE_URL"
+            ;;
+        HumanLayer)
+            kind=skill_fixed
+            source=show-me
+            ;;
+        *) kind=skill_archive ;;
+        esac
+        queue_content_load "$kind" "Skills / $group" "$source"
+        CATALOG_LOAD_IDS[index]="$LOADING_INDEX"
+    done
 }
 
-# Set CATALOG_FETCHED_NAMES for one source group. A group is fetched at most
-# once per session; the cache survives returning to the main menu so a second
-# run never waits on a repository it already pulled.
-catalog_fetch_group() {
-    local group="$1" source names valid name i
-    CATALOG_FETCHED_NAMES=""
-    for ((i = 0; i < ${#CATALOG_CACHE_GROUPS[@]}; i++)); do
-        if [ "${CATALOG_CACHE_GROUPS[i]}" = "$group" ]; then
-            CATALOG_FETCHED_NAMES="${CATALOG_CACHE_NAMES[i]}"
-            return 0
+collect_skill_catalogs() {
+    local index job group
+    for index in "${!CATALOG_LOAD_IDS[@]}"; do
+        job="${CATALOG_LOAD_IDS[index]}"
+        if content_load_succeeded "$job" && [ -s "$LOADING_DIR/$job/output" ]; then
+            CATALOG_CACHE_NAMES[index]="$(awk '!seen[$0]++' "$LOADING_DIR/$job/output")"
+        else
+            group="${SKILL_SOURCE_GROUPS[index]}"
+            CATALOG_CACHE_NAMES[index]=''
+            CATALOG_FAILURES+=("Catalog: $group ($(skill_source_url "$group"))")
+            report_content_load_error "$job"
         fi
     done
-    source="$(skill_source_url "$group")" || return 0
-    printf 'Loading %s...\n' "$group" >&2
-    names=""
-    if [ "$group" = 'Matt Pocock' ]; then
-        names=$(fetch_mattpocock_skill_names) || names=""
-    elif [ "$group" = HumanLayer ]; then
-        names=show-me
-    else
-        names=$(fetch_repository_skill_names "$source") || names=""
-    fi
-    if [ -z "$names" ]; then
-        CATALOG_CACHE_GROUPS+=("$group")
-        CATALOG_CACHE_NAMES+=("")
-        catalog_report_failure "Catalog: $group ($source)"
-        return 0
-    fi
-    valid=""
-    while IFS= read -r name; do
-        [ -n "$name" ] || continue
-        if [[ ! "$name" =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]*$ ]]; then
-            catalog_report_failure "Catalog: $group (invalid skill name)"
-            continue
-        fi
-        if [ -n "$valid" ]; then valid="$valid"$'\n'; fi
-        valid="$valid$name"
-    done <<<"$names"
-    CATALOG_CACHE_GROUPS+=("$group")
-    CATALOG_CACHE_NAMES+=("$valid")
-    CATALOG_FETCHED_NAMES="$valid"
 }
 
-# Append one source group's skills to the session table, fetching only when
-# the cache has no copy yet. An omitted default list selects every skill.
+# Append skills in configured order, independent of which download finishes first.
 catalog_add_group() {
-    local group="$1" defaults="${2-*}" source name i picked
+    local index="$1" defaults="$2" group source name i picked
+    group="${SKILL_SOURCE_GROUPS[index]}"
     source="$(skill_source_url "$group")" || return 1
     for ((i = 0; i < ${#SKILL_GROUPS[@]}; i++)); do
         [ "${SKILL_GROUPS[i]}" != "$group" ] || return 0
     done
-    catalog_fetch_group "$group"
     while IFS= read -r name; do
         [ -n "$name" ] || continue
         SKILL_NAMES+=("$name")
@@ -117,20 +100,23 @@ catalog_add_group() {
         if [[ "$defaults" = '*' || " $defaults " = *" $name "* ]]; then picked=1; fi
         SKILL_PICKED+=("$picked")
         SKILL_EXPLICIT+=("$picked")
-    done <<<"$CATALOG_FETCHED_NAMES"
+    done <<<"${CATALOG_CACHE_NAMES[index]:-}"
 }
 
-load_catalog() {
-    local group name
-    SKILL_NAMES=()
-    SKILL_SOURCES=()
-    SKILL_GROUPS=()
-    SKILL_PICKED=()
-    SKILL_EXPLICIT=()
-    for group in "${SKILL_SOURCE_GROUPS[@]}"; do
-        catalog_add_group "$group"
+load_selected_skill_catalogs() {
+    # shellcheck disable=SC2034
+    local LOADING_JOBS=() LOADING_INDEX CATALOG_LOAD_IDS=() index defaults=''
+    queue_skill_catalogs "${SELECTED_REPOS[@]}" || return 1
+    if ! run_content_loads 'Install / Skill catalogs'; then
+        cleanup_loading_batch
+        return 1
+    fi
+    collect_skill_catalogs
+    cleanup_loading_batch
+    for index in "${SELECTED_REPOS[@]}"; do
+        if [ "$INSTALL_SCOPE" = global ]; then defaults="${SKILL_SOURCE_DEFAULTS[index]}"; fi
+        catalog_add_group "$index" "$defaults" || return 1
     done
-    for name in "${FAILED[@]+"${FAILED[@]}"}"; do printf 'Unavailable: %s\n' "$name" >&2; done
 }
 
 # Whether a source group is ticked on the repository page.

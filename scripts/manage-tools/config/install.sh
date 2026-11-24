@@ -54,6 +54,15 @@ print_skill_targets() {
 execute_plan() {
     local item other source previous handled index source_scope rules_directory
     local completed_sources=() names=()
+    if [ "${#SELECTED_SKILLS[@]}" -gt 0 ] && { ! require_node || ! require_command npx; }; then
+        FAILED+=('Skill installation requires Node.js and npx')
+        print_summary
+        return 1
+    fi
+    trap cleanup_loading_batch EXIT
+    if ! prefetch_waza_rules; then
+        FAILED+=('Waza rule download preparation failed')
+    fi
     for item in "${AGENT_ITEMS[@]+"${AGENT_ITEMS[@]}"}"; do
         case "$item" in
         rules)

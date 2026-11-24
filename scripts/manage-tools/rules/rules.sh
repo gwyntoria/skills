@@ -1,11 +1,10 @@
 # Keep API and Git acquisition separate; publish the catalog only after success.
 waza_catalog_api() {
     local staged="$1" commit
-    require_command curl || return 1
-    curl -fLsS https://api.github.com/repos/tw93/Waza/commits/main -o "$staged/commit.json" || return 1
+    loading_download https://api.github.com/repos/tw93/Waza/commits/main "$staged/commit.json" 'Resolving commit' || return 1
     commit="$(run_python "Waza rule catalog" rules/parse_waza.py commit "$staged/commit.json")" || return 1
     printf '%s\n' "$commit" >"$staged/resolved-commit" || return 1
-    curl -fLsS "https://api.github.com/repos/tw93/Waza/contents/rules?ref=$commit" -o "$staged/catalog.json" || return 1
+    loading_download "https://api.github.com/repos/tw93/Waza/contents/rules?ref=$commit" "$staged/catalog.json" 'Downloading catalog' || return 1
     run_python "Waza rule catalog" rules/parse_waza.py catalog "$staged/catalog.json" >"$staged/names" || return 1
 }
 
@@ -13,7 +12,7 @@ waza_catalog_api() {
 waza_clone_snapshot() (
     local staged="$1" pinned="${2:-}" checkout commit hash name
     require_command git || return 1
-    checkout="$(mktemp -d "$WAZA_TEMP/waza-clone.XXXXXX")" || return 1
+    checkout="$(mktemp -d "$staged/waza-clone.XXXXXX")" || return 1
     trap 'rm -rf -- "$checkout"' EXIT
     trap 'exit 130' INT
     trap 'exit 143' TERM
@@ -41,77 +40,133 @@ waza_clone_snapshot() (
     printf '%s\n' "$commit" >"$staged/resolved-commit"
 )
 
-# Pin the catalog before selection; every selected body uses the same commit.
-load_waza_rules() {
-    local staged commit name names=()
-    [ -n "$WAZA_RULES_PATH" ] && return 0
-    require_python "Waza rule catalog" || return 1
-    if [ -z "$WAZA_TEMP" ]; then
-        WAZA_TEMP="$(mktemp -d)" || return 1
-        trap cleanup_setup_resources EXIT
-        trap 'exit 130' INT
-        trap 'exit 143' TERM
-    fi
-    staged="$WAZA_TEMP/waza"
-    rm -rf -- "$staged" || return 1
+# Publish the commit and names together after API discovery or its Git fallback.
+acquire_waza_catalog() {
+    local staged="$1" commit=""
     mkdir -p "$staged/rules" || return 1
-    printf 'Fetching Waza rule catalog from GitHub main...\n' >&2
-    if ! waza_catalog_api "$staged" 2>"$staged/error.log"; then
-        commit=""
+    if ! waza_catalog_api "$staged"; then
         if [ -f "$staged/resolved-commit" ]; then IFS= read -r commit <"$staged/resolved-commit"; fi
-        printf 'Waza API unavailable; trying Git clone.\n' >&2
-        if ! waza_clone_snapshot "$staged" "$commit" 2>>"$staged/error.log"; then
-            WAZA_RULES_ERROR="$(cat "$staged/error.log")"
-            printf '%s\n' "$WAZA_RULES_ERROR" >&2
-            return 1
-        fi
+        loading_phase 'Git fallback' || return 1
+        waza_clone_snapshot "$staged" "$commit"
+    fi
+}
+
+collect_waza_catalog() {
+    local job="$1" staged="$LOADING_DIR/$1" commit names=()
+    if ! content_load_succeeded "$job"; then
+        WAZA_RULES_ERROR="$(cat "$staged/error")"
+        return 1
     fi
     IFS= read -r commit <"$staged/resolved-commit" || return 1
-    while IFS= read -r name; do names+=("$name"); done <"$staged/names"
+    mapfile -t names <"$staged/names" || return 1
+    if [ -z "$WAZA_TEMP" ]; then WAZA_TEMP="$(mktemp -d)" || return 1; fi
+    mv -- "$staged" "$WAZA_TEMP/waza" || return 1
+    # shellcheck disable=SC2034
     RULE_NAMES_WAZA=("${names[@]}")
     WAZA_RULES_COMMIT="$commit"
-    WAZA_RULES_PATH="$staged/rules"
+    WAZA_RULES_PATH="$WAZA_TEMP/waza/rules"
+    # shellcheck disable=SC2034
     WAZA_RULES_ERROR=""
 }
 
-fetch_waza_rule() {
-    local name="$1" candidate title listed found=0
-    load_waza_rules || return 1
-    for listed in "${RULE_NAMES_WAZA[@]}"; do
-        if [ "$listed" = "$name" ]; then
-            found=1
-            break
-        fi
-    done
-    [ "$found" -eq 1 ] || {
-        printf 'Unknown Waza rule: %s\n' "$name" >&2
-        return 1
-    }
-    candidate="$WAZA_RULES_PATH/$name.md"
-    if [ ! -f "$candidate" ]; then
-        if curl -fLsS "https://raw.githubusercontent.com/tw93/Waza/$WAZA_RULES_COMMIT/rules/${name#waza-}.md" \
-            -o "$candidate.download"; then
-            mv "$candidate.download" "$candidate" || return 1
+load_install_rule_catalogs() {
+    local LOADING_JOBS=() LOADING_INDEX bundled='' waza='' result=0
+    if [ "$RULE_CATALOG_PROJECT" -eq 0 ]; then
+        queue_content_load rules-bundled 'Rules / Gwyntoria'
+        bundled="$LOADING_INDEX"
+    fi
+    if [ -z "$WAZA_RULES_PATH" ]; then
+        queue_content_load rules-waza 'Rules / Waza'
+        waza="$LOADING_INDEX"
+    fi
+    if ! run_content_loads 'Install / Rule catalogs'; then
+        cleanup_loading_batch
+        return 2
+    fi
+    if [ -n "$bundled" ]; then
+        if content_load_succeeded "$bundled" && mapfile -t RULE_NAMES_PROJECT <"$LOADING_DIR/$bundled/output"; then
+            RULE_CATALOG_PROJECT=1
         else
-            rm -f -- "$candidate.download"
-            printf 'Waza raw download unavailable; trying Git clone at %s.\n' "$WAZA_RULES_COMMIT" >&2
-            waza_clone_snapshot "$WAZA_TEMP/waza" "$WAZA_RULES_COMMIT" || return 1
+            report_content_load_error "$bundled"
+            result=2
         fi
     fi
-    title=""
-    IFS= read -r title <"$candidate" || true
-    case "$title" in '# '* | '## '*) ;; *)
-        rm -f -- "$candidate"
-        printf 'Waza rule must start with H1 or H2: %s\n' "$name" >&2
+    if [ "$result" -eq 0 ] && [ -n "$waza" ]; then collect_waza_catalog "$waza" || result=1; fi
+    cleanup_loading_batch
+    return "$result"
+}
+
+fetch_waza_rule() {
+    local name="$1" commit="$2" path="$3"
+    [[ "$name" =~ ^waza-[a-zA-Z0-9][a-zA-Z0-9._-]*$ && "$commit" =~ ^[a-f0-9]{40}$ ]] || return 2
+    loading_download "https://raw.githubusercontent.com/tw93/Waza/$commit/rules/${name#waza-}.md" "$path" 'Downloading rule' || return 1
+    validate_waza_rule "$path" || return 2
+}
+
+validate_waza_rule() {
+    local title=""
+    IFS= read -r title <"$1" || true
+    case "$title" in '# '* | '## '*) return 0 ;; esac
+    printf 'Waza rule must start with H1 or H2: %s\n' "${1##*/}" >&2
+    return 1
+}
+
+prefetch_waza_rules() {
+    local LOADING_JOBS=() LOADING_INDEX index job name status staged
+    local names=() fallback=()
+    for index in "${!SELECTED_RULES[@]}"; do
+        [ "${SELECTED_RULE_SOURCES[index]:-$INSTALL_SCOPE}" = waza ] || continue
+        name="${SELECTED_RULES[index]}"
+        [ ! -f "$WAZA_RULES_PATH/$name.md" ] || continue
+        queue_content_load waza-body "Rule / ${name#waza-}" "$name" "$WAZA_RULES_COMMIT"
+        names+=("$name")
+    done
+    [ "${#names[@]}" -gt 0 ] || return 0
+    if ! run_content_loads 'Install / Download Waza rules'; then
+        cleanup_loading_batch
         return 1
-        ;;
-    esac
+    fi
+    for job in "${!names[@]}"; do
+        name="${names[job]}"
+        IFS= read -r status <"$LOADING_DIR/$job/status" || status=1
+        case "$status" in
+        0)
+            mv -- "$LOADING_DIR/$job/rule.md" "$WAZA_RULES_PATH/$name.md" || {
+                cleanup_loading_batch
+                return 1
+            }
+            ;;
+        2) report_content_load_error "$job" ;;
+        *) fallback+=("$name") ;;
+        esac
+    done
+    cleanup_loading_batch
+
+    [ "${#fallback[@]}" -gt 0 ] || return 0
+    # shellcheck disable=SC2034
+    LOADING_JOBS=()
+    queue_content_load waza-fallback 'Rules / Waza Git fallback' '' "$WAZA_RULES_COMMIT"
+    if ! run_content_loads 'Install / Download Waza rules'; then
+        cleanup_loading_batch
+        return 1
+    fi
+    if content_load_succeeded 0; then
+        for name in "${fallback[@]}"; do
+            staged="$LOADING_DIR/0/rules/$name.md"
+            if [ -f "$staged" ] && validate_waza_rule "$staged"; then
+                mv -- "$staged" "$WAZA_RULES_PATH/$name.md" || break
+            fi
+        done
+    else
+        report_content_load_error 0
+    fi
+    cleanup_loading_batch
 }
 
 resolve_rule_source() {
     local source_directory
     if [ "$1" = waza ]; then
-        load_waza_rules || return 1
+        [ -n "$WAZA_RULES_PATH" ] || return 1
         source_directory="$WAZA_RULES_PATH"
     else
         source_directory="$(snapshot_resource rules)" || return 1
@@ -159,11 +214,7 @@ pi_rule_path() {
 }
 
 apply_rule() {
-    local action="$4" source_scope="$5" rules_directory="$6"
-    if [ "$action" = install ] && [ "$source_scope" = waza ]; then
-        fetch_waza_rule "$1" || return 1
-    fi
-    rule_engine "$1" "$2" "$3" "$action" "$rules_directory" "$source_scope"
+    rule_engine "$1" "$2" "$3" "$4" "$6" "$5"
 }
 
 # The rule engine owns its helpers only inside this subshell.
@@ -556,10 +607,6 @@ rule_engine() (
     require_safe_home
     run
 )
-
-published_rule_catalog() {
-    with_published_rules print_rule_names
-}
 
 print_rule_names() {
     local RULE_NAMES_GLOBAL=()

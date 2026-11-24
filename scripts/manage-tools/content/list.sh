@@ -33,28 +33,65 @@ list_content() {
             "$codex" "$claude" "$pi" "$(pi_rule_path)" "$list_color"
         return $?
     fi
-    trap cleanup_setup_resources EXIT
-    list_heading "$list_color" 'Available · Remote'
+    list_remote_content "$rules" "$skills" "$list_color"
+}
+
+list_remote_content() {
+    local rules="$1" skills="$2" color="$3" name index failed=0
+    # shellcheck disable=SC2034
+    local LOADING_JOBS=() LOADING_INDEX CATALOG_LOAD_IDS=() published='' waza=''
+    # A list action runs in its own subshell. Keep inherited install cache
+    # directories owned by the menu session.
+    trap cleanup_loading_batch EXIT
     if [ "$rules" -eq 1 ]; then
-        local catalog
-        if catalog="$(published_rule_catalog)"; then
-            list_heading "$list_color" 'Rules · Gwyntoria'
+        queue_content_load rules-published 'Rules / Gwyntoria'
+        published="$LOADING_INDEX"
+        if [ -z "$WAZA_RULES_PATH" ]; then
+            queue_content_load rules-waza 'Rules / Waza'
+            waza="$LOADING_INDEX"
+        fi
+    fi
+    if [ "$skills" -eq 1 ]; then queue_skill_catalogs "${!SKILL_SOURCE_GROUPS[@]}" || return 1; fi
+    run_content_loads 'List / Remote catalogs' || return 1
+
+    list_heading "$color" 'Available · Remote'
+    if [ "$rules" -eq 1 ]; then
+        if content_load_succeeded "$published"; then
+            list_heading "$color" 'Rules · Gwyntoria'
             printf '%s\n' "$GWYNTORIA_SKILLS_URL"
-            while IFS= read -r name; do
-                if [ -n "$name" ]; then printf '  %s\n' "$name"; fi
-            done <<<"$catalog"
-        else failed=1; fi
-        if load_waza_rules; then
-            list_heading "$list_color" 'Rules · Waza'
+            while IFS= read -r name; do printf '  %s\n' "$name"; done <"$LOADING_DIR/$published/output"
+        else
+            report_content_load_error "$published"
+            failed=1
+        fi
+        local waza_names=("${RULE_NAMES_WAZA[@]}")
+        if [ -n "$waza" ]; then
+            if content_load_succeeded "$waza"; then
+                mapfile -t waza_names <"$LOADING_DIR/$waza/names"
+            else
+                report_content_load_error "$waza"
+                waza_names=()
+                failed=1
+            fi
+        fi
+        if [ "${#waza_names[@]}" -gt 0 ]; then
+            list_heading "$color" 'Rules · Waza'
             printf '%s\n' 'https://github.com/tw93/Waza/tree/main/rules'
-            for name in "${RULE_NAMES_WAZA[@]+"${RULE_NAMES_WAZA[@]}"}"; do printf '  %s\n' "$name"; done
-        else failed=1; fi
+            printf '  %s\n' "${waza_names[@]}"
+        fi
     fi
     if [ "$skills" -eq 1 ]; then
-        require_skill_catalog || return 1
-        load_catalog
-        print_skill_catalog "$list_color"
-        [ "${#FAILED[@]}" -eq 0 ] || failed=1
+        collect_skill_catalogs
+        SKILL_NAMES=()
+        SKILL_SOURCES=()
+        SKILL_GROUPS=()
+        # shellcheck disable=SC2034
+        SKILL_PICKED=()
+        # shellcheck disable=SC2034
+        SKILL_EXPLICIT=()
+        for index in "${!SKILL_SOURCE_GROUPS[@]}"; do catalog_add_group "$index" ''; done
+        print_skill_catalog "$color"
+        [ "${#CATALOG_FAILURES[@]}" -eq 0 ] || failed=1
     fi
     return "$failed"
 }
