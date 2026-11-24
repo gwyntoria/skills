@@ -9,12 +9,12 @@ SOURCE_ARCHIVE_URL=https://codeload.github.com/gwyntoria/skills/tar.gz/refs/head
 SOURCE_TEMP=""
 
 usage() {
-    printf 'Usage: %s [all | config | -h | --help]\n' "$PROGRAM_NAME"
+    printf 'Usage: %s [-a | all | -c | config | -h | help]\n' "$PROGRAM_NAME"
     printf '\n'
     printf 'Arguments:\n'
-    printf '  all         Include Claude, Pi and Hermes with their plugins/extensions\n'
-    printf '  config      Open the interactive Agent configuration menu\n'
-    printf '  -h, --help   Show this help message\n'
+    printf '  -a, all     Also update Claude, Pi and Hermes, including supported plugins and extensions\n'
+    printf '  -c, config  Open the Agent configuration menu (requires an interactive terminal)\n'
+    printf '  -h, help    Show this help message\n'
     printf '\nDefault: update Skills, Codex (including Plugin Marketplace) and Homebrew.\n'
 }
 
@@ -24,15 +24,15 @@ usage() {
 parse_args() {
     while [ "$#" -gt 0 ]; do
         case "$1" in
-        all)
+        -a | all)
             UPDATE_ALL=1
             shift
             ;;
-        config)
+        -c | config)
             OPEN_AGENT_SETUP=1
             shift
             ;;
-        -h | --help)
+        -h | help)
             usage
             return 1
             ;;
