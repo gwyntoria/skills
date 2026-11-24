@@ -40,6 +40,7 @@ interactive_setup() {
     local page=main i task menu_status removal_backup=0
     local REMOVE_SCOPE=global REMOVE_CODEX=1 REMOVE_CLAUDE=1 REMOVE_PI=1 REMOVE_RULES=0 REMOVE_SKILLS=0
     local session_status=0 INTERACTIVE_RESULT=0 show_summary=0 list_result=0
+    local list_rules list_skills list_scope
     local repo_labels=() repo_defaults=() repo_url
     local rule_labels=() rule_names=() rule_sources=() source_scope selected_rule
     local task_labels=('Rules' 'Skills')
@@ -140,10 +141,10 @@ interactive_setup() {
                 page=content_menu
                 continue
             }
-            LIST_RULES=0
-            LIST_SKILLS=0
+            list_rules=0
+            list_skills=0
             for i in "${MENU_SELECTED[@]}"; do
-                if [ "$i" -eq 0 ]; then LIST_RULES=1; else LIST_SKILLS=1; fi
+                if [ "$i" -eq 0 ]; then list_rules=1; else list_skills=1; fi
             done
             page=list_mode
             ;;
@@ -154,11 +155,9 @@ interactive_setup() {
                 continue
             }
             if [ "${MENU_SELECTED[0]}" -eq 0 ]; then
-                LIST_MODE=local
                 page=list_scope
             else
-                LIST_MODE=remote
-                run_interactive_task list_content
+                run_interactive_task list_content remote "$list_rules" "$list_skills"
                 list_result=1
                 page=complete
             fi
@@ -169,12 +168,12 @@ interactive_setup() {
                 page=list_mode
                 continue
             }
-            if [ "${MENU_SELECTED[0]}" -eq 0 ]; then LIST_SCOPE=global; else LIST_SCOPE=project; fi
+            if [ "${MENU_SELECTED[0]}" -eq 0 ]; then list_scope=global; else list_scope=project; fi
             page=list_agents
             ;;
         list_agents)
             local list_agent_labels=(Codex 'Claude Code') list_agent_defaults='1 0'
-            if [ "$LIST_SCOPE" = global ] && [ "$LIST_RULES" -eq 1 ]; then
+            if [ "$list_scope" = global ] && [ "$list_rules" -eq 1 ]; then
                 list_agent_labels+=(Pi)
                 list_agent_defaults+=' 0'
             elif [ "${MENU_CURSORS[18]:-0}" -gt 1 ]; then MENU_CURSORS[18]=1; fi
@@ -187,13 +186,12 @@ interactive_setup() {
                 page=list_scope
                 continue
             }
-            LIST_CODEX=0
-            LIST_CLAUDE=0
-            LIST_PI=0
+            local list_codex=0 list_claude=0 list_pi=0
             for i in "${MENU_SELECTED[@]}"; do
-                case "$i" in 0) LIST_CODEX=1 ;; 1) LIST_CLAUDE=1 ;; 2) LIST_PI=1 ;; esac
+                case "$i" in 0) list_codex=1 ;; 1) list_claude=1 ;; 2) list_pi=1 ;; esac
             done
-            run_interactive_task list_content
+            run_interactive_task list_content local "$list_rules" "$list_skills" \
+                "$list_scope" "$list_codex" "$list_claude" "$list_pi"
             list_result=1
             page=complete
             ;;
@@ -733,13 +731,6 @@ interactive_setup() {
             show_summary=0
             list_result=0
             INSTALL_SKILLS=0
-            LIST_RULES=0
-            LIST_SKILLS=0
-            LIST_MODE=local
-            LIST_SCOPE=both
-            LIST_CODEX=1
-            LIST_CLAUDE=1
-            LIST_PI=1
             page=main
             ;;
         esac
@@ -750,13 +741,6 @@ run_agent_setup() (
     set -eu
     PROJECT_TARGET="$(pwd -P)"
     INSTALL_SKILLS=0
-    LIST_SKILLS=0
-    LIST_RULES=0
-    LIST_MODE=local
-    LIST_SCOPE=both
-    LIST_CODEX=1
-    LIST_CLAUDE=1
-    LIST_PI=1
 
     WAZA_TEMP=""
     RESOURCE_PATH=""

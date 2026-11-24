@@ -66,12 +66,7 @@ preflight() {
             require_node || return 1
             require_command npm || return 1
             ;;
-        4)
-            require_command curl || return 1
-            require_python "Skills catalog" || return 1
-            require_node || return 1
-            require_command npx || return 1
-            ;;
+        4) require_skill_catalog || return 1 ;;
         esac
     done
 }

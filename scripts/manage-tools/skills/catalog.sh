@@ -16,6 +16,14 @@ install_agent_skills() (
         --agent "${TARGET_AGENTS[@]}" "${scope_args[@]+"${scope_args[@]}"}" --yes
 )
 
+# The catalog uses npx for repository listings and Python to parse their output.
+require_skill_catalog() {
+    require_command curl || return 1
+    require_python "Skills catalog" || return 1
+    require_node || return 1
+    require_command npx
+}
+
 # skills add --list is read-only. Restrict parsing to its Available Skills
 # section and reject empty/unrecognised output rather than hiding a failure.
 fetch_repository_skill_names() {
@@ -123,18 +131,6 @@ load_catalog() {
         catalog_add_group "$group"
     done
     for name in "${FAILED[@]+"${FAILED[@]}"}"; do printf 'Unavailable: %s\n' "$name" >&2; done
-}
-
-print_catalog() {
-    local i previous=""
-    for ((i = 0; i < ${#SKILL_NAMES[@]}; i++)); do
-        if [ "$previous" != "${SKILL_GROUPS[i]}" ]; then
-            previous="${SKILL_GROUPS[i]}"
-            list_heading "Skills · $previous"
-            printf '%s\n' "${SKILL_SOURCES[i]}"
-        fi
-        printf '  %s\n' "${SKILL_NAMES[i]}"
-    done
 }
 
 # Whether a source group is ticked on the repository page.
