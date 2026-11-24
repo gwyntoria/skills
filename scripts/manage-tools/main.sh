@@ -41,6 +41,5 @@ if [ "$mode" = config ] || [ "$mode" = load-worker ]; then
     exit "$?"
 fi
 
-# shellcheck source=scripts/manage-tools/update/update.sh
-source "$MODULE_DIR/update/update.sh" || exit 1
-run_tool_updates "$mode"
+printf 'Error: unknown manage-tools config mode: %s\n' "$mode" >&2
+exit 2
