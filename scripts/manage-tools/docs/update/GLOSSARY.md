@@ -11,4 +11,4 @@
 涵盖已安装的全局技能、Codex 及其插件市场，以及 Homebrew 软件包的更新范围。
 
 **完整更新 (Full update)**：
-在默认更新范围上加入 Claude Code、Pi 和 Hermes Agent，另涵盖支持更新的 Claude 插件市场、Claude 插件和 Pi 扩展。
+在默认更新范围上加入 Claude Code 和 Pi，另涵盖支持更新的 Claude 插件市场、Claude 插件和 Pi 扩展。

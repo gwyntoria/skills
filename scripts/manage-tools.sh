@@ -12,7 +12,7 @@ usage() {
     printf 'Usage: %s [-a | update-all | -c | config | -h | help]\n' "$PROGRAM_NAME"
     printf '\n'
     printf 'Arguments:\n'
-    printf '  -a, update-all  Also update Claude, Pi and Hermes, including supported plugins and extensions\n'
+    printf '  -a, update-all  Also update Claude and Pi, including supported plugins and extensions\n'
     printf '  -c, config      Open the Agent menu using local repository modules or GitHub main (requires an interactive terminal)\n'
     printf '  -h, help        Show this help message\n'
     printf '\nDefault: update Skills, Codex (including Plugin Marketplace) and Homebrew.\n'
@@ -390,8 +390,8 @@ run_agents() {
     local -a names=('Codex')
     local -a commands=(codex)
     if [ "$UPDATE_ALL" -eq 1 ]; then
-        names+=('Claude Code' 'Pi' 'Hermes Agent')
-        commands+=(claude pi hermes)
+        names+=('Claude Code' 'Pi')
+        commands+=(claude pi)
     fi
     local -a paths=() reasons=()
     local i executable help record status name detail
@@ -452,7 +452,6 @@ run_agents() {
             run_update Pi "$executable" "$executable" update --self
             run_pi_extensions "$executable"
             ;;
-        *) run_update "${names[$i]}" "$executable" "$executable" update ;;
         esac
     done
 
