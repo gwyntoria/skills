@@ -657,7 +657,7 @@ class Removal:
                     **self.snapshot(relative),
                 )
             )
-            print(f"  {display(path)} -> {display(os.readlink(path))}")
+            print(f"  {red(display(path))} -> {display(os.readlink(path))}")
         data["externalLinks"] = links
         self.save(data)
 

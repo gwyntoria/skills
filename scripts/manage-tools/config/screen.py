@@ -553,6 +553,12 @@ def stop_child(process):
     process.wait()
 
 
+def command_lines(data):
+    # Clack spinners return to column one and clear the row before repainting.
+    data = re.sub(rb"(?m)^.*\x1b\[1G\x1b\[J", b"", data)
+    return data.decode(errors="replace").splitlines()
+
+
 def stream_command(command, progress, *, env=None, cwd=None, stdin=None):
     with (
         subprocess.Popen(
@@ -575,20 +581,16 @@ def stream_command(command, progress, *, env=None, cwd=None, stdin=None):
                     if not data:
                         selector.unregister(key.fileobj)
                         break
-                    combined = chunk + data
-                    *lines, chunk = (
-                        combined.rsplit(b"\n", 1)
-                        if b"\n" in combined
-                        else (combined,)
-                    )
-                    for line in lines:
-                        progress(line.decode(errors="replace").splitlines())
+                    chunk += data
+                    if b"\n" in chunk:
+                        lines, chunk = chunk.rsplit(b"\n", 1)
+                        progress(command_lines(lines))
                     chunk = chunk[-65536:]
                 progress([])
                 if process.poll() is not None and not selector.select(0):
                     break
             if chunk:
-                progress(chunk.decode(errors="replace").splitlines())
+                progress(command_lines(chunk))
             returncode = process.wait()
         except BaseException:
             stop_child(process)

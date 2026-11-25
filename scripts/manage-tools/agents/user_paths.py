@@ -36,6 +36,10 @@ def show(value):
     return json.dumps(value, ensure_ascii=False)
 
 
+def show_removed_path(path):
+    return f"\033[31m{show(path)}\033[0m"
+
+
 def reject_json_constant(value):
     raise ValueError(f"Invalid JSON constant: {value}")
 
@@ -209,4 +213,4 @@ class UserPaths:
             else:
                 os.unlink(path)
 
-        return Step(f"{label} {show(path)}", check, apply)
+        return Step(f"{label} {show_removed_path(path)}", check, apply)

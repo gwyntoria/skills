@@ -21,6 +21,7 @@ from .user_paths import (
     is_link,
     identity,
     checked_command,
+    show_removed_path,
 )
 
 
@@ -351,7 +352,7 @@ class Lifecycle:
         return Installation(
             "Homebrew pi-coding-agent",
             command=checked_command(
-                f"Uninstall Homebrew pi-coding-agent at {show(path)}",
+                f"Uninstall Homebrew pi-coding-agent at {show_removed_path(path)}",
                 path,
                 uninstall_formula,
             ),
@@ -435,7 +436,9 @@ class Lifecycle:
             os.unlink(path)
 
         return checked_command(
-            f"Remove Pi launcher link {show(path)}", path, unlink_alias
+            f"Remove Pi launcher link {show_removed_path(path)}",
+            path,
+            unlink_alias,
         )
 
     def pi_uninstall_steps(self, installations, links, brew_entries):
@@ -1076,7 +1079,7 @@ class Lifecycle:
         if not self.interaction.confirm(
             "Include entire Agent directory?",
             [
-                show(root),
+                show_removed_path(root),
                 "This includes all files, sessions and custom content.",
             ],
         ):
