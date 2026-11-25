@@ -2,18 +2,15 @@
 
 import os
 import re
-import sys
 import json
 import stat
-import signal
 import subprocess
 from os.path import join, dirname, basename, normpath, realpath
 from tempfile import NamedTemporaryFile
 from dataclasses import field, dataclass
 
-from picker import pick_optional
-from profiles import PROFILES
-from user_paths import (
+from .profiles import PROFILES
+from .user_paths import (
     Step,
     UserPaths,
     info,
@@ -58,33 +55,17 @@ def link_target(path):
     return normpath(join(dirname(path), os.readlink(path)))
 
 
-def color(text, sgr):
-    if (
-        sys.stdout.isatty()
-        and os.environ.get("TERM", "dumb") != "dumb"
-        and not os.environ.get("NO_COLOR")
-    ):
-        return f"\033[{sgr}m{text}\033[0m"
-    return text
-
-
-def ask(prompt):
-    try:
-        return input(color(prompt, "1;33")).strip()
-    except EOFError:
-        return ""
-
-
-def run(program, args, *, env=None, interactive=False):
+def run(program, args, *, env=None):
     command = [program, *args]
-    options = (
-        {}
-        if interactive
-        else {"capture_output": True, "stdin": subprocess.DEVNULL}
-    )
     try:
         result = subprocess.run(
-            command, cwd="/", env=env, check=True, text=True, **options
+            command,
+            cwd="/",
+            env=env,
+            check=True,
+            text=True,
+            capture_output=True,
+            stdin=subprocess.DEVNULL,
         )
     except (OSError, subprocess.CalledProcessError) as error:
         raise ValueError(
@@ -110,10 +91,17 @@ def unused_claude_version(path):
 
 class Lifecycle:
     def __init__(
-        self, action, agent, command_paths, statusline_source, packages
+        self,
+        action,
+        agent,
+        command_paths,
+        statusline_source,
+        packages,
+        interaction,
     ):
         if action not in ("Cleanup", "Uninstall") or agent not in PROFILES:
             raise ValueError("Invalid Agent lifecycle action or Agent")
+        self.interaction = interaction
         self.action = action
         self.agent = agent
         self.uninstall = action == "Uninstall"
@@ -135,6 +123,12 @@ class Lifecycle:
             os.environ.get(self.profile["override"]) or self.fallback
         )
         self.roots = list(dict.fromkeys([self.fallback, self.configured]))
+
+    def command(self, program, args, *, env=None, interactive=False):
+        if interactive:
+            self.interaction.native([program, *args], env=env)
+            return None
+        return run(program, args, env=env)
 
     def warn(self, message):
         self.warnings[message] = None
@@ -306,7 +300,7 @@ class Lifecycle:
             manager = npm if info(npm) else "npm"
 
             def uninstall_package():
-                run(
+                self.command(
                     manager,
                     [
                         "uninstall",
@@ -346,7 +340,7 @@ class Lifecycle:
             )
 
         def uninstall_formula():
-            run(
+            self.command(
                 brew,
                 ["uninstall", "--formula", "pi-coding-agent"],
                 interactive=True,
@@ -741,7 +735,9 @@ class Lifecycle:
                 npm_config_ignore_scripts="true",
                 npm_config_global="false",
             )
-            run(executable, ["remove", source], env=env, interactive=True)
+            self.command(
+                executable, ["remove", source], env=env, interactive=True
+            )
 
         def check(command, before):
             command.check()
@@ -792,7 +788,7 @@ class Lifecycle:
 
     def logout_codex_mcp(self, executable, scoped):
         servers = json.loads(
-            run(executable, ["mcp", "list", "--json"], env=scoped)
+            self.command(executable, ["mcp", "list", "--json"], env=scoped)
         )
         if not isinstance(servers, list):
             raise ValueError("Unexpected Codex MCP inventory")
@@ -801,7 +797,7 @@ class Lifecycle:
             if transport.get("type") == "streamable_http" and server.get(
                 "auth_status"
             ) not in ("unsupported", "not_logged_in"):
-                run(
+                self.command(
                     executable,
                     ["mcp", "logout", server["name"]],
                     env=scoped,
@@ -824,9 +820,9 @@ class Lifecycle:
             if self.agent == "codex":
                 self.logout_codex_mcp(executable, scoped)
             for name in configured_servers:
-                run(executable, ["mcp", "logout", name], env=scoped)
+                self.command(executable, ["mcp", "logout", name], env=scoped)
             args = ["logout"] if self.agent == "codex" else ["auth", "logout"]
-            run(executable, args, env=scoped)
+            self.command(executable, args, env=scoped)
 
         self.credentials.append(
             checked_command(
@@ -933,28 +929,12 @@ class Lifecycle:
             )
         return preview
 
-    def selected_items(self):
+    def selected_items(self, selection):
         if not self.optional:
             return []
-        if sys.stdin.isatty() and sys.stdout.isatty():
-            return pick_optional(self.action, self.agent, self.optional)
-        for index, item in enumerate(self.optional, start=1):
-            print(f"  {index}) {item.description}")
-        answer = ask(
-            "Optional items (comma-separated numbers, Enter for none): "
+        return self.interaction.optional(
+            self.action, self.agent, self.optional, selection
         )
-        if not answer:
-            return []
-        indices = list(
-            dict.fromkeys(part.strip() for part in answer.split(","))
-        )
-        if any(
-            not re.fullmatch(r"[1-9][0-9]*", value)
-            or int(value) > len(self.optional)
-            for value in indices
-        ):
-            raise ValueError("Invalid selection; no changes made")
-        return [self.optional[int(value) - 1] for value in indices]
 
     def cli_steps(self, installation):
         if not installation:
@@ -1022,50 +1002,46 @@ class Lifecycle:
                 print("No verified cleanup items found.")
                 return
 
-        selected = self.selected_items()
-        if selected is None:
-            print("Cancelled.")
-            return
-        plan = [
-            *self.credentials,
-            *(item for item in selected if item.needs_cli),
-            *(item for item in selected if not item.needs_cli),
-            *cli,
-            *self.required,
-        ]
-        if directory_step:
-            if self.warnings:
-                raise ValueError(
-                    "Cannot verify complete uninstall:\n"
-                    + "\n".join(self.warnings)
-                )
-            plan.append(directory_step)
-        self.apply_plan(plan, preview)
+        return self.review(cli, directory_step, preview)
 
-    def apply_plan(self, plan, preview):
-        for message in preview:
-            print(message)
-        if not plan:
-            return
-        if self.uninstall:
-            for message in self.warnings:
-                print(color(message, "33"))
-        print("\n" + color("Execution preview", "1;36"))
-        if self.uninstall:
-            print(
-                color(
-                    "This permanently removes the listed data without a backup.",
-                    "1;31",
-                )
-            )
-        for item in plan:
-            print(f"  {item.description}")
-        if ask("Apply these changes? [y/N]: ").lower() != "y":
-            print("Cancelled.")
-            return
+    def review(self, cli, directory_step, preview):
+        selection = set()
+        while True:
+            selected = self.selected_items(selection)
+            plan = [
+                *self.credentials,
+                *(item for item in selected if item.needs_cli),
+                *(item for item in selected if not item.needs_cli),
+                *cli,
+                *self.required,
+            ]
+            if directory_step:
+                if self.warnings:
+                    raise ValueError(
+                        "Cannot verify complete uninstall:\n"
+                        + "\n".join(self.warnings)
+                    )
+                plan.append(directory_step)
+            confirmed = self.confirm_plan(plan, preview)
+            if confirmed is not None:
+                break
+        if not confirmed:
+            return False
         self.run_plan(plan)
         if self.uninstall and self.warnings:
             raise ValueError("Uninstall left unprocessed paths listed above")
+        return True
+
+    def confirm_plan(self, plan, preview):
+        if not plan:
+            for message in preview:
+                print(message)
+            return False
+        details = list(dict.fromkeys([*preview, *self.warnings]))
+        if self.uninstall:
+            details.append("This permanently removes the listed data.")
+        details.extend(item.description for item in plan)
+        return self.interaction.review(details, can_edit=bool(self.optional))
 
     def plan_uninstall(self, executable):
         if self.agent == "pi":
@@ -1097,13 +1073,13 @@ class Lifecycle:
         if not is_dir(entry):
             self.warn(f"Unprocessed Agent directory {show(root)}")
             return None
-        print(
-            f"Include the entire Agent directory {color(show(root), '1;33')} in the uninstall plan?"
-        )
-        print(
-            "This includes all files, sessions and custom content. Choose No for individual cleanup."
-        )
-        if ask("Include entire directory? [y/N]: ").lower() != "y":
+        if not self.interaction.confirm(
+            "Include entire Agent directory?",
+            [
+                show(root),
+                "This includes all files, sessions and custom content.",
+            ],
+        ):
             return None
         step = self.user.removal(root, "Delete entire Agent directory", True)
         if step is None:
@@ -1118,25 +1094,6 @@ class Lifecycle:
         for item in plan:
             item.check()
         for item in plan:
+            self.interaction.report(item.description)
             item.apply()
-            print(color("Completed:", "32"), item.description)
-
-
-def stop(signum, _frame):
-    raise SystemExit(128 + signum)
-
-
-if __name__ == "__main__":
-    signal.signal(signal.SIGTERM, stop)
-    signal.signal(signal.SIGHUP, stop)
-    try:
-        action, agent, command_paths, statusline_source, *packages = sys.argv[
-            1:
-        ]
-        Lifecycle(
-            action, agent, command_paths, statusline_source, packages
-        ).execute()
-    except KeyboardInterrupt:
-        sys.exit(130)
-    except (OSError, ValueError, AttributeError, KeyError) as error:
-        sys.exit(str(error))
+            print("Completed:", item.description)

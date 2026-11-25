@@ -7,11 +7,10 @@ import json
 import stat
 import shutil
 import hashlib
-import subprocess
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
-from paths import (
+from .paths import (
     UNKNOWN,
     MISSING_TARGET,
     SKILL_DIRECTORIES,
@@ -26,7 +25,6 @@ from paths import (
     metadata_origin,
     reject_json_constant,
 )
-from backups import new_backup
 
 
 AGENTS = {
@@ -43,10 +41,6 @@ def red(text):
 
 def yellow(text):
     return f"\033[33m{text}\033[0m"
-
-
-def quote(value):
-    return "'" + str(value).replace("'", "'\\''") + "'"
 
 
 def repository(record):
@@ -514,37 +508,7 @@ class Removal:
                     )
                 )
 
-    def backup(self, items, updates_lock, includes_rules):
-        targets = [entry["relative"] for entry in items]
-        if updates_lock:
-            targets.append(self.lock)
-        backup = new_backup(self.home, "rules" if includes_rules else "skills")
-        try:
-            subprocess.run(
-                [
-                    "tar",
-                    "-cf",
-                    backup,
-                    "-C",
-                    self.root,
-                    "--",
-                    *dict.fromkeys(targets),
-                ],
-                check=True,
-            )
-        except (OSError, subprocess.CalledProcessError) as error:
-            backup.unlink(missing_ok=True)
-            backup.parent.rmdir()
-            raise ValueError("Backup failed; nothing removed") from error
-        print(f"\033[36mBackup: {display(backup)}\033[0m")
-        print(
-            f"\033[36mRestore: tar -xf {quote(backup)} -C {quote(self.root)}\033[0m"
-        )
-
-    def remove(self, data, items, args):
-        if len(args) > 1 or (args and args[0] not in ("0", "1")):
-            raise ValueError("Invalid backup choice; nothing removed")
-        create_backup = args == ["1"]
+    def remove(self, data, items):
         lock = self.read_lock()
         codex = [
             entry
@@ -556,17 +520,13 @@ class Removal:
         lock_records = lock.get("skills", {}) if lock is not None else {}
         updates_lock = any(entry["name"] in lock_records for entry in codex)
         rules = [entry for entry in items if entry["kind"] == "rules"]
-        if create_backup:
-            self.backup(items, updates_lock, bool(rules))
-        else:
-            print("No backup will be created.")
         self.verify(data, items)
 
         succeeded, failed, removed_skills, outcomes = self.remove_entries(items)
         self.print_rule_results(rules, outcomes)
         if updates_lock and removed_skills:
             failed += self.update_skill_lock(
-                data, lock, lock_records, removed_skills, create_backup
+                data, lock, lock_records, removed_skills
             )
         note = (
             " (installation targets"
@@ -637,19 +597,10 @@ class Removal:
                 f"Rules: {complete} removed, 0 partial, {len(rules) - complete} failed"
             )
 
-    def update_skill_lock(
-        self, data, lock, lock_records, removed_skills, create_backup
-    ):
+    def update_skill_lock(self, data, lock, lock_records, removed_skills):
         try:
             if self.fingerprint(self.lock) != data["lockSnapshot"]:
-                recovery = (
-                    "restore from backup if needed"
-                    if create_backup
-                    else "no recovery backup was created"
-                )
-                raise ValueError(
-                    f"Skill lock changed during deletion; {recovery}"
-                )
+                raise ValueError("Skill lock changed during deletion")
             for name in removed_skills:
                 lock_records.pop(name, None)
             self.atomic_lock_write(lock)
@@ -749,17 +700,7 @@ class Removal:
         elif action == "preview":
             self.preview(items)
         elif action == "remove":
-            return self.remove(data, items, args)
+            return self.remove(data, items)
         else:
             raise ValueError("Unknown removal action")
         return 0
-
-
-if __name__ == "__main__":
-    try:
-        home, project, scope, manifest, pi_rule, action, *args = sys.argv[1:]
-        sys.exit(
-            Removal(home, project, scope, manifest, pi_rule).run(action, args)
-        )
-    except (OSError, ValueError) as error:
-        sys.exit(red(str(error)))

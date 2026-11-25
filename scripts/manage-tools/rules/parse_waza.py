@@ -1,9 +1,7 @@
 """Validate Waza rule discovery data before it reaches the installer."""
 
 import re
-import sys
 import json
-from pathlib import Path
 
 
 def rule_name(name):
@@ -17,7 +15,34 @@ def require_rules(names):
         raise ValueError("No Waza rules available")
 
 
-def main(mode, source, *args):
+def validate_commit(sha):
+    if not isinstance(sha, str) or not re.fullmatch(r"[a-f0-9]{40}", sha):
+        raise ValueError("Invalid Waza commit")
+    return sha
+
+
+def commit(source):
+    data = json.loads(source.read_text(encoding="utf-8"))
+    return validate_commit(data.get("sha") if isinstance(data, dict) else None)
+
+
+def catalog(source):
+    data = json.loads(source.read_text(encoding="utf-8"))
+    if not isinstance(data, list):
+        raise ValueError("Invalid Waza rule catalog")
+    names = {
+        rule_name(entry["name"])
+        for entry in data
+        if isinstance(entry, dict)
+        and entry.get("type") == "file"
+        and isinstance(entry.get("name"), str)
+        and entry["name"].endswith(".md")
+    }
+    require_rules(names)
+    return sorted(names)
+
+
+def main(mode, source, output):
     if mode == "tree":
         entries = []
         for row in source.read_text(encoding="utf-8").split("\0"):
@@ -28,7 +53,6 @@ def main(mode, source, *args):
                 entries.append((rule_name(match[2]), match[1]))
         require_rules(entries)
         entries.sort()
-        output = Path(args[0])
         (output / "names").write_text(
             "".join(f"{name}\n" for name, _ in entries), encoding="utf-8"
         )
@@ -36,31 +60,3 @@ def main(mode, source, *args):
             "".join(f"{blob}\t{name}\n" for name, blob in entries),
             encoding="utf-8",
         )
-    elif mode == "commit":
-        data = json.loads(source.read_text(encoding="utf-8"))
-        sha = data.get("sha") if isinstance(data, dict) else None
-        if not isinstance(sha, str) or not re.fullmatch(r"[a-f0-9]{40}", sha):
-            raise ValueError("Invalid Waza commit")
-        print(sha)
-    else:
-        data = json.loads(source.read_text(encoding="utf-8"))
-        if not isinstance(data, list):
-            raise ValueError("Invalid Waza rule catalog")
-        names = set()
-        for entry in data:
-            name = entry.get("name")
-            if (
-                entry.get("type") == "file"
-                and isinstance(name, str)
-                and name.endswith(".md")
-            ):
-                names.add(rule_name(name))
-        require_rules(names)
-        print("\n".join(sorted(names)))
-
-
-if __name__ == "__main__":
-    try:
-        main(sys.argv[1], Path(sys.argv[2]), *sys.argv[3:])
-    except (OSError, ValueError, AttributeError) as error:
-        sys.exit(str(error))

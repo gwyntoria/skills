@@ -1,11 +1,10 @@
 """Update the bundled Claude statusline command in settings.json."""
 
-import sys
 import json
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
-from user_paths import reject_json_constant
+from .user_paths import reject_json_constant
 
 
 def install_setting(path, command):
@@ -19,7 +18,7 @@ def install_setting(path, command):
         if not isinstance(settings, dict):
             raise ValueError("Expected a JSON object")
     except (OSError, ValueError) as error:
-        sys.exit(f"Error: cannot parse {path}: {error}")
+        raise ValueError(f"Error: cannot parse {path}: {error}") from error
 
     settings["statusLine"] = {"type": "command", "command": command}
     with NamedTemporaryFile(
@@ -35,10 +34,3 @@ def install_setting(path, command):
             staged.replace(path)
         finally:
             staged.unlink(missing_ok=True)
-
-
-if __name__ == "__main__":
-    try:
-        install_setting(Path(sys.argv[1]), sys.argv[2])
-    except OSError as error:
-        sys.exit(str(error))

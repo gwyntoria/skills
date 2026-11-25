@@ -5,7 +5,7 @@ import re
 import sys
 from pathlib import Path
 
-from paths import (
+from .paths import (
     UNKNOWN,
     MISSING_TARGET,
     SKILL_DIRECTORIES,
@@ -281,10 +281,3 @@ def main(
             print_rules(group, root, label, codex, claude, pi, pi_path)
         if skills == "1":
             print_skills(group, root, label, (shared, codex, claude, pi))
-
-
-if __name__ == "__main__":
-    try:
-        main(*sys.argv[1:])
-    except OSError as error:
-        sys.exit(str(error))

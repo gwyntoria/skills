@@ -1,45 +1,18 @@
 #!/usr/bin/env bash
 
-mode="$2"
-MODULE_DIR="$(cd -P -- "${BASH_SOURCE[0]%/*}" && pwd -P)" || exit 1
-
-# shellcheck source=scripts/manage-tools/common.sh
-source "$MODULE_DIR/common.sh" || exit 1
-trap 'exit 130' INT
-trap 'exit 143' TERM
-trap 'exit 129' HUP
-
-if [ "$mode" = config ] || [ "$mode" = load-worker ]; then
-    # shellcheck source=scripts/manage-tools/snapshot.sh
-    source "$MODULE_DIR/snapshot.sh" || exit 1
-    initialize_snapshot "$1" "$3" || exit 1
-    # shellcheck source=scripts/manage-tools/skills/catalog.sh
-    source "$MODULE_DIR/skills/catalog.sh" || exit 1
-    # shellcheck source=scripts/manage-tools/rules/rules.sh
-    source "$MODULE_DIR/rules/rules.sh" || exit 1
-    # shellcheck source=scripts/manage-tools/content/loading.sh
-    source "$MODULE_DIR/content/loading.sh" || exit 1
-    if [ "$mode" = load-worker ]; then
-        content_load_worker "$4" "$5" "$6" "$7"
-        exit "$?"
-    fi
-    # shellcheck source=scripts/manage-tools/config/menu.sh
-    source "$MODULE_DIR/config/menu.sh" || exit 1
-    # shellcheck source=scripts/manage-tools/config/install.sh
-    source "$MODULE_DIR/config/install.sh" || exit 1
-    # shellcheck source=scripts/manage-tools/agents/install.sh
-    source "$MODULE_DIR/agents/install.sh" || exit 1
-    # shellcheck source=scripts/manage-tools/agents/actions.sh
-    source "$MODULE_DIR/agents/actions.sh" || exit 1
-    # shellcheck source=scripts/manage-tools/content/list.sh
-    source "$MODULE_DIR/content/list.sh" || exit 1
-    # shellcheck source=scripts/manage-tools/content/removal.sh
-    source "$MODULE_DIR/content/removal.sh" || exit 1
-    # shellcheck source=scripts/manage-tools/config/config.sh
-    source "$MODULE_DIR/config/config.sh" || exit 1
-    run_agent_setup
-    exit "$?"
+# Older standalone launchers call this path with <local|archive> config <url>.
+if [ "$#" -ne 3 ] || [ "$2" != config ]; then
+    printf 'Error: expected a manage-tools config invocation.\n' >&2
+    exit 2
 fi
-
-printf 'Error: unknown manage-tools config mode: %s\n' "$mode" >&2
-exit 2
+if ! command -v python3 >/dev/null 2>&1 ||
+    ! python3 -c 'import sys; sys.exit(sys.version_info < (3, 10))'; then
+    printf 'Error: config requires Python 3.10 or later (python3).\n' >&2
+    exit 2
+fi
+if ! python3 -c 'import curses' 2>/dev/null; then
+    printf 'Error: config requires Python with curses support.\n' >&2
+    exit 2
+fi
+module_dir="$(cd -P -- "${BASH_SOURCE[0]%/*}" && pwd -P)" || exit 1
+exec python3 -B "$module_dir/main.py" "$1" "$3"

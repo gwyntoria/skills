@@ -3,7 +3,7 @@
 import os
 import sys
 
-from user_paths import show
+from .user_paths import show
 
 
 AGENTS = (("codex", "Codex"), ("claude", "Claude Code"), ("pi", "Pi"))
@@ -49,7 +49,3 @@ def main():
             print(f"  Executable:    {color(show(executable), '32')}")
     if not found:
         print("\nNo supported Agents found on PATH.")
-
-
-if __name__ == "__main__":
-    main()
