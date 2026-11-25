@@ -95,9 +95,7 @@ class Session:
         )
         while True:
             try:
-                index = self.screen.choose(
-                    "AGENT CONFIG", ["Skill", "Rule", "Agent", "Exit"]
-                )
+                index = self.screen.home()
                 if index == 3:
                     break
                 actions[index]()

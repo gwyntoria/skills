@@ -7,6 +7,7 @@ import signal
 import selectors
 import subprocess
 import unicodedata
+from itertools import zip_longest
 
 from content.loading import job_line
 
@@ -44,9 +45,39 @@ BACKGROUNDS = {
 DEFAULT_COLORS = (-1, -1)
 SGR = {"0", "1", "2", "22", "39", "49", *FOREGROUNDS, *BACKGROUNDS}
 
+TITLE_BURGUNDY = 131  # xterm #af5f5f
+WORDMARK = (
+    " ███  █   █ █   █ █   █   █████  ███   ███  █",
+    "█     █   █  █ █  ██  █     █   █   █ █   █ █",
+    "█  ██ █ █ █   █   █ █ █     █   █   █ █   █ █",
+    "█   █ ██ ██   █   █  ██     █   █   █ █   █ █",
+    " ████ █   █   █   █   █     █    ███   ███  █████",
+)
+HOME_ITEMS = ("◇  Skill", "▤  Rule", "⚙  Agent", "↪  Exit")
+
 
 def paint(code, text):
     return f"\033[{code}m{text}\033[0m"
+
+
+def wordmark_rows():
+    for face, previous in zip_longest(WORDMARK, ("", *WORDMARK), fillvalue=""):
+        # A block on the face covers its shadow, offset one cell down and right.
+        row = "".join(
+            front if front == "█" else "░" if behind == "█" else " "
+            for front, behind in zip_longest(
+                face, " " + previous, fillvalue=" "
+            )
+        ).rstrip()
+        yield re.sub(
+            r"█+|░+",
+            lambda run: paint("1;97" if run[0][0] == "█" else "22;90", run[0]),
+            row,
+        )
+
+
+WORDMARK_BANNER = (*wordmark_rows(), "")
+COMPACT_WORDMARK = paint("1;97", "GWYN TOOL")
 
 
 def selection_mark(picked, total=1):
@@ -136,6 +167,19 @@ def enable_colors():
     return True
 
 
+def page_banner(rows, width):
+    # Reserve room for the page title, four content rows, and the footer.
+    minimum_page = 6
+    if (
+        rows >= minimum_page + len(WORDMARK_BANNER)
+        and width >= max(map(len, WORDMARK)) + 1
+    ):
+        return WORDMARK_BANNER
+    if rows > minimum_page:
+        return (COMPACT_WORDMARK,)
+    return ()
+
+
 class Screen:
     def __init__(self, window):
         self.window = window
@@ -171,9 +215,18 @@ class Screen:
             self.color_pairs[pair] = curses.color_pair(index)
         return attrs | self.color_pairs[pair]
 
-    def draw_row(self, row, spans, base=curses.A_NORMAL):
+    def draw_row(
+        self,
+        row,
+        spans,
+        base=curses.A_NORMAL,
+        *,
+        default_colors=DEFAULT_COLORS,
+    ):
         column = 0
         for text, width, attrs, color in spans:
+            if color == DEFAULT_COLORS:
+                color = default_colors
             color_attr = 0 if base & curses.A_COLOR else self.color_style(color)
             style = base | attrs | color_attr
             if attrs & curses.A_BOLD:
@@ -181,28 +234,49 @@ class Screen:
             self.window.addstr(row, column, text, style)
             column += width
 
+    def body_height(self):
+        rows, columns = self.window.getmaxyx()
+        banner = page_banner(rows, columns - 1)
+        return max(0, rows - len(banner) - 2)
+
     def display(self, title, lines, footer, *, cursor=None, offset=0):
         rows, columns = self.window.getmaxyx()
         self.window.erase()
         width = columns - 1
-        if rows > 0 and width > 0:
-            self.draw_row(0, next(wrap(paint("1;36", title), width)))
-        if rows > 1 and width > 0:
-            for index, line in enumerate(
-                lines[offset : offset + rows - 2], offset
-            ):
-                style = curses.A_NORMAL
-                if index == cursor:
-                    style = (
-                        curses.A_REVERSE
-                        | curses.A_BOLD
-                        | self.color_style((curses.COLOR_CYAN, -1))
-                    )
-                spans = (
-                    next(wrap(line, width)) if isinstance(line, str) else line
+        if rows < 1 or width < 1:
+            self.window.refresh()
+            return
+
+        banner = page_banner(rows, width)
+        if not banner:
+            title = f"{COMPACT_WORDMARK} · {title}"
+        title_color = (
+            TITLE_BURGUNDY
+            if self.color_enabled and curses.COLORS >= 256
+            else curses.COLOR_RED
+        )
+        for index, heading in enumerate((*banner, title)):
+            self.draw_row(
+                index,
+                next(wrap(paint("1", heading), width)),
+                default_colors=(title_color, -1),
+            )
+
+        top = len(banner) + 1
+        for index, line in enumerate(
+            lines[offset : offset + max(0, rows - top - 1)], offset
+        ):
+            style = curses.A_NORMAL
+            if index == cursor:
+                focus = self.color_style(
+                    (curses.COLOR_BLACK, curses.COLOR_WHITE + 8)
                 )
-                self.draw_row(index - offset + 1, spans, style)
+                style = focus or (curses.A_BOLD | curses.A_REVERSE)
+            spans = next(wrap(line, width)) if isinstance(line, str) else line
+            self.draw_row(index - offset + top, spans, style)
+        if rows > 1:
             self.draw_row(rows - 1, next(wrap(footer, width)), curses.A_DIM)
+
         self.window.refresh()
 
     def key(self, delay=-1):
@@ -229,7 +303,7 @@ class Screen:
         cursor = min(cursor, len(draw()) - 1)
         offset = 0
         while True:
-            height = max(1, self.window.getmaxyx()[0] - 2)
+            height = max(1, self.body_height())
             offset = min(cursor, max(offset, cursor - height + 1))
             labels = draw()
             self.display(
@@ -261,6 +335,9 @@ class Screen:
         if key in (curses.KEY_UP, curses.KEY_DOWN):
             return (cursor + (-1 if key == curses.KEY_UP else 1)) % length
         return {curses.KEY_HOME: 0, curses.KEY_END: length - 1}.get(key, cursor)
+
+    def home(self):
+        return self.menu("AGENT CONFIG", HOME_ITEMS)
 
     def choose(self, title, labels, default=0):
         return self.menu(title, labels, default)
@@ -330,7 +407,7 @@ class Screen:
             offset = self.scroll(key, offset, lines)
 
     def scroll(self, key, offset, lines):
-        step = max(1, self.window.getmaxyx()[0] - 2)
+        step = max(1, self.body_height())
         return max(
             0,
             min(
@@ -364,13 +441,13 @@ class Screen:
             offset = self.scroll(key, offset, lines)
 
     def downloads(self, title, jobs, *, cancel=True):
-        rows, columns = self.window.getmaxyx()
+        _, columns = self.window.getmaxyx()
         ordered = sorted(
             jobs, key=lambda job: (job.status is not None, job.process is None)
         )
         lines = [
             self.download_line(job, columns)
-            for job in ordered[: max(1, rows - 2)]
+            for job in ordered[: self.body_height()]
         ]
         done = sum(job.status is not None for job in jobs)
         footer = "Esc Cancel download  Ctrl+C Exit" if cancel else "Ctrl+C Exit"
@@ -387,7 +464,7 @@ class Screen:
         return line
 
     def busy(self, title, lines):
-        height = max(0, self.window.getmaxyx()[0] - 2)
+        height = self.body_height()
         self.display(title, lines[-height:] if height else [], "Ctrl+C Exit")
         self.key(0)
 
