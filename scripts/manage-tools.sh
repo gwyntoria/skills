@@ -80,7 +80,7 @@ load_remote_source() {
     tar -xzf "$SOURCE_TEMP/source.tar.gz" -C "$SOURCE_TEMP" -- \
         skills-main/scripts/manage-tools skills-main/rules \
         skills-main/scripts/statusline/claude-statusline.sh || return 1
-    MODULE_ENTRY="$SOURCE_TEMP/skills-main/scripts/manage-tools/main.sh"
+    MODULE_ENTRY="$SOURCE_TEMP/skills-main/scripts/manage-tools/main.py"
     if [ ! -f "$MODULE_ENTRY" ]; then
         printf 'Error: manage-tools entry missing from the downloaded archive.\n' >&2
         return 1
@@ -565,15 +565,19 @@ main() {
             printf 'Error: Agent configuration requires an interactive terminal.\n' >&2
             return 2
         fi
+        if ! command -v python3 >/dev/null 2>&1; then
+            printf 'Error: config requires Python 3.10 or later (python3).\n' >&2
+            return 2
+        fi
         if [ -n "$SCRIPT_SOURCE" ]; then
             script_path="$(resolve_script_path "$SCRIPT_SOURCE")" || return 1
-            MODULE_ENTRY="${script_path%/*}/manage-tools/main.sh"
+            MODULE_ENTRY="${script_path%/*}/manage-tools/main.py"
         fi
         if [ -f "$MODULE_ENTRY" ]; then
-            exec "$BASH" "$MODULE_ENTRY" local config "$SOURCE_ARCHIVE_URL" <&"$input_fd"
+            exec python3 -B "$MODULE_ENTRY" local "$SOURCE_ARCHIVE_URL" <&"$input_fd"
         fi
         load_remote_source || return 1
-        "$BASH" "$MODULE_ENTRY" archive config "$SOURCE_ARCHIVE_URL" <&"$input_fd"
+        python3 -B "$MODULE_ENTRY" archive "$SOURCE_ARCHIVE_URL" <&"$input_fd"
         return
     fi
 
