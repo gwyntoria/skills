@@ -384,8 +384,6 @@ class Screen:
         )
         if job.status is not None:
             return paint("32" if job.status == 0 else "31", line)
-        if job.process is not None:
-            return paint("36", line)
         return line
 
     def busy(self, title, lines):
