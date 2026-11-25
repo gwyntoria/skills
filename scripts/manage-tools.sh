@@ -3,19 +3,17 @@
 SCRIPT_SOURCE="${BASH_SOURCE[0]:-}"
 PROGRAM_NAME="${SCRIPT_SOURCE:-manage-tools.sh}"
 PROGRAM_NAME="${PROGRAM_NAME##*/}"
-UPDATE_ALL=0
 OPEN_AGENT_SETUP=0
 SOURCE_ARCHIVE_URL=https://codeload.github.com/gwyntoria/skills/tar.gz/refs/heads/main
 SOURCE_TEMP=""
 
 usage() {
-    printf 'Usage: %s [-a | update-all | -c | config | -h | help]\n' "$PROGRAM_NAME"
+    printf 'Usage: %s [-c | config | -h | help]\n' "$PROGRAM_NAME"
     printf '\n'
     printf 'Arguments:\n'
-    printf '  -a, update-all  Also update Claude and Pi, including supported plugins and extensions\n'
     printf '  -c, config      Open the Agent menu using local repository modules or GitHub main (requires an interactive terminal)\n'
     printf '  -h, help        Show this help message\n'
-    printf '\nDefault: update Skills, Codex (including Plugin Marketplace) and Homebrew.\n'
+    printf '\nDefault: update Skills, Codex, Claude Code, Pi and Homebrew, including supported Agent plugins and extensions.\n'
     printf 'Updates run directly from the installed script.\n'
 }
 
@@ -25,10 +23,6 @@ usage() {
 parse_args() {
     while [ "$#" -gt 0 ]; do
         case "$1" in
-        -a | update-all)
-            UPDATE_ALL=1
-            shift
-            ;;
         -c | config)
             OPEN_AGENT_SETUP=1
             shift
@@ -44,11 +38,6 @@ parse_args() {
             ;;
         esac
     done
-
-    if [ "$OPEN_AGENT_SETUP" -eq 1 ] && [ "$UPDATE_ALL" -eq 1 ]; then
-        printf 'Error: config cannot be combined with update-all.\n' >&2
-        return 2
-    fi
 
     return 0
 }
@@ -387,12 +376,8 @@ run_claude_plugins() {
 run_agents() {
     local IN_AGENTS=1
     local AGENT_STEP=0
-    local -a names=('Codex')
-    local -a commands=(codex)
-    if [ "$UPDATE_ALL" -eq 1 ]; then
-        names+=('Claude Code' 'Pi')
-        commands+=(claude pi)
-    fi
+    local -a names=('Codex' 'Claude Code' 'Pi')
+    local -a commands=(codex claude pi)
     local -a paths=() reasons=()
     local i executable help record status name detail
     local success=0 failed=0 group_status group_detail
