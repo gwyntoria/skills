@@ -483,11 +483,13 @@ class Screen:
             ),
         )
 
-    def page(self, title, details):
-        offset = 0
+    def page(self, title, details, *, start_at_end=False):
+        offset = None if start_at_end else 0
         while True:
             lines = self.details(details)
-            offset = self.scroll(-1, offset, lines)
+            offset = self.scroll(
+                -1, len(lines) if offset is None else offset, lines
+            )
             self.display(
                 title,
                 lines,

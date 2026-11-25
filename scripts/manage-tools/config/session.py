@@ -113,9 +113,9 @@ class Session:
                     break
         return int(self.failed)
 
-    def page(self, title, lines, *, failed=False):
+    def page(self, title, lines, *, failed=False, start_at_end=False):
         self.failed |= failed
-        self.screen.page(title, lines)
+        self.screen.page(title, lines, start_at_end=start_at_end)
 
     def scope(self, title, selected):
         return self.screen.choose(
@@ -188,6 +188,7 @@ class Session:
                 result_summary(execution.completed, execution.failed),
             ],
             failed=bool(execution.failed),
+            start_at_end=True,
         )
 
     def select_agents(self, title, labels, selected):
