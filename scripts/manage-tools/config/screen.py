@@ -22,42 +22,114 @@ class Quit(Exception):
 ENTER = (10, 13, curses.KEY_ENTER)
 BACK = (27, ord("b"), ord("B"))
 QUIT = (ord("q"), ord("Q"))
-ANSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+ANSI = re.compile(r"(\x1b\[[0-?]*[ -/]*[@-~])")
+COLORS = {
+    "31": curses.COLOR_RED,
+    "32": curses.COLOR_GREEN,
+    "33": curses.COLOR_YELLOW,
+    "36": curses.COLOR_CYAN,
+}
+SGR = {"0", "1", "2", "22", "39", *COLORS}
+
+
+def paint(code, text):
+    return f"\033[{code}m{text}\033[0m"
+
+
+def selection_mark(picked, total=1):
+    if not picked:
+        return "[ ]"
+    if picked == total:
+        return paint("1;32", "[x]")
+    return paint("1;33", "[-]")
+
+
+def chunks(text):
+    attrs = curses.A_NORMAL
+    color = None
+    for index, token in enumerate(ANSI.split(str(text))):
+        if index % 2 == 0:
+            yield token, attrs, color
+        elif token.endswith("m"):
+            codes = (token[2:-1] or "0").split(";")
+            if not set(codes) <= SGR:
+                continue
+            for code in codes:
+                attrs, color = sgr(code, attrs, color)
+
+
+def sgr(code, attrs, color):
+    if code == "0":
+        return curses.A_NORMAL, None
+    if code == "39":
+        return attrs, None
+    if code in COLORS:
+        return attrs, code
+    return {
+        "1": attrs | curses.A_BOLD,
+        "2": attrs | curses.A_DIM,
+        "22": attrs & ~(curses.A_BOLD | curses.A_DIM),
+    }[code], color
+
+
+def cells_for(char):
+    return (
+        0
+        if unicodedata.combining(char)
+        else 1 + (unicodedata.east_asian_width(char) in "WF")
+    )
 
 
 def wrap(text, width):
+    """Wrap into rows of styled spans, keeping styles across line breaks."""
     if width < 1:
-        return [""]
-    lines = []
-    line = []
-    available = width
-    for char in ANSI.sub("", str(text)).expandtabs(4):
-        if not char.isprintable():
-            char = "?"
-        cells = (
-            0
-            if unicodedata.combining(char)
-            else 1 + (unicodedata.east_asian_width(char) in "WF")
-        )
-        if cells > width:
-            char, cells = "?", 1
-        if cells > available:
-            lines.append("".join(line))
-            line = []
-            available = width
-        available -= cells
-        line.append(char)
-    lines.append("".join(line))
-    return lines
+        yield []
+        return
+    spans = []
+    used = 0
+    tab_offset = 0
+    for text, attrs, color in chunks(text):
+        part = []
+        span_width = 0
+        text = (" " * tab_offset + text).expandtabs(4)[tab_offset:]
+        tab_offset = (tab_offset + len(text)) % 4
+        for char in text:
+            char = char if char.isprintable() else "?"
+            cells = cells_for(char)
+            if cells > width:
+                char, cells = "?", 1
+            if used + cells > width:
+                if part:
+                    spans.append(("".join(part), span_width, attrs, color))
+                yield spans
+                spans, part = [], []
+                used = span_width = 0
+            part.append(char)
+            used += cells
+            span_width += cells
+        if part:
+            spans.append(("".join(part), span_width, attrs, color))
+    yield spans
 
 
-def visible(text, width):
-    return wrap(text, width)[0]
+def palette():
+    if "NO_COLOR" in os.environ or not curses.has_colors():
+        return {}
+    try:
+        curses.use_default_colors()
+        pairs = {}
+        for pair, (code, foreground) in enumerate(COLORS.items(), 1):
+            curses.init_pair(pair, foreground, -1)
+            pairs[code] = curses.color_pair(pair)
+        return pairs
+    except curses.error:
+        return {}
 
 
 class Screen:
     def __init__(self, window):
         self.window = window
+        self.colors = palette()
         # Keep enough time to decode arrow keys without delaying a bare Esc.
         if "ESCDELAY" not in os.environ:
             curses.set_escdelay(50)
@@ -66,22 +138,38 @@ class Screen:
         except curses.error:
             pass
 
+    def draw_row(self, row, spans, base=curses.A_NORMAL):
+        column = 0
+        for text, width, attrs, color in spans:
+            foreground = (base & curses.A_COLOR) or self.colors.get(color, 0)
+            style = base | attrs | foreground
+            if attrs & curses.A_BOLD:
+                style &= ~curses.A_DIM
+            self.window.addstr(row, column, text, style)
+            column += width
+
     def display(self, title, lines, footer, *, cursor=None, offset=0):
         rows, columns = self.window.getmaxyx()
         self.window.erase()
-        if rows > 0 and columns > 1:
-            self.window.addstr(0, 0, visible(title, columns - 1), curses.A_BOLD)
-        if rows > 1 and columns > 1:
-            for index, text in enumerate(
+        width = columns - 1
+        if rows > 0 and width > 0:
+            self.draw_row(0, next(wrap(paint("1;36", title), width)))
+        if rows > 1 and width > 0:
+            for index, line in enumerate(
                 lines[offset : offset + rows - 2], offset
             ):
-                style = curses.A_REVERSE if index == cursor else curses.A_NORMAL
-                self.window.addstr(
-                    index - offset + 1, 0, visible(text, columns - 1), style
+                style = curses.A_NORMAL
+                if index == cursor:
+                    style = (
+                        curses.A_REVERSE
+                        | curses.A_BOLD
+                        | self.colors.get("36", 0)
+                    )
+                spans = (
+                    next(wrap(line, width)) if isinstance(line, str) else line
                 )
-            self.window.addstr(
-                rows - 1, 0, visible(footer, columns - 1), curses.A_DIM
-            )
+                self.draw_row(index - offset + 1, spans, style)
+            self.draw_row(rows - 1, next(wrap(footer, width)), curses.A_DIM)
         self.window.refresh()
 
     def key(self, delay=-1):
@@ -147,7 +235,7 @@ class Screen:
     def multi(self, title, labels, selected):
         def lines():
             return [
-                f"[{'x' if index in selected else ' '}] {label}"
+                f"{selection_mark(index in selected)} {label}"
                 for index, label in enumerate(labels)
             ]
 
@@ -167,7 +255,14 @@ class Screen:
         return [row for line in lines for row in wrap(line, width)]
 
     def confirm(
-        self, title, details, *, action="Apply", default=False, cancel="Cancel"
+        self,
+        title,
+        details,
+        *,
+        action="Apply",
+        default=False,
+        cancel="Cancel",
+        destructive=False,
     ):
         selected = default
         offset = 0
@@ -177,8 +272,12 @@ class Screen:
                 self.display("Resize terminal", [], "Esc Back  q Exit")
                 self.navigate(self.key())
                 continue
-            footer = f"  {'[ ' + action + ' ]' if selected else action}    "
-            footer += f"{cancel if selected else '[ ' + cancel + ' ]'}  ←→ Choose  Enter  Esc Back"
+            action_color = "1;31" if destructive else "1;32"
+            primary = (
+                paint(action_color, f"[ {action} ]") if selected else action
+            )
+            secondary = cancel if selected else paint("1;36", f"[ {cancel} ]")
+            footer = f"  {primary}    {secondary}  ←→ Choose  Enter  Esc Back"
             lines = self.details(details)
             offset = self.scroll(-1, offset, lines)
             self.display(title, lines, footer, offset=offset)
@@ -237,12 +336,7 @@ class Screen:
             jobs, key=lambda job: (job.status is not None, job.process is None)
         )
         lines = [
-            job_line(
-                job,
-                max(12, columns // 3),
-                min(20, max(4, columns // 5)),
-                columns,
-            )
+            self.download_line(job, columns)
             for job in ordered[: max(1, rows - 2)]
         ]
         done = sum(job.status is not None for job in jobs)
@@ -250,6 +344,16 @@ class Screen:
         self.display(f"{title}  {done}/{len(jobs)} finished", lines, footer)
         if self.key(0) in BACK and cancel:
             raise Back
+
+    def download_line(self, job, columns):
+        line = job_line(
+            job, max(12, columns // 3), min(20, max(4, columns // 5)), columns
+        )
+        if job.status is not None:
+            return paint("32" if job.status == 0 else "31", line)
+        if job.process is not None:
+            return paint("36", line)
+        return line
 
     def busy(self, title, lines):
         height = max(0, self.window.getmaxyx()[0] - 2)

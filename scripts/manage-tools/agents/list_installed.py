@@ -22,9 +22,9 @@ def executable_entries(command, directories):
             yield entry, executable
 
 
-def main():
+def main(use_color=False):
     terminal = sys.stdout.isatty() and os.environ.get("TERM", "dumb") != "dumb"
-    use_color = terminal and not os.environ.get("NO_COLOR")
+    use_color = use_color or (terminal and "NO_COLOR" not in os.environ)
     if terminal:
         print("\033[H\033[2J", end="")
 
@@ -44,8 +44,8 @@ def main():
             if index == 0:
                 found = True
                 print(f"\n{color(name, '1;36')}")
-            active = " (Active)" if index == 0 else ""
+            active = color(" (Active)", "1;32") if index == 0 else ""
             print(f"  Command entry: {color(show(entry), '33')}{active}")
-            print(f"  Executable:    {color(show(executable), '32')}")
+            print(f"  Executable:    {show(executable)}")
     if not found:
         print("\nNo supported Agents found on PATH.")

@@ -39,6 +39,10 @@ def red(text):
     return f"\033[31m{text}\033[0m"
 
 
+def green(text):
+    return f"\033[32m{text}\033[0m"
+
+
 def yellow(text):
     return f"\033[33m{text}\033[0m"
 
@@ -468,9 +472,11 @@ class Removal:
                 )
 
     def preview(self, items):
+        print(len(items))
         print(
-            f"{len(items)}\nRemoval scope: {self.scope} ({display(self.root)})\nRemoval targets:"
+            f"\033[1;36mRemoval scope:\033[0m {self.scope} ({display(self.root)})"
         )
+        print("\033[1;36mRemoval targets:\033[0m")
         for entry in items:
             if entry["kind"] == "rules":
                 path = red(display(self.full(entry["relative"])))
@@ -490,8 +496,9 @@ class Removal:
             and entry["name"] in lock.get("skills", {})
         ]
         if names:
+            action = yellow("Remove lock entries")
             print(
-                f"  Remove lock entries ({', '.join(names)}): {red(display(self.full(self.lock)))}"
+                f"  {action} ({', '.join(names)}): {red(display(self.full(self.lock)))}"
             )
         for path, target, shared in self.related_links(items):
             link = f"{display(path)} -> {display(target)}"
@@ -503,7 +510,7 @@ class Removal:
                 )
             else:
                 print(
-                    red(
+                    yellow(
                         f"WARNING: Claude link will be kept: {link}; it will become broken if its target is removed."
                     )
                 )
@@ -565,7 +572,9 @@ class Removal:
                 succeeded += 1
                 outcomes[entry["id"]] = None
                 if entry["kind"] == "skills":
-                    print(f"  OK removed {info_label}: {red(display(path))}")
+                    print(
+                        f"  {green('OK removed')} {info_label}: {display(path)}"
+                    )
                     if entry["agent"] == "codex":
                         removed_skills.append(entry["name"])
             except (OSError, ValueError) as error:
@@ -583,14 +592,15 @@ class Removal:
         for entry in rules:
             error = outcomes[entry["id"]]
             path = display(self.full(entry["relative"]))
-            print(f"  {'FAIL' if error else 'OK removed'} {rule_label(entry)}")
+            status = red("FAIL") if error else green("OK removed")
+            print(f"  {status} {rule_label(entry)}")
             if error:
                 print(
                     red(f"    FAIL {label(entry)} {path}: {display(error)}"),
                     file=sys.stderr,
                 )
             else:
-                print(red(f"    OK {label(entry)} {path}"))
+                print(f"    {green('OK')} {label(entry)} {path}")
         if rules:
             complete = sum(outcomes[entry["id"]] is None for entry in rules)
             print(
@@ -604,7 +614,7 @@ class Removal:
             for name in removed_skills:
                 lock_records.pop(name, None)
             self.atomic_lock_write(lock)
-            print(f"Updated lock: {red(display(self.full(self.lock)))}")
+            print(f"{green('Updated lock:')} {display(self.full(self.lock))}")
         except (OSError, ValueError) as error:
             print(red(f"  FAIL lock update: {error}"), file=sys.stderr)
             return 1

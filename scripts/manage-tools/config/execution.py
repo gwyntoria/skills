@@ -11,7 +11,7 @@ from content.paths import safe_root
 from agents.list_installed import executable_entries
 from agents.statusline_settings import install_setting
 
-from .screen import Back, stream_command
+from .screen import Back, paint, stream_command
 
 
 AGENTS = {"codex": "Codex", "claude": "Claude Code", "pi": "Pi"}
@@ -100,14 +100,14 @@ class Execution:
         self.progress([text])
 
     def item(self, label, operation, *args):
-        self.report(f"==> {label}")
+        self.report(paint("1;36", f"==> {label}"))
         try:
             operation(*args)
         except Back:
             self.report("Cancelled.")
         except ACTION_ERRORS as error:
             self.failed += 1
-            self.report(f"FAIL {label}: {error}")
+            self.report(paint("1;31", f"FAIL {label}: {error}"))
             return False
         else:
             self.completed += 1
@@ -180,7 +180,7 @@ class Execution:
             return None
 
     def confirm(self, title, details):
-        return self.screen.confirm(title, details)
+        return self.screen.confirm(title, details, destructive=True)
 
     def native(self, command, *, env=None):
         self.screen.native(command, env=env, cwd="/")

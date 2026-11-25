@@ -1,6 +1,6 @@
 """Grouped choices and transitive Matt Pocock skill selection."""
 
-from .screen import Back
+from .screen import Back, paint, selection_mark
 
 
 DEPENDENCIES = {
@@ -114,15 +114,9 @@ class Selection:
                 items = keys(index)
                 picked = len(items & self.selected)
                 name = value if group is None else label(group, value)
-                mark = (
-                    "x"
-                    if picked and picked == len(items)
-                    else "-"
-                    if picked
-                    else " "
-                )
+                indicator = selection_mark(picked, len(items))
                 count = f" ({picked}/{len(items)})" if group is None else ""
-                result.append(f"[{mark}] {name}{count}")
+                result.append(f"{indicator} {name}{count}")
             return [*result, choices[-1]]
 
         def toggle(key, index):
@@ -136,9 +130,10 @@ class Selection:
                 )
 
         def footer():
+            if self.notice:
+                return paint("1;33", self.notice)
             return (
-                self.notice
-                or "↑↓ Move  Space Toggle  Enter Open / Back  c Continue  Esc Back"
+                "↑↓ Move  Space Toggle  Enter Open / Back  c Continue  Esc Back"
             )
 
         suffix = f" / {group}" if group else ""

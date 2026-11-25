@@ -19,7 +19,7 @@ from content.catalog import (
 from content.removal import Removal
 from agents.lifecycle import Lifecycle
 
-from .screen import Back, Quit
+from .screen import Back, Quit, paint
 from .execution import (
     AGENTS,
     BUNDLES,
@@ -43,6 +43,16 @@ def capture(operation, *args):
     with redirect_stdout(result):
         operation(*args)
     return result.getvalue().splitlines()
+
+
+def result_summary(completed, failed):
+    success = f"{completed} succeeded"
+    errors = f"{failed} failed"
+    if completed:
+        success = paint("1;32", success)
+    if failed:
+        errors = paint("1;31", errors)
+    return f"Results: {success}, {errors}"
 
 
 def choose_steps(steps):
@@ -99,7 +109,7 @@ class Session:
                 self.failed = True
                 try:
                     self.screen.page(
-                        "Operation failed", str(error).splitlines()
+                        paint("31", "Operation failed"), str(error).splitlines()
                     )
                 except Quit:
                     break
@@ -145,7 +155,7 @@ class Session:
 
     def agent_action(self, action):
         if action == 3:
-            self.page("Agent / List", capture(agent_list.main))
+            self.page("Agent / List", capture(agent_list.main, True))
         elif action == 0:
             self.install_agents()
         elif action in (1, 2):
@@ -160,7 +170,7 @@ class Session:
             title,
             [
                 *execution.lines,
-                f"Results: {execution.completed} succeeded, {execution.failed} failed",
+                result_summary(execution.completed, execution.failed),
             ],
             failed=bool(execution.failed),
         )
@@ -302,7 +312,7 @@ class Session:
                     for name in ("shared", "codex", "claude", "pi")
                 ),
                 str(installation.pi_rule_path(self.home)),
-                "0",
+                "1",
             )
             self.page(f"{kind} / List / Local", rows)
 
@@ -319,7 +329,7 @@ class Session:
         data, errors = self.catalogs.load(
             "List / Remote catalogs", specs, self.screen.downloads
         )
-        lines = ["Available · Remote"]
+        lines = [paint("1;36", "Available · Remote")]
         for spec in specs:
             if spec in data:
                 _, label, repository, _ = spec
@@ -329,12 +339,12 @@ class Session:
                 lines.extend(
                     [
                         "",
-                        label,
+                        paint("1;36", label),
                         GITHUB + repository,
                         *[f"  {name}" for name in data[spec][0]],
                     ]
                 )
-        lines.extend(error for _, error in errors.values())
+        lines.extend(paint("33", error) for _, error in errors.values())
         self.page(f"{kind} / List / Remote", lines, failed=bool(errors))
 
     def remove_content(self, kind):
@@ -461,7 +471,7 @@ class SkillInstall(Installation):
             if self.scope == "project"
             else []
         )
-        lines.extend(error for _, error in self.errors.values())
+        lines.extend(paint("33", error) for _, error in self.errors.values())
         if not self.selected or not self.agents:
             self.session.page(
                 "Skill / Install",
@@ -555,7 +565,9 @@ class RuleInstall(Installation):
             if WAZA_CATALOG not in errors:
                 break
             options = ["Retry", "Continue without Waza rules", "Back"]
-            choice = self.screen.choose(title + " / Waza unavailable", options)
+            choice = self.screen.choose(
+                title + " / " + paint("1;33", "Waza unavailable"), options
+            )
             if choice == 1:
                 break
             if choice == 2:
@@ -816,14 +828,20 @@ class ContentRemoval:
             links,
             action="Include",
             cancel="Keep",
+            destructive=True,
         ):
             self.inventory.run("include-links", [])
         preview = capture(self.inventory.run, "preview", [])
         if self.screen.confirm(
             self.title,
-            [f"Targets: {preview[0]}", *preview[1:], *self.warnings],
+            [
+                paint("1;33", f"Targets: {preview[0]}"),
+                *preview[1:],
+                *self.warnings,
+            ],
             action="Remove",
             default=True,
+            destructive=True,
         ):
             self.session.perform(f"{self.title} / Results", self.apply)
 
