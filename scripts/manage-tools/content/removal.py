@@ -7,11 +7,10 @@ import json
 import stat
 import shutil
 import hashlib
-import subprocess
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
-from paths import (
+from .paths import (
     UNKNOWN,
     MISSING_TARGET,
     SKILL_DIRECTORIES,
@@ -26,7 +25,6 @@ from paths import (
     metadata_origin,
     reject_json_constant,
 )
-from backups import new_backup
 
 
 AGENTS = {
@@ -41,12 +39,12 @@ def red(text):
     return f"\033[31m{text}\033[0m"
 
 
+def green(text):
+    return f"\033[32m{text}\033[0m"
+
+
 def yellow(text):
     return f"\033[33m{text}\033[0m"
-
-
-def quote(value):
-    return "'" + str(value).replace("'", "'\\''") + "'"
 
 
 def repository(record):
@@ -474,9 +472,11 @@ class Removal:
                 )
 
     def preview(self, items):
+        print(len(items))
         print(
-            f"{len(items)}\nRemoval scope: {self.scope} ({display(self.root)})\nRemoval targets:"
+            f"\033[1;36mRemoval scope:\033[0m {self.scope} ({display(self.root)})"
         )
+        print("\033[1;36mRemoval targets:\033[0m")
         for entry in items:
             if entry["kind"] == "rules":
                 path = red(display(self.full(entry["relative"])))
@@ -496,8 +496,9 @@ class Removal:
             and entry["name"] in lock.get("skills", {})
         ]
         if names:
+            action = yellow("Remove lock entries")
             print(
-                f"  Remove lock entries ({', '.join(names)}): {red(display(self.full(self.lock)))}"
+                f"  {action} ({', '.join(names)}): {red(display(self.full(self.lock)))}"
             )
         for path, target, shared in self.related_links(items):
             link = f"{display(path)} -> {display(target)}"
@@ -509,42 +510,12 @@ class Removal:
                 )
             else:
                 print(
-                    red(
+                    yellow(
                         f"WARNING: Claude link will be kept: {link}; it will become broken if its target is removed."
                     )
                 )
 
-    def backup(self, items, updates_lock, includes_rules):
-        targets = [entry["relative"] for entry in items]
-        if updates_lock:
-            targets.append(self.lock)
-        backup = new_backup(self.home, "rules" if includes_rules else "skills")
-        try:
-            subprocess.run(
-                [
-                    "tar",
-                    "-cf",
-                    backup,
-                    "-C",
-                    self.root,
-                    "--",
-                    *dict.fromkeys(targets),
-                ],
-                check=True,
-            )
-        except (OSError, subprocess.CalledProcessError) as error:
-            backup.unlink(missing_ok=True)
-            backup.parent.rmdir()
-            raise ValueError("Backup failed; nothing removed") from error
-        print(f"\033[36mBackup: {display(backup)}\033[0m")
-        print(
-            f"\033[36mRestore: tar -xf {quote(backup)} -C {quote(self.root)}\033[0m"
-        )
-
-    def remove(self, data, items, args):
-        if len(args) > 1 or (args and args[0] not in ("0", "1")):
-            raise ValueError("Invalid backup choice; nothing removed")
-        create_backup = args == ["1"]
+    def remove(self, data, items):
         lock = self.read_lock()
         codex = [
             entry
@@ -556,17 +527,13 @@ class Removal:
         lock_records = lock.get("skills", {}) if lock is not None else {}
         updates_lock = any(entry["name"] in lock_records for entry in codex)
         rules = [entry for entry in items if entry["kind"] == "rules"]
-        if create_backup:
-            self.backup(items, updates_lock, bool(rules))
-        else:
-            print("No backup will be created.")
         self.verify(data, items)
 
         succeeded, failed, removed_skills, outcomes = self.remove_entries(items)
         self.print_rule_results(rules, outcomes)
         if updates_lock and removed_skills:
             failed += self.update_skill_lock(
-                data, lock, lock_records, removed_skills, create_backup
+                data, lock, lock_records, removed_skills
             )
         note = (
             " (installation targets"
@@ -605,7 +572,9 @@ class Removal:
                 succeeded += 1
                 outcomes[entry["id"]] = None
                 if entry["kind"] == "skills":
-                    print(f"  OK removed {info_label}: {red(display(path))}")
+                    print(
+                        f"  {green('OK removed')} {info_label}: {display(path)}"
+                    )
                     if entry["agent"] == "codex":
                         removed_skills.append(entry["name"])
             except (OSError, ValueError) as error:
@@ -623,37 +592,29 @@ class Removal:
         for entry in rules:
             error = outcomes[entry["id"]]
             path = display(self.full(entry["relative"]))
-            print(f"  {'FAIL' if error else 'OK removed'} {rule_label(entry)}")
+            status = red("FAIL") if error else green("OK removed")
+            print(f"  {status} {rule_label(entry)}")
             if error:
                 print(
                     red(f"    FAIL {label(entry)} {path}: {display(error)}"),
                     file=sys.stderr,
                 )
             else:
-                print(red(f"    OK {label(entry)} {path}"))
+                print(f"    {green('OK')} {label(entry)} {path}")
         if rules:
             complete = sum(outcomes[entry["id"]] is None for entry in rules)
             print(
                 f"Rules: {complete} removed, 0 partial, {len(rules) - complete} failed"
             )
 
-    def update_skill_lock(
-        self, data, lock, lock_records, removed_skills, create_backup
-    ):
+    def update_skill_lock(self, data, lock, lock_records, removed_skills):
         try:
             if self.fingerprint(self.lock) != data["lockSnapshot"]:
-                recovery = (
-                    "restore from backup if needed"
-                    if create_backup
-                    else "no recovery backup was created"
-                )
-                raise ValueError(
-                    f"Skill lock changed during deletion; {recovery}"
-                )
+                raise ValueError("Skill lock changed during deletion")
             for name in removed_skills:
                 lock_records.pop(name, None)
             self.atomic_lock_write(lock)
-            print(f"Updated lock: {red(display(self.full(self.lock)))}")
+            print(f"{green('Updated lock:')} {display(self.full(self.lock))}")
         except (OSError, ValueError) as error:
             print(red(f"  FAIL lock update: {error}"), file=sys.stderr)
             return 1
@@ -696,7 +657,7 @@ class Removal:
                     **self.snapshot(relative),
                 )
             )
-            print(f"  {display(path)} -> {display(os.readlink(path))}")
+            print(f"  {red(display(path))} -> {display(os.readlink(path))}")
         data["externalLinks"] = links
         self.save(data)
 
@@ -749,17 +710,7 @@ class Removal:
         elif action == "preview":
             self.preview(items)
         elif action == "remove":
-            return self.remove(data, items, args)
+            return self.remove(data, items)
         else:
             raise ValueError("Unknown removal action")
         return 0
-
-
-if __name__ == "__main__":
-    try:
-        home, project, scope, manifest, pi_rule, action, *args = sys.argv[1:]
-        sys.exit(
-            Removal(home, project, scope, manifest, pi_rule).run(action, args)
-        )
-    except (OSError, ValueError) as error:
-        sys.exit(red(str(error)))

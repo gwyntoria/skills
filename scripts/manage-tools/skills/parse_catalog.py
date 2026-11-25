@@ -2,8 +2,6 @@
 
 import re
 import sys
-import json
-import base64
 import tarfile
 from pathlib import Path, PurePosixPath
 
@@ -85,38 +83,9 @@ def archive_names(path):
         return names
 
 
-def tree_blobs(path):
-    tree = json.loads(path.read_text(encoding="utf-8"))
-    if tree.get("truncated"):
-        raise ValueError("Incomplete skill repository tree")
-    blobs = {
-        entry["path"]: entry["sha"]
-        for entry in tree["tree"]
-        if entry["type"] == "blob" and entry["mode"] in ("100644", "100755")
-    }
-    selected = [blobs[location] for location in skill_paths(blobs)]
-    if not selected or any(
-        not re.fullmatch(r"[a-f0-9]{40}", blob) for blob in selected
-    ):
-        raise ValueError("No valid skill document references found")
-    return selected
-
-
 def main(mode, path):
-    if mode == "tree":
-        print("\n".join(tree_blobs(path)))
-        return
     if mode == "archive":
         names = archive_names(path)
-    elif mode == "blob":
-        blob = json.loads(path.read_text(encoding="utf-8"))
-        if blob.get("encoding") != "base64":
-            raise ValueError("Invalid skill document encoding")
-        text = base64.b64decode(blob["content"]).decode("utf-8")
-        name = skill_name(text.replace("\r\n", "\n"))
-        if name is not None:
-            print(name)
-        return
     else:
         names = homepage(path.read_text(encoding="utf-8"))
     names = list(
