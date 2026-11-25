@@ -169,10 +169,13 @@ def main(
         if rules == "1":
             print_rules(group, root, label, codex, claude, pi, pi_path)
         if skills == "1":
-            for agent, enabled in (("codex", codex), ("claude", claude)):
+            for agent, enabled, title in (
+                ("codex", codex, "Shared"),
+                ("claude", claude, "Claude"),
+            ):
                 if enabled == "1":
                     group(
-                        f"Skills · {agent.title()}",
+                        f"Skills · {title}",
                         skill_files(root, label, agent, records),
                     )
 

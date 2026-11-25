@@ -155,6 +155,7 @@ interactive_setup() {
             ;;
         list_agents)
             local list_agent_labels=(Codex 'Claude Code') list_agent_defaults='1 0'
+            if [ "$content_skills" -eq 1 ]; then list_agent_labels[0]=Shared; fi
             if [ "$list_scope" = global ] && [ "$content_rules" -eq 1 ]; then
                 list_agent_labels+=(Pi)
                 list_agent_defaults+=' 0'
@@ -194,6 +195,7 @@ interactive_setup() {
             ;;
         remove_agents)
             local remove_agent_labels=(Codex 'Claude Code') remove_agent_defaults='1 0'
+            if [ "$content_skills" -eq 1 ]; then remove_agent_labels[0]=Shared; fi
             if [ "$REMOVE_SCOPE" = global ] && [ "$content_rules" -eq 1 ]; then
                 remove_agent_labels+=('Pi (rules only)')
                 remove_agent_defaults+=' 0'
@@ -520,7 +522,7 @@ interactive_setup() {
             if [ "${#SELECTED_SKILLS[@]}" -gt 0 ]; then page=targets; else page=review; fi
             ;;
         targets)
-            choose_items 3 "$install_title / Agents for skills" 1 '1 0' Codex 'Claude Code' || {
+            choose_items 3 "$install_title / Agents for skills" 1 '1 0' Shared 'Claude Code' || {
                 [ "$?" -eq 2 ] || return "$session_status"
                 page=skills
                 continue
