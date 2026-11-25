@@ -6,7 +6,7 @@ This repo mainly contains personal rules and skills used by agents, as well as s
 
 When writing or modifying codes or scripts comments, see `rules/code-comments.md`
 
-## Code Check
+## Files Check
 
 - After editing Python files, follow `rules/check-python.md` to fix and format them with Ruff.
 - After editing shell scripts, follow `rules/check-shell.md` to format and lint each changed script.
