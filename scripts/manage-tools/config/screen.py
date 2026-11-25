@@ -65,6 +65,10 @@ def paint(code, text):
     return f"\033[{code}m{text}\033[0m"
 
 
+def number_shortcut(count):
+    return "Number + Enter" if count >= 10 else "Number Select"
+
+
 def wordmark_rows():
     for face, previous in zip_longest(WORDMARK, ("", *WORDMARK), fillvalue=""):
         # A block on the face covers its shadow, offset one cell down and right.
@@ -333,12 +337,9 @@ class Screen:
         def draw():
             return lines() if callable(lines) else lines
 
-        if footer is None:
-            footer = "↑↓ Move  │  Enter Select  │  Esc Back  │  q Exit"
-            if toggle is not None:
-                footer = "↑↓ Move  Space Toggle  a All  n None  Enter Continue  Esc Back  q Exit"
         cursor = min(cursor, len(draw()) - 1)
         offset = 0
+        digits = ""
         while True:
             labels = draw()
             height = max(1, self.body_height())
@@ -350,13 +351,17 @@ class Screen:
             self.display(
                 title,
                 labels,
-                footer() if callable(footer) else footer,
+                self.menu_footer(footer, toggle, numbered, len(labels), digits),
                 cursor=cursor,
                 offset=offset,
                 number_width=len(str(len(labels))) + 2 if numbered else 0,
             )
             key = self.key()
             self.navigate(key)
+            if numbered:
+                key, cursor, digits = self.numbered_key(
+                    key, cursor, digits, labels
+                )
             cursor = self.move(key, cursor, len(labels))
             if key == ord("c") and continue_key:
                 return None
@@ -364,6 +369,42 @@ class Screen:
                 return cursor
             if toggle is not None and key in (ord(" "), ord("a"), ord("n")):
                 toggle(key, cursor)
+
+    @staticmethod
+    def menu_footer(footer, toggle, numbered, count, digits):
+        if digits:
+            return f"Number {digits}  │  Enter Select  │  Backspace Edit  │  Esc Back"
+        if callable(footer):
+            return footer()
+        if footer is not None:
+            return footer
+        if toggle is None:
+            footer = "↑↓ Move  │  Enter Select  │  Esc Back  │  q Exit"
+        else:
+            footer = "↑↓ Move  Space Toggle  a All  n None  Enter Continue  Esc Back  q Exit"
+        return f"{number_shortcut(count)}  │  {footer}" if numbered else footer
+
+    @staticmethod
+    def numbered_key(key, cursor, digits, labels):
+        count = len(labels)
+        if ord("0") <= key <= ord("9"):
+            digits += chr(key)
+            if count >= 10:
+                return None, cursor, digits
+        elif digits and key in (curses.KEY_BACKSPACE, 8, 127):
+            return None, cursor, digits[:-1]
+        elif key == curses.KEY_RESIZE:
+            return key, cursor, digits
+        elif not digits or key not in ENTER:
+            return key, cursor, ""
+
+        choice = int(digits) if len(digits) <= len(str(count)) else 0
+        if not 1 <= choice <= count or digits.startswith("0"):
+            return None, cursor, ""
+        cursor = choice - 1
+        # Rows with check marks toggle. Plain rows use the menu's Enter action.
+        key = ord(" ") if isinstance(labels[cursor], tuple) else ENTER[0]
+        return key, cursor, ""
 
     @staticmethod
     def navigate(key):

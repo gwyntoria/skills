@@ -1,6 +1,6 @@
 """Grouped choices and transitive Matt Pocock skill selection."""
 
-from .screen import Back, paint, selection_mark
+from .screen import Back, paint, selection_mark, number_shortcut
 
 
 DEPENDENCIES = {
@@ -133,7 +133,8 @@ class Selection:
             if self.notice:
                 return paint("1;33", self.notice)
             return (
-                "↑↓ Move  Space Toggle  Enter Open / Back  c Continue  Esc Back"
+                f"{number_shortcut(len(choices))}  │  ↑↓ Move  Space Toggle  "
+                "Enter Open / Back  c Continue  Esc Back"
             )
 
         suffix = f" / {group}" if group else ""
