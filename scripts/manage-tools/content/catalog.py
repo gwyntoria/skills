@@ -30,7 +30,7 @@ SKILL_SOURCES = (
     SkillSource(
         "tw93/waza", defaults="check health hunt learn read think ui write"
     ),
-    SkillSource("tw93/kami", "skill_tree"),
+    SkillSource("tw93/kami", "skill_kami"),
     SkillSource(
         "mattpocock/skills",
         "skill_homepage",
@@ -89,19 +89,15 @@ def skill_worker(kind, repository, directory):
             "Downloading archive",
         )
         parse_catalog.main("archive", path)
-    else:
-        tree = download(
-            f"{API}{repository}/git/trees/HEAD?recursive=1",
-            directory / "tree.json",
-            "Downloading tree",
+    elif kind == "skill_kami":
+        path = download(
+            f"{RAW}{repository}/HEAD/skills/kami/SKILL.md",
+            directory / "SKILL.md",
+            "Downloading SKILL.md",
         )
-        for number, blob in enumerate(parse_catalog.tree_blobs(tree), 1):
-            path = download(
-                f"{API}{repository}/git/blobs/{blob}",
-                directory / f"skill-{number}.json",
-                f"Downloading SKILL.md ({number})",
-            )
-            parse_catalog.main("blob", path)
+        name = parse_catalog.skill_name(path.read_text(encoding="utf-8"))
+        if name is not None:
+            print(name)
 
 
 def git_snapshot(directory, pinned):
