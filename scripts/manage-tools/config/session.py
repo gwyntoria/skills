@@ -38,6 +38,7 @@ WAZA_CATALOG = ("rules-waza", "Rules / Waza", "", "")
 BUNDLED_RULES = ("rules-bundled", "Rules / Gwyntoria", "", "")
 PUBLISHED_RULES = ("rules-published", "Rules / Gwyntoria", "", "")
 SCOPES = ("global", "project")
+CLAUDE_STATUSLINE = "scripts/statusline/claude-statusline.sh"
 
 
 def capture(operation, *args):
@@ -233,7 +234,7 @@ class Session:
             return
 
     def apply_agent_install(self, agents):
-        statusline = self.root / "scripts/statusline.sh"
+        statusline = self.root / CLAUDE_STATUSLINE
         if "claude" in agents and not statusline.is_file():
             raise ValueError(f"Invalid resource: {statusline}")
         if set(agents) & {"codex", "claude"}:
@@ -255,10 +256,10 @@ class Session:
         selected = self.select_agents(f"Agent / {action}", AGENTS, set())
         if not selected:
             return
+        source = self.root / CLAUDE_STATUSLINE
 
         def apply(execution):
             for agent in selected:
-                source = self.root / "scripts/statusline.sh"
                 statusline = (
                     str(source)
                     if agent == "claude" and source.is_file()
