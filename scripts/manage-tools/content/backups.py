@@ -27,18 +27,21 @@ def new_backup(home, kind):
             continue
 
 
-def list_backups(home):
+def list_backups(home, kind):
     return [
         entry.name
         for entry in sorted(home.iterdir())
-        if BACKUP_NAME.fullmatch(entry.name) and directory(entry_stat(entry))
+        if entry.name.startswith(f".agent-{kind}-backup-")
+        and BACKUP_NAME.fullmatch(entry.name)
+        and directory(entry_stat(entry))
     ]
 
 
-def remove_backups(home, names):
+def remove_backups(home, kind, names):
     folders = []
     for name in names:
-        if not BACKUP_NAME.fullmatch(name):
+        match = BACKUP_NAME.fullmatch(name)
+        if not match or match[1] != kind:
             raise ValueError("Invalid backup directory name")
         folder = home / name
         info = entry_stat(folder)
@@ -59,13 +62,15 @@ def remove_backups(home, names):
 
 if __name__ == "__main__":
     try:
-        action, home_arg, *names = sys.argv[1:]
+        action, home_arg, kind, *names = sys.argv[1:]
+        if kind not in ("skills", "rules"):
+            raise ValueError("Invalid backup category")
         home = safe_root(home_arg, "HOME")
         if action == "list":
-            for name in list_backups(home):
+            for name in list_backups(home, kind):
                 print(name)
         elif action == "remove":
-            remove_backups(home, names)
+            remove_backups(home, kind, names)
         else:
             raise ValueError("Unknown backup action")
     except (OSError, ValueError) as error:

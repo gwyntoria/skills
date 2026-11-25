@@ -25,26 +25,35 @@ interactive_setup() {
     trap cleanup_setup_resources EXIT
     trap 'exit 130' INT
     trap 'exit 143' TERM
-    local page=main i task menu_status removal_backup=0
-    local REMOVE_SCOPE=global REMOVE_CODEX=1 REMOVE_CLAUDE=1 REMOVE_PI=1 REMOVE_RULES=0 REMOVE_SKILLS=0
+    local page=main i menu_status removal_backup=0
+    local REMOVE_SCOPE=global REMOVE_CODEX=1 REMOVE_CLAUDE=1 REMOVE_PI=1
     local session_status=0 INTERACTIVE_RESULT=0 show_summary=0 list_result=0
-    local list_rules list_skills list_scope
+    local content_kind content_title content_page content_rules content_skills list_scope
     local repo_labels=() repo_defaults=() repo_url
     local rule_labels=() rule_names=() rule_sources=() source_scope default_rule selected_rule catalog_status
-    local task_labels=('Rules' 'Skills')
     local lifecycle_action
     local agent_names=(codex claude pi) selected_agents=()
-    local tasks=() agent_requested=0 scope rules_visited=0 project_option
+    local scope rules_visited=0 project_option
     local install_title='Install / Global' remove_title='Remove / Global'
     printf -v project_option 'Project\n    %q' "$PROJECT_TARGET"
     while :; do
         case "$page" in
         main)
-            choose_items 0 'AGENT CONFIG' 0 0 'Skill / Rule' Agent Exit || return "$session_status"
+            choose_items 0 'AGENT CONFIG' 0 0 Skill Rule Agent Exit || return "$session_status"
             case "${MENU_SELECTED[0]}" in
-            0) page=content_menu ;;
-            1) page=agent_menu ;;
-            2) return "$session_status" ;;
+            0)
+                content_kind=skills content_title=Skill content_page=22 content_rules=0 content_skills=1
+                page=content_menu
+                ;;
+            1)
+                content_kind=rules content_title=Rule content_page=23 content_rules=1 content_skills=0
+                page=content_menu
+                ;;
+            2)
+                content_kind=""
+                page=agent_menu
+                ;;
+            3) return "$session_status" ;;
             esac
             ;;
         agent_menu)
@@ -55,7 +64,8 @@ interactive_setup() {
             }
             case "${MENU_SELECTED[0]}" in
             0)
-                agent_requested=1
+                MENU_VISITED[12]=0
+                INSTALL_SCOPE=global
                 page=agent_choices
                 ;;
             1)
@@ -91,52 +101,45 @@ interactive_setup() {
             page=complete
             ;;
         content_menu)
-            choose_items 22 'Skill / Rule' 0 0 Install Remove List 'Remove all backups' Back || {
+            choose_items "$content_page" "$content_title" 0 0 Install Remove List 'Remove all backups' Back || {
                 [ "$?" -eq 2 ] || return "$session_status"
                 page=main
                 continue
             }
             case "${MENU_SELECTED[0]}" in
-            0) page=install_scope ;;
+            0)
+                MENU_VISITED[7]=0
+                page=install_scope
+                ;;
             1)
                 reset_removal
+                MENU_VISITED[14]=0
+                MENU_VISITED[4]=0
                 page=remove_scope
                 ;;
-            2) page=list_categories ;;
+            2)
+                MENU_VISITED[16]=0
+                MENU_VISITED[17]=0
+                MENU_VISITED[18]=0
+                page=list_mode
+                ;;
             3)
-                run_interactive_task confirm_backup_removal
+                run_interactive_task confirm_backup_removal "$content_kind"
                 page=complete
                 ;;
             4) page=main ;;
             esac
             ;;
-        list_categories)
-            choose_items 15 'List: choose content' 1 '1 1' Rules Skills || {
-                [ "$?" -eq 2 ] || return "$session_status"
-                page=content_menu
-                continue
-            }
-            [ "${#MENU_SELECTED[@]}" -gt 0 ] || {
-                page=content_menu
-                continue
-            }
-            list_rules=0
-            list_skills=0
-            for i in "${MENU_SELECTED[@]}"; do
-                if [ "$i" -eq 0 ]; then list_rules=1; else list_skills=1; fi
-            done
-            page=list_mode
-            ;;
         list_mode)
             choose_items 16 'List: choose location' 0 0 Local Remote || {
                 [ "$?" -eq 2 ] || return "$session_status"
-                page=list_categories
+                page=content_menu
                 continue
             }
             if [ "${MENU_SELECTED[0]}" -eq 0 ]; then
                 page=list_scope
             else
-                run_interactive_task list_content remote "$list_rules" "$list_skills"
+                run_interactive_task list_content remote "$content_rules" "$content_skills"
                 list_result=1
                 page=complete
             fi
@@ -152,7 +155,7 @@ interactive_setup() {
             ;;
         list_agents)
             local list_agent_labels=(Codex 'Claude Code') list_agent_defaults='1 0'
-            if [ "$list_scope" = global ] && [ "$list_rules" -eq 1 ]; then
+            if [ "$list_scope" = global ] && [ "$content_rules" -eq 1 ]; then
                 list_agent_labels+=(Pi)
                 list_agent_defaults+=' 0'
             elif [ "${MENU_CURSORS[18]:-0}" -gt 1 ]; then MENU_CURSORS[18]=1; fi
@@ -169,28 +172,10 @@ interactive_setup() {
             for i in "${MENU_SELECTED[@]}"; do
                 case "$i" in 0) list_codex=1 ;; 1) list_claude=1 ;; 2) list_pi=1 ;; esac
             done
-            run_interactive_task list_content local "$list_rules" "$list_skills" \
+            run_interactive_task list_content local "$content_rules" "$content_skills" \
                 "$list_scope" "$list_codex" "$list_claude" "$list_pi"
             list_result=1
             page=complete
-            ;;
-        remove_categories)
-            choose_items 5 "$remove_title / Content" 1 0 Rules Skills || {
-                [ "$?" -eq 2 ] || return "$session_status"
-                page=remove_scope
-                continue
-            }
-            [ "${#MENU_SELECTED[@]}" -gt 0 ] || {
-                printf 'No content selected; cancelled.\n'
-                page=complete
-                continue
-            }
-            REMOVE_RULES=0
-            REMOVE_SKILLS=0
-            for i in "${MENU_SELECTED[@]}"; do
-                if [ "$i" -eq 0 ]; then REMOVE_RULES=1; else REMOVE_SKILLS=1; fi
-            done
-            page=remove_agents
             ;;
         remove_scope)
             choose_items 14 'Remove / Choose scope' 0 0 Global "$project_option" || {
@@ -205,11 +190,11 @@ interactive_setup() {
                 REMOVE_SCOPE=project
                 remove_title='Remove / Project'
             fi
-            page=remove_categories
+            page=remove_agents
             ;;
         remove_agents)
             local remove_agent_labels=(Codex 'Claude Code') remove_agent_defaults='1 0'
-            if [ "$REMOVE_SCOPE" = global ]; then
+            if [ "$REMOVE_SCOPE" = global ] && [ "$content_rules" -eq 1 ]; then
                 remove_agent_labels+=('Pi (rules only)')
                 remove_agent_defaults+=' 0'
             elif [ "${MENU_CURSORS[4]:-0}" -gt 1 ]; then
@@ -217,7 +202,7 @@ interactive_setup() {
             fi
             choose_items 4 "$remove_title / Agents" 1 "$remove_agent_defaults" "${remove_agent_labels[@]}" || {
                 [ "$?" -eq 2 ] || return "$session_status"
-                page=remove_categories
+                page=remove_scope
                 continue
             }
             [ "${#MENU_SELECTED[@]}" -gt 0 ] || {
@@ -232,7 +217,7 @@ interactive_setup() {
                 case "$i" in 0) REMOVE_CODEX=1 ;; 1) REMOVE_CLAUDE=1 ;; 2) REMOVE_PI=1 ;; esac
             done
             menu_status=0
-            prepare_removal_inventory "$REMOVE_SCOPE" "$REMOVE_CODEX" "$REMOVE_CLAUDE" "$REMOVE_RULES" "$REMOVE_SKILLS" "$REMOVE_PI" || menu_status=$?
+            prepare_removal_inventory "$REMOVE_SCOPE" "$REMOVE_CODEX" "$REMOVE_CLAUDE" "$content_rules" "$content_skills" "$REMOVE_PI" || menu_status=$?
             case "$menu_status" in
             0)
                 MENU_VISITED[12]=0
@@ -332,6 +317,12 @@ interactive_setup() {
         install_scope)
             choose_items 7 'Install / Choose scope' 0 0 Global "$project_option" || {
                 [ "$?" -eq 2 ] || return "$session_status"
+                AGENT_ITEMS=()
+                SELECTED_RULES=()
+                SELECTED_RULE_SOURCES=()
+                SELECTED_SKILLS=()
+                FAILED=()
+                rules_visited=0
                 page=content_menu
                 continue
             }
@@ -354,30 +345,12 @@ interactive_setup() {
                 MENU_VISITED[6]=0
             fi
             INSTALL_SCOPE="$scope"
-            page=tasks
-            ;;
-        tasks)
-            choose_items 1 "$install_title / Tasks" 1 0 "${task_labels[@]}" || {
-                [ "$?" -eq 2 ] || return "$session_status"
-                page=install_scope
-                continue
-            }
-            tasks=("${MENU_SELECTED[@]+"${MENU_SELECTED[@]}"}")
-            [ "${#tasks[@]}" -gt 0 ] || {
-                printf 'No tasks selected.\n'
-                page=complete
-                continue
-            }
-            AGENT_ITEMS=()
-            INSTALL_SKILLS=0
-            agent_requested=0
-            for task in "${tasks[@]}"; do
-                case "$task" in
-                0) AGENT_ITEMS+=(rules) ;;
-                1) INSTALL_SKILLS=1 ;;
-                esac
-            done
-            page=before_rules
+            if [ "$content_kind" = rules ]; then
+                AGENT_ITEMS=(rules)
+                page=rule_choices
+            else
+                page=skill_repos
+            fi
             ;;
         agent_choices)
             choose_items 12 'Agent / Install' 1 0 Codex 'Claude Code (with statusline)' 'Pi (with three packages)' || {
@@ -393,17 +366,7 @@ interactive_setup() {
                 page=complete
                 continue
             fi
-            page=before_rules
-            ;;
-        before_rules)
-            if [[ " ${AGENT_ITEMS[*]+${AGENT_ITEMS[*]}} " = *" rules "* ]]; then
-                page=rule_choices
-            else
-                SELECTED_RULES=()
-                SELECTED_RULE_SOURCES=()
-                rules_visited=0
-                page=after_rules
-            fi
+            page=review
             ;;
         rule_choices)
             catalog_status=0
@@ -417,13 +380,13 @@ interactive_setup() {
             if [ "$catalog_status" -eq 1 ]; then
                 choose_items 13 "$install_title / Waza rules unavailable${WAZA_RULES_ERROR:+$'\n'$WAZA_RULES_ERROR}" 0 0 Retry 'Continue without Waza rules' Back || {
                     [ "$?" -eq 2 ] || return "$session_status"
-                    page=tasks
+                    page=install_scope
                     continue
                 }
                 case "${MENU_SELECTED[0]}" in
                 0) continue ;;
                 2)
-                    page=tasks
+                    page=install_scope
                     continue
                     ;;
                 esac
@@ -490,14 +453,14 @@ interactive_setup() {
             done
             if [ "$menu_status" -ne 0 ]; then
                 [ "$menu_status" -eq 2 ] || return "$session_status"
-                if [ "$agent_requested" -eq 1 ]; then page=agent_choices; else page=tasks; fi
+                page=install_scope
                 continue
             fi
             if [ "$INSTALL_SCOPE" = global ] && [ "${#SELECTED_RULES[@]}" -gt 0 ]; then
                 page=rule_targets
             else
                 if [ "$INSTALL_SCOPE" = project ]; then RULE_TARGETS=codex; fi
-                page=after_rules
+                page=review
             fi
             ;;
         rule_targets)
@@ -516,15 +479,7 @@ interactive_setup() {
                 case "$i" in 0) destination=codex ;; 1) destination=claude ;; 2) destination=pi ;; esac
                 RULE_TARGETS="${RULE_TARGETS:+$RULE_TARGETS }$destination"
             done
-            page=after_rules
-            ;;
-        after_rules)
-            if [ "$INSTALL_SKILLS" -eq 1 ]; then
-                page=skill_repos
-            else
-                SELECTED_SKILLS=()
-                page=review
-            fi
+            page=review
             ;;
         skill_repos)
             repo_labels=()
@@ -540,9 +495,7 @@ interactive_setup() {
             done
             choose_items 6 "$install_title / Skill repositories" 1 "${repo_defaults[*]}" "${repo_labels[@]}" || {
                 [ "$?" -eq 2 ] || return "$session_status"
-                if [[ " ${AGENT_ITEMS[*]+${AGENT_ITEMS[*]}} " = *" rules "* ]]; then
-                    if [ "$INSTALL_SCOPE" = global ] && [ "${#SELECTED_RULES[@]}" -gt 0 ]; then page=rule_targets; else page=rule_choices; fi
-                elif [ "$agent_requested" -eq 1 ]; then page=agent_choices; else page=tasks; fi
+                page=install_scope
                 continue
             }
             SELECTED_REPOS=("${MENU_SELECTED[@]+"${MENU_SELECTED[@]}"}")
@@ -584,7 +537,7 @@ interactive_setup() {
             page=review
             ;;
         review)
-            if [[ " ${AGENT_ITEMS[*]+${AGENT_ITEMS[*]}} " = *" rules "* ]]; then
+            if [ "$content_kind" = rules ]; then
                 choose_items 11 '' 0 0 Install Cancel || {
                     menu_status=$?
                     if [ "$menu_status" -eq 3 ]; then
@@ -594,10 +547,10 @@ interactive_setup() {
                         continue
                     fi
                     [ "$menu_status" -eq 2 ] || return "$session_status"
-                    if [ "$INSTALL_SKILLS" -eq 1 ]; then
-                        if [ "${#SELECTED_SKILLS[@]}" -gt 0 ]; then page=targets; else page=skill_repos; fi
+                    if [ "$INSTALL_SCOPE" = global ] && [ "${#SELECTED_RULES[@]}" -gt 0 ]; then
+                        page=rule_targets
                     else
-                        if [ "$INSTALL_SCOPE" = global ] && [ "${#SELECTED_RULES[@]}" -gt 0 ]; then page=rule_targets; else page=rule_choices; fi
+                        page=rule_choices
                     fi
                     continue
                 }
@@ -624,9 +577,11 @@ interactive_setup() {
                 y | Y | '') ;;
                 q | Q) return "$session_status" ;;
                 b | B)
-                    if [ "$INSTALL_SKILLS" -eq 1 ]; then
+                    if [ "$content_kind" = skills ]; then
                         if [ "${#SELECTED_SKILLS[@]}" -gt 0 ]; then page=targets; else page=skill_repos; fi
-                    elif [ "$agent_requested" -eq 1 ]; then page=agent_choices; else page=tasks; fi
+                    else
+                        page=agent_choices
+                    fi
                     continue
                     ;;
                 *)
@@ -663,7 +618,6 @@ interactive_setup() {
             MENU_CHOICES=()
             MENU_VISITED=()
             AGENT_ITEMS=()
-            agent_requested=0
             SELECTED_SKILLS=()
             SELECTED_RULES=()
             SELECTED_RULE_SOURCES=()
@@ -681,8 +635,6 @@ interactive_setup() {
             REMOVE_CODEX=1
             REMOVE_CLAUDE=1
             REMOVE_PI=1
-            REMOVE_RULES=0
-            REMOVE_SKILLS=0
             REMOVE_SCOPE=global
             install_title='Install / Global'
             remove_title='Remove / Global'
@@ -690,7 +642,6 @@ interactive_setup() {
             INTERACTIVE_RESULT=0
             show_summary=0
             list_result=0
-            INSTALL_SKILLS=0
             page=main
             ;;
         esac
@@ -700,7 +651,6 @@ interactive_setup() {
 run_agent_setup() (
     set -eu
     PROJECT_TARGET="$(pwd -P)"
-    INSTALL_SKILLS=0
 
     WAZA_TEMP=""
     # shellcheck disable=SC2034

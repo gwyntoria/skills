@@ -95,7 +95,7 @@ apply_selected_removal() {
 }
 
 list_setup_backups() {
-    run_python "Backup listing" content/backups.py list "$HOME"
+    run_python "Backup listing" content/backups.py list "$HOME" "$1"
 }
 
 remove_setup_backups() {
@@ -103,14 +103,14 @@ remove_setup_backups() {
 }
 
 confirm_backup_removal() {
-    local names name answer
+    local kind="$1" names name answer
     local backups=()
-    names=$(list_setup_backups) || return 1
+    names=$(list_setup_backups "$kind") || return 1
     if [ -z "$names" ]; then
-        printf 'No setup backups found.\n'
+        printf 'No setup backups found for %s.\n' "$kind"
         return 0
     fi
-    printf '\nRemove all setup backup directories listed below:\n'
+    printf '\nRemove all %s setup backup directories listed below:\n' "$kind"
     while IFS= read -r name; do
         backups+=("$name")
         printf '  \033[31m%s/%s\033[0m\n' "$HOME" "$name"
@@ -119,6 +119,6 @@ confirm_backup_removal() {
     printf 'Confirm removal? [Y/n]: '
     IFS= read -r answer || return 0
     case "$answer" in y | Y | '') ;; *) return 0 ;; esac
-    run_item 'Remove all backups' remove_setup_backups "${backups[@]}"
+    run_item 'Remove all backups' remove_setup_backups "$kind" "${backups[@]}"
     print_summary
 }
