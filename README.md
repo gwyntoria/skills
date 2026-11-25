@@ -142,6 +142,8 @@ curl -fsSL https://raw.githubusercontent.com/gwyntoria/skills/refs/heads/main/sc
 curl -fsSL https://raw.githubusercontent.com/gwyntoria/skills/refs/heads/main/scripts/manage-tools.sh | bash -s -- config
 ```
 
+在完整仓库中，也可直接运行 `python3 scripts/manage-tools/main.py` 打开 Agent 配置菜单。此入口适用于 macOS / Linux，需要带有 `curses` 的 Python 3.10 或更高版本和交互终端。
+
 进入 `Agent → List` 可查看当前 `PATH` 上的 Codex、Claude Code 和 Pi。列表显示每个命令入口及其软链接解析后的实际可执行文件，并标记当前入口 `Active`。
 
 ## License

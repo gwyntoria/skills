@@ -2,15 +2,16 @@
 
 import os
 import sys
-import curses
 import signal
+import argparse
 import subprocess
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from config.screen import Quit, Screen
-from config.session import Session
-from content.catalog import InvalidRule, worker
+
+SOURCE_ARCHIVE_URL = (
+    "https://codeload.github.com/gwyntoria/skills/tar.gz/refs/heads/main"
+)
 
 
 def interrupted(signum, _frame):
@@ -18,8 +19,6 @@ def interrupted(signum, _frame):
 
 
 def start(mode, archive_url):
-    if mode not in ("local", "archive"):
-        sys.exit(f"Error: invalid config source: {mode}")
     if (
         not sys.stdin.isatty()
         or not sys.stdout.isatty()
@@ -30,6 +29,17 @@ def start(mode, archive_url):
             file=sys.stderr,
         )
         return 2
+    try:
+        import curses
+    except ImportError:
+        print(
+            "Error: config requires Python with curses support.",
+            file=sys.stderr,
+        )
+        return 2
+    from config.screen import Quit, Screen
+    from config.session import Session
+
     signal.signal(signal.SIGTERM, interrupted)
     signal.signal(signal.SIGHUP, interrupted)
     root = Path(__file__).resolve().parents[2]
@@ -50,7 +60,12 @@ def start(mode, archive_url):
 
 
 def main(args):
-    if args[0] == "--worker":
+    if sys.version_info < (3, 10):
+        print("Error: config requires Python 3.10 or later.", file=sys.stderr)
+        return 2
+    if args and args[0] == "--worker":
+        from content.catalog import InvalidRule, worker
+
         root, mode, archive_url, kind, value, ref, directory = args[1:]
         try:
             worker(
@@ -70,7 +85,12 @@ def main(args):
             print(error, file=sys.stderr)
             return 1
         return 0
-    return start(*args)
+    if len(args) == 2 and args[0] in ("local", "archive"):
+        return start(*args)
+    argparse.ArgumentParser(
+        description="Open the Agent configuration menu from this checkout."
+    ).parse_args(args)
+    return start("local", SOURCE_ARCHIVE_URL)
 
 
 if __name__ == "__main__":
