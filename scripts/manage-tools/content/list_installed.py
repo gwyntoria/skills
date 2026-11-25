@@ -62,37 +62,102 @@ def shared_rules(path):
                 yield file.name, origin if target else origin + BROKEN, file
 
 
-def canonical_skill_name(child, root, name):
-    canonical = name
+def shared_skill_name(child, shared):
     try:
         real = child.resolve(strict=True)
-        if real.parent == root / ".agents/skills":
-            canonical = real.name
+        if real.parent == shared:
+            return real.name
     except OSError as error:
         if error.errno not in MISSING_TARGET:
             raise
     except RuntimeError:
         pass  # pathlib 3.10 reports symlink loops as RuntimeError.
-    return canonical
+    return None
 
 
-def skill_files(root, scope, agent, records):
-    locations = [SKILL_DIRECTORIES[agent]]
-    if agent == "codex" and scope == "global":
-        locations.append(".codex/skills")
-    for location in locations:
-        path = root / location
-        if not directory(target_stat(path)):
+def standalone_pi_skill(path):
+    with path.open(encoding="utf-8-sig", errors="replace") as source:
+        if source.readline().rstrip() != "---":
+            return False
+        lines = []
+        for line in source:
+            if line.rstrip() == "---":
+                break
+            lines.append(line)
+        else:
+            return False
+
+    description = re.search(
+        r"""^(?:description|"description"|'description')[ \t]*:[ \t]*([^\n]*)([\s\S]*)""",
+        "".join(lines),
+        re.M,
+    )
+    if not description:
+        return False
+    value = description[1]
+    quoted = re.match(r"""(?:"((?:[^"\\]|\\.)*)"|'((?:[^']|'')*)')""", value)
+    if quoted:
+        return bool((quoted[1] or quoted[2] or "").strip())
+    value = re.split(r"(?:^|[ \t]+)#", value, maxsplit=1)[0].strip()
+    if not value or re.fullmatch(r"[|>](?:[+-]?[1-9]?|[1-9][+-]?)", value):
+        return bool(
+            re.match(r"(?:\n|[ \t]*#[^\n]*\n)*[ \t]+[^\s#]", description[2])
+        )
+    return not value.startswith(("[", "{")) and not re.fullmatch(
+        r"~|null|true|false|[+-]?(?:\.(?:inf|nan)|0[xo][0-9a-f]+|(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?)",
+        value,
+        re.I,
+    )
+
+
+def nested_skill_entries(path, *, standalone=False, ancestors=frozenset()):
+    info = target_stat(path)
+    if not directory(info):
+        return
+    identity = (info.st_dev, info.st_ino)
+    if identity in ancestors:
+        return
+    if regular(target_stat(path / "SKILL.md")):
+        yield path
+        return
+    ancestors = ancestors | {identity}
+    for entry in sorted(path.iterdir()):
+        if entry.name == "node_modules" or (
+            entry.name.startswith(".") and entry.name != ".system"
+        ):
             continue
-        for entry in sorted(path.iterdir()):
-            children = [entry]
-            if entry.name == ".system" and directory(target_stat(entry)):
-                children = sorted(entry.iterdir())
-            for child in children:
-                name = str(child.relative_to(path))
-                canonical = canonical_skill_name(child, root, name)
-                label = name if name == canonical else f"{name} ({canonical})"
-                yield label, metadata_origin(records.get(canonical)), child
+        if (
+            standalone
+            and entry.suffix == ".md"
+            and regular(target_stat(entry))
+            and standalone_pi_skill(entry)
+        ):
+            yield entry
+        else:
+            yield from nested_skill_entries(entry, ancestors=ancestors)
+
+
+def skill_entries(path):
+    if not directory(target_stat(path)):
+        return
+    for entry in sorted(path.iterdir()):
+        if entry.name == ".system":
+            yield from nested_skill_entries(entry)
+        else:
+            yield entry
+
+
+def skill_files(path, entries, shared, records, *, codex_location=False):
+    for child in entries:
+        name = child.name if child == path else str(child.relative_to(path))
+        canonical = shared_skill_name(child, shared)
+        label = (
+            f"{name} ({canonical})" if canonical and canonical != name else name
+        )
+        origin = UNKNOWN
+        if canonical or not codex_location:
+            origin = metadata_origin(records.get(canonical or name))
+        yield label, "" if origin == UNKNOWN else origin, child
 
 
 def skill_records(root, scope):
@@ -110,6 +175,42 @@ def skill_records(root, scope):
             file=sys.stderr,
         )
     return records
+
+
+def print_skills(print_group, root, scope, selected):
+    shared = root / ".agents/skills"
+    codex = root / ".codex"
+    pi = root / ".pi"
+    if scope == "global":
+        codex = Path(os.environ.get("CODEX_HOME") or codex).expanduser()
+        pi = Path(
+            os.environ.get("PI_CODING_AGENT_DIR") or pi / "agent"
+        ).expanduser()
+    locations = (
+        ("Shared", shared),
+        ("Codex", codex / "skills"),
+        ("Claude", root / SKILL_DIRECTORIES["claude"]),
+        ("Pi", pi / "skills"),
+    )
+    records = skill_records(root, scope)
+    shared_target = Path(os.path.realpath(shared))
+    for (title, path), enabled in zip(locations, selected, strict=True):
+        if enabled == "1":
+            entries = (
+                nested_skill_entries(path, standalone=True)
+                if title == "Pi"
+                else skill_entries(path)
+            )
+            print_group(
+                f"Skills · {title}",
+                skill_files(
+                    path,
+                    entries,
+                    shared_target,
+                    records,
+                    codex_location=title == "Codex",
+                ),
+            )
 
 
 def print_rules(print_group, root, scope, codex, claude, pi, pi_path):
@@ -145,13 +246,24 @@ def print_group(paint, title, rows):
         provenance = display(origin)
         if origin.endswith(BROKEN):
             provenance = display(origin[: -len(BROKEN)]) + paint("33", BROKEN)
+        source = f"  [{provenance}]" if provenance else ""
         print(
-            f"  {paint('1', display(name))}  [{provenance}]\n    {display(file)}{link}"
+            f"  {paint('1', display(name))}{source}\n    {display(file)}{link}"
         )
 
 
 def main(
-    home, project, scope, rules, skills, codex, claude, pi, pi_path, color
+    home,
+    project,
+    scope,
+    rules,
+    skills,
+    shared,
+    codex,
+    claude,
+    pi,
+    pi_path,
+    color,
 ):
     def paint(code, text):
         return f"\033[{code}m{text}\033[0m" if color == "1" else text
@@ -165,19 +277,10 @@ def main(
         print(
             f"\n{paint('1;36', 'Installed · ' + label.title())}\n{display(root)}"
         )
-        records = skill_records(root, label) if skills == "1" else {}
         if rules == "1":
             print_rules(group, root, label, codex, claude, pi, pi_path)
         if skills == "1":
-            for agent, enabled, title in (
-                ("codex", codex, "Shared"),
-                ("claude", claude, "Claude"),
-            ):
-                if enabled == "1":
-                    group(
-                        f"Skills · {title}",
-                        skill_files(root, label, agent, records),
-                    )
+            print_skills(group, root, label, (shared, codex, claude, pi))
 
 
 if __name__ == "__main__":

@@ -154,10 +154,14 @@ interactive_setup() {
             page=list_agents
             ;;
         list_agents)
-            local list_agent_labels=(Codex 'Claude Code') list_agent_defaults='1 0'
-            if [ "$content_skills" -eq 1 ]; then list_agent_labels[0]=Shared; fi
-            if [ "$list_scope" = global ] && [ "$content_rules" -eq 1 ]; then
+            local list_agent_labels=(Codex 'Claude Code') list_locations=(codex claude) list_agent_defaults='1 0'
+            if [ "$content_skills" -eq 1 ]; then
+                list_agent_labels=(Shared Codex 'Claude Code' Pi)
+                list_locations=(shared codex claude pi)
+                list_agent_defaults='1 0 0 0'
+            elif [ "$list_scope" = global ]; then
                 list_agent_labels+=(Pi)
+                list_locations+=(pi)
                 list_agent_defaults+=' 0'
             elif [ "${MENU_CURSORS[18]:-0}" -gt 1 ]; then MENU_CURSORS[18]=1; fi
             choose_items 18 'List: choose agents' 1 "$list_agent_defaults" "${list_agent_labels[@]}" || {
@@ -169,12 +173,17 @@ interactive_setup() {
                 page=list_scope
                 continue
             }
-            local list_codex=0 list_claude=0 list_pi=0
+            local list_shared=0 list_codex=0 list_claude=0 list_pi=0
             for i in "${MENU_SELECTED[@]}"; do
-                case "$i" in 0) list_codex=1 ;; 1) list_claude=1 ;; 2) list_pi=1 ;; esac
+                case "${list_locations[i]}" in
+                shared) list_shared=1 ;;
+                codex) list_codex=1 ;;
+                claude) list_claude=1 ;;
+                pi) list_pi=1 ;;
+                esac
             done
             run_interactive_task list_content local "$content_rules" "$content_skills" \
-                "$list_scope" "$list_codex" "$list_claude" "$list_pi"
+                "$list_scope" "$list_shared" "$list_codex" "$list_claude" "$list_pi"
             list_result=1
             page=complete
             ;;

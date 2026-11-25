@@ -18,7 +18,7 @@ print_skill_catalog() {
     done
 }
 
-# Remote queries use the content flags alone. Local queries also take scope and Agent filters.
+# Remote queries use the content flags alone. Local queries also take scope and location filters.
 list_content() {
     local mode="$1" rules="$2" skills="$3"
     local list_color=0 name failed=0
@@ -27,10 +27,10 @@ list_content() {
         if [ -z "${NO_COLOR:-}" ]; then list_color=1; fi
     fi
     if [ "$mode" = local ]; then
-        local scope="$4" codex="$5" claude="$6" pi="$7"
+        local scope="$4" shared="$5" codex="$6" claude="$7" pi="$8"
         run_python "Installed content listing" content/list_installed.py \
             "$HOME" "$PROJECT_TARGET" "$scope" "$rules" "$skills" \
-            "$codex" "$claude" "$pi" "$(pi_rule_path)" "$list_color"
+            "$shared" "$codex" "$claude" "$pi" "$(pi_rule_path)" "$list_color"
         return $?
     fi
     list_remote_content "$rules" "$skills" "$list_color"
