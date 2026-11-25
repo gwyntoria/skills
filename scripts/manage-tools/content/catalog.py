@@ -16,6 +16,8 @@ GITHUB = "https://github.com/"
 API = "https://api.github.com/repos/"
 RAW = "https://raw.githubusercontent.com/"
 WAZA = "tw93/Waza"
+KAMI = "tw93/kami"
+KAMI_ARCHIVE = f"{GITHUB}{KAMI}/releases/latest/download/kami.zip"
 GWYNTORIA = "gwyntoria/skills"
 
 
@@ -30,7 +32,7 @@ SKILL_SOURCES = (
     SkillSource(
         "tw93/waza", defaults="check health hunt learn read think ui write"
     ),
-    SkillSource("tw93/kami", "skill_kami"),
+    SkillSource(KAMI, "skill_kami"),
     SkillSource(
         "mattpocock/skills",
         "skill_homepage",

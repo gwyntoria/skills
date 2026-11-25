@@ -48,12 +48,18 @@ def yellow(text):
 
 
 def repository(record):
-    if not isinstance(record, dict) or record.get("sourceType") != "github":
+    if not isinstance(record, dict):
+        return UNKNOWN
+    source = metadata_origin(record)
+    source_type = record.get("sourceType")
+    if source_type != "github" and not (
+        source_type == "download" and source.startswith("https://github.com/")
+    ):
         return UNKNOWN
     source = re.sub(
         r"^(https?://github\.com/|git@github\.com:)",
         "",
-        metadata_origin(record),
+        source,
     )
     match = re.match(r"^([\w.-]+)/([\w.-]+)(?:/|$)", source, re.ASCII)
     return (

@@ -9,9 +9,11 @@ from rules import installation
 from agents import list_installed as agent_list
 from content import list_installed
 from content.catalog import (
+    KAMI,
     WAZA,
     GITHUB,
     GWYNTORIA,
+    KAMI_ARCHIVE,
     SKILL_SOURCES,
     WAZA_DEFAULTS,
     Catalogs,
@@ -539,12 +541,13 @@ class SkillInstall(Installation):
         npx = require("npx", env)
         scope = ["--global"] if self.scope == "global" else []
         for repository, names in self.selected.items():
+            source = KAMI_ARCHIVE if repository == KAMI else GITHUB + repository
             command = [
                 npx,
                 "--yes",
                 "skills",
                 "add",
-                GITHUB + repository,
+                source,
                 "--skill",
                 *names,
                 "--agent",
