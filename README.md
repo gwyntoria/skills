@@ -124,12 +124,12 @@ claude plugin install gwyn-space-skills-writing@gwyn-space
 
 ## Scripts
 
-[`scripts/`](scripts/) 下是个人环境安装、Ubuntu 配置和仓库维护三类辅助脚本。
+[`scripts/`](scripts/) 下是个人环境安装和 Ubuntu 配置脚本。
 
 | 脚本 | 运行环境 | 说明 |
 | --- | --- | --- |
 | [`setup-ubuntu.sh`](scripts/setup-ubuntu.sh) | Ubuntu（原生 / WSL） | 通过中文 TUI 选择基础包、开发环境与 AI 工具，选择 Fish/Zsh/Bash（默认 Fish）、准备启动配置并切换默认 shell |
-| [`manage-tools.sh`](scripts/manage-tools.sh) | macOS / Linux | 可直接安装为单文件，默认依次更新 Skills、所有支持的 Agent 和 Homebrew（使用 `brew upgrade --no-ask` 自动确认），末尾汇总结果。Agent 更新包括 Codex 及其插件市场、Claude Code 及其插件市场和插件、Pi 及其扩展。传入 `-c` 或 `config` 打开交互菜单，安装、清理、卸载或查看 Agent CLI，以及安装、移除或查看 Skills 和 Rules |
+| [`manage-tools.sh`](scripts/manage-tools.sh) | macOS / Linux | 可直接安装为单文件，默认依次更新 Skills、所有支持的 Agent 和 Homebrew。Agent 更新包括 Codex、Claude Code、Pi。传入 `-c` 或 `config` 打开交互菜单，安装、清理、卸载或查看 Agent、Skills 和 Rules |
 | [`claude-statusline.sh`](scripts/statusline/claude-statusline.sh) | Claude Code | 状态栏脚本，显示模型与思考等级、目录与 Git 分支、上下文余量、输入输出 token、速率限制和版本。通过 Agent 配置菜单安装 Claude Code 时，会一并安装到 `~/.claude/statusline.sh` |
 
 可在交互终端执行如下命令打开 Ubuntu 和 Agent 配置菜单：
