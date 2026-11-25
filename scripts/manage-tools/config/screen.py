@@ -23,13 +23,26 @@ ENTER = (10, 13, curses.KEY_ENTER)
 BACK = (27, ord("b"), ord("B"))
 QUIT = (ord("q"), ord("Q"))
 ANSI = re.compile(r"(\x1b\[[0-?]*[ -/]*[@-~])")
-COLORS = {
-    "31": curses.COLOR_RED,
-    "32": curses.COLOR_GREEN,
-    "33": curses.COLOR_YELLOW,
-    "36": curses.COLOR_CYAN,
+ANSI_COLORS = (
+    curses.COLOR_BLACK,
+    curses.COLOR_RED,
+    curses.COLOR_GREEN,
+    curses.COLOR_YELLOW,
+    curses.COLOR_BLUE,
+    curses.COLOR_MAGENTA,
+    curses.COLOR_CYAN,
+    curses.COLOR_WHITE,
+)
+FOREGROUNDS = {
+    str(code + index): color + intensity
+    for code, intensity in ((30, 0), (90, 8))
+    for index, color in enumerate(ANSI_COLORS)
 }
-SGR = {"0", "1", "2", "22", "39", *COLORS}
+BACKGROUNDS = {
+    str(int(code) + 10): color for code, color in FOREGROUNDS.items()
+}
+DEFAULT_COLORS = (-1, -1)
+SGR = {"0", "1", "2", "22", "39", "49", *FOREGROUNDS, *BACKGROUNDS}
 
 
 def paint(code, text):
@@ -46,7 +59,7 @@ def selection_mark(picked, total=1):
 
 def chunks(text):
     attrs = curses.A_NORMAL
-    color = None
+    color = DEFAULT_COLORS
     for index, token in enumerate(ANSI.split(str(text))):
         if index % 2 == 0:
             yield token, attrs, color
@@ -60,11 +73,12 @@ def chunks(text):
 
 def sgr(code, attrs, color):
     if code == "0":
-        return curses.A_NORMAL, None
-    if code == "39":
-        return attrs, None
-    if code in COLORS:
-        return attrs, code
+        return curses.A_NORMAL, DEFAULT_COLORS
+    foreground, background = color
+    if code == "39" or code in FOREGROUNDS:
+        return attrs, (FOREGROUNDS.get(code, -1), background)
+    if code == "49" or code in BACKGROUNDS:
+        return attrs, (foreground, BACKGROUNDS.get(code, -1))
     return {
         "1": attrs | curses.A_BOLD,
         "2": attrs | curses.A_DIM,
@@ -112,24 +126,21 @@ def wrap(text, width):
     yield spans
 
 
-def palette():
+def enable_colors():
     if "NO_COLOR" in os.environ or not curses.has_colors():
-        return {}
+        return False
     try:
         curses.use_default_colors()
-        pairs = {}
-        for pair, (code, foreground) in enumerate(COLORS.items(), 1):
-            curses.init_pair(pair, foreground, -1)
-            pairs[code] = curses.color_pair(pair)
-        return pairs
     except curses.error:
-        return {}
+        return False
+    return True
 
 
 class Screen:
     def __init__(self, window):
         self.window = window
-        self.colors = palette()
+        self.color_enabled = enable_colors()
+        self.color_pairs = {}
         # Keep enough time to decode arrow keys without delaying a bare Esc.
         if "ESCDELAY" not in os.environ:
             curses.set_escdelay(50)
@@ -138,11 +149,33 @@ class Screen:
         except curses.error:
             pass
 
+    def color_style(self, colors):
+        if not self.color_enabled or colors == DEFAULT_COLORS:
+            return 0
+        foreground, background = colors
+        attrs = 0
+        if foreground >= curses.COLORS:
+            foreground, attrs = (
+                (-1, curses.A_DIM)
+                if foreground == 8
+                else (foreground - 8, curses.A_BOLD)
+            )
+        if background >= curses.COLORS:
+            background -= 8
+        pair = (foreground, background)
+        if pair not in self.color_pairs:
+            index = len(self.color_pairs) + 1
+            if index >= min(curses.COLOR_PAIRS, 256):
+                return attrs
+            curses.init_pair(index, *pair)
+            self.color_pairs[pair] = curses.color_pair(index)
+        return attrs | self.color_pairs[pair]
+
     def draw_row(self, row, spans, base=curses.A_NORMAL):
         column = 0
         for text, width, attrs, color in spans:
-            foreground = (base & curses.A_COLOR) or self.colors.get(color, 0)
-            style = base | attrs | foreground
+            color_attr = 0 if base & curses.A_COLOR else self.color_style(color)
+            style = base | attrs | color_attr
             if attrs & curses.A_BOLD:
                 style &= ~curses.A_DIM
             self.window.addstr(row, column, text, style)
@@ -163,7 +196,7 @@ class Screen:
                     style = (
                         curses.A_REVERSE
                         | curses.A_BOLD
-                        | self.colors.get("36", 0)
+                        | self.color_style((curses.COLOR_CYAN, -1))
                     )
                 spans = (
                     next(wrap(line, width)) if isinstance(line, str) else line

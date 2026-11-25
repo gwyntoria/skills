@@ -511,6 +511,10 @@ class SkillInstall(Installation):
         if self.scope == "project" and self.session.project == Path("/"):
             raise ValueError("Refusing to use / as a project directory.")
         env = node_environment(self.session.home)
+        if self.screen.color_enabled:
+            env = dict(os.environ if env is None else env)
+            # skills detects a pipe as non-interactive and otherwise omits color.
+            env.setdefault("FORCE_COLOR", "1")
         npx = require("npx", env)
         scope = ["--global"] if self.scope == "global" else []
         for repository, names in self.selected.items():
