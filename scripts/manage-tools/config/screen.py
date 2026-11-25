@@ -53,7 +53,12 @@ WORDMARK = (
     "█   █ ██ ██   █   █  ██     █   █   █ █   █ █",
     " ████ █   █   █   █   █     █    ███   ███  █████",
 )
-HOME_ITEMS = ("◇  Skill", "▤  Rule", "⚙  Agent", "↪  Exit")
+HOME_ITEMS = (
+    ("\U000f03ec  Skill", "Install, remove or list skills"),
+    ("\U000f0b8a  Rule", "Install, remove or list rules"),
+    ("\U000f0493  Agent", "Install, clean up, uninstall or list agents"),
+    ("\U000f081c  Exit", "Return to the shell"),
+)
 
 
 def paint(code, text):
@@ -139,7 +144,9 @@ def wrap(text, width):
         text = (" " * tab_offset + text).expandtabs(4)[tab_offset:]
         tab_offset = (tab_offset + len(text)) % 4
         for char in text:
-            char = char if char.isprintable() else "?"
+            # Nerd Font glyphs use Unicode's private-use ranges.
+            if not char.isprintable() and unicodedata.category(char) != "Co":
+                char = "?"
             cells = cells_for(char)
             if cells > width:
                 char, cells = "?", 1
@@ -229,17 +236,27 @@ class Screen:
                 color = default_colors
             color_attr = 0 if base & curses.A_COLOR else self.color_style(color)
             style = base | attrs | color_attr
-            if attrs & curses.A_BOLD:
+            if style & curses.A_BOLD:
                 style &= ~curses.A_DIM
             self.window.addstr(row, column, text, style)
             column += width
 
-    def body_height(self):
+    def body_height(self, *, action_rows=0):
         rows, columns = self.window.getmaxyx()
         banner = page_banner(rows, columns - 1)
-        return max(0, rows - len(banner) - 2)
+        return max(0, rows - len(banner) - 2 - action_rows)
 
-    def display(self, title, lines, footer, *, cursor=None, offset=0):
+    def display(
+        self,
+        title,
+        lines,
+        footer,
+        *,
+        cursor=None,
+        offset=0,
+        actions=None,
+        number_width=0,
+    ):
         rows, columns = self.window.getmaxyx()
         self.window.erase()
         width = columns - 1
@@ -255,29 +272,48 @@ class Screen:
             if self.color_enabled and curses.COLORS >= 256
             else curses.COLOR_RED
         )
-        for index, heading in enumerate((*banner, title)):
+        headings = (*banner, title)
+        for index, heading in enumerate(headings):
             self.draw_row(
                 index,
                 next(wrap(paint("1", heading), width)),
                 default_colors=(title_color, -1),
             )
-
-        top = len(banner) + 1
-        for index, line in enumerate(
-            lines[offset : offset + max(0, rows - top - 1)], offset
-        ):
-            style = curses.A_NORMAL
-            if index == cursor:
-                focus = self.color_style(
-                    (curses.COLOR_BLACK, curses.COLOR_WHITE + 8)
-                )
-                style = focus or (curses.A_BOLD | curses.A_REVERSE)
-            spans = next(wrap(line, width)) if isinstance(line, str) else line
-            self.draw_row(index - offset + top, spans, style)
+        row = len(headings)
+        limit = max(0, rows - row - 1 - (actions is not None))
+        for index, line in enumerate(lines[offset : offset + limit], offset):
+            number = f"{index + 1}.".ljust(number_width) if number_width else ""
+            self.draw_line(row, line, width, cursor, index, number)
+            row += 1
+        if actions is not None:
+            self.draw_row(row, next(wrap(actions, width)))
+            row += 1
         if rows > 1:
-            self.draw_row(rows - 1, next(wrap(footer, width)), curses.A_DIM)
-
+            footer_row = rows - 1
+            if cursor is not None or actions is not None:
+                footer_row = min(row + 1, footer_row)
+            if len(footer) > width:
+                footer = footer.replace("  │  ", "  ")
+            self.draw_row(footer_row, next(wrap(footer, width)), curses.A_DIM)
         self.window.refresh()
+
+    def draw_line(self, row, line, width, cursor, index, number):
+        style = curses.A_NORMAL
+        check_spans = []
+        if cursor is not None:
+            if isinstance(line, tuple):
+                line, check = line
+                if width >= len(number) + 7:
+                    # Leave room for the check mark when the name is clipped.
+                    check_spans = next(wrap(f" {check}", width))
+                    width -= sum(span[1] for span in check_spans)
+            line = ("▸ " if index == cursor else "  ") + number + line
+            if index == cursor:
+                style = curses.A_BOLD | self.color_style(
+                    (curses.COLOR_CYAN + 8, -1)
+                )
+        spans = next(wrap(line, width)) if isinstance(line, str) else line
+        self.draw_row(row, spans + check_spans, style)
 
     def key(self, delay=-1):
         self.window.timeout(delay)
@@ -292,26 +328,32 @@ class Screen:
         toggle=None,
         footer=None,
         continue_key=False,
+        numbered=True,
     ):
         def draw():
             return lines() if callable(lines) else lines
 
         if footer is None:
-            footer = "↑↓ Move  Enter Select  Esc Back  q Exit"
+            footer = "↑↓ Move  │  Enter Select  │  Esc Back  │  q Exit"
             if toggle is not None:
                 footer = "↑↓ Move  Space Toggle  a All  n None  Enter Continue  Esc Back  q Exit"
         cursor = min(cursor, len(draw()) - 1)
         offset = 0
         while True:
-            height = max(1, self.body_height())
-            offset = min(cursor, max(offset, cursor - height + 1))
             labels = draw()
+            height = max(1, self.body_height())
+            offset = max(
+                0,
+                cursor - height + 1,
+                min(offset, len(labels) - height, cursor),
+            )
             self.display(
                 title,
                 labels,
                 footer() if callable(footer) else footer,
                 cursor=cursor,
                 offset=offset,
+                number_width=len(str(len(labels))) + 2 if numbered else 0,
             )
             key = self.key()
             self.navigate(key)
@@ -337,15 +379,23 @@ class Screen:
         return {curses.KEY_HOME: 0, curses.KEY_END: length - 1}.get(key, cursor)
 
     def home(self):
-        return self.menu("AGENT CONFIG", HOME_ITEMS)
+        return self.choose("AGENT CONFIG", HOME_ITEMS, numbered=False)
 
-    def choose(self, title, labels, default=0):
-        return self.menu(title, labels, default)
+    def choose(self, title, labels, default=0, *, numbered=True):
+        if labels and isinstance(labels[0], tuple):
+            width = max(sum(map(cells_for, label)) for label, _ in labels)
+            labels = [
+                paint("1", label)
+                + " " * (width - sum(map(cells_for, label)) + 5)
+                + paint("2", description)
+                for label, description in labels
+            ]
+        return self.menu(title, labels, default, numbered=numbered)
 
     def multi(self, title, labels, selected):
         def lines():
             return [
-                f"{selection_mark(index in selected)} {label}"
+                (label, selection_mark(index in selected))
                 for index, label in enumerate(labels)
             ]
 
@@ -374,23 +424,34 @@ class Screen:
         cancel="Cancel",
         destructive=False,
     ):
+        action = f"1. {action}"
+        cancel = f"2. {cancel}"
         selected = default
         offset = 0
         while True:
             height, width = self.window.getmaxyx()
-            if height < 4 or width < 23:
+            if height < 4 or width <= max(22, len(action) + len(cancel) + 8):
                 self.display("Resize terminal", [], "Esc Back  q Exit")
                 self.navigate(self.key())
                 continue
-            action_color = "1;31" if destructive else "1;32"
+            action_color = "1;31" if destructive else "1;96"
             primary = (
-                paint(action_color, f"[ {action} ]") if selected else action
+                paint(action_color, f"▸ {action}")
+                if selected
+                else f"  {action}"
             )
-            secondary = cancel if selected else paint("1;36", f"[ {cancel} ]")
-            footer = f"  {primary}    {secondary}  ←→ Choose  Enter  Esc Back"
+            secondary = (
+                f"  {cancel}" if selected else paint("1;96", f"▸ {cancel}")
+            )
             lines = self.details(details)
-            offset = self.scroll(-1, offset, lines)
-            self.display(title, lines, footer, offset=offset)
+            offset = self.scroll(-1, offset, lines, action_rows=1)
+            self.display(
+                title,
+                lines,
+                "←→ Choose  │  Enter Select  │  Esc Back  │  q Exit",
+                offset=offset,
+                actions=f"{primary}    {secondary}",
+            )
             key = self.key()
             if key in ENTER:
                 return selected
@@ -404,10 +465,10 @@ class Screen:
                 return True
             elif key in (ord("n"), ord("N")):
                 return False
-            offset = self.scroll(key, offset, lines)
+            offset = self.scroll(key, offset, lines, action_rows=1)
 
-    def scroll(self, key, offset, lines):
-        step = max(1, self.body_height())
+    def scroll(self, key, offset, lines, *, action_rows=0):
+        step = max(1, self.body_height(action_rows=action_rows))
         return max(
             0,
             min(

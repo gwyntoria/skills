@@ -116,7 +116,7 @@ class Selection:
                 name = value if group is None else label(group, value)
                 indicator = selection_mark(picked, len(items))
                 count = f" ({picked}/{len(items)})" if group is None else ""
-                result.append(f"{indicator} {name}{count}")
+                result.append((f"{name}{count}", indicator))
             return [*result, choices[-1]]
 
         def toggle(key, index):

@@ -119,11 +119,22 @@ class Session:
 
     def scope(self, title, selected):
         return self.screen.choose(
-            title, ["Global", f"Project  {self.project}"], selected
+            title,
+            [
+                ("Global", "User-wide configuration"),
+                ("Project", str(self.project)),
+            ],
+            selected,
         )
 
     def content(self, kind):
-        options = ["Install", "Remove", "List", "Back"]
+        name = kind.lower()
+        options = [
+            ("Install", f"Add {name}s"),
+            ("Remove", f"Remove installed {name}s"),
+            ("List", f"Browse installed or available {name}s"),
+            ("Back", "Return to the main menu"),
+        ]
         action = 0
         while True:
             action = self.screen.choose(kind, options, action)
@@ -142,7 +153,13 @@ class Session:
         while True:
             selected = self.screen.choose(
                 "Agent",
-                ["Install", "Cleanup", "Uninstall", "List", "Back"],
+                [
+                    ("Install", "Install agent CLIs"),
+                    ("Cleanup", "Remove selected agent data"),
+                    ("Uninstall", "Remove agent CLIs and selected data"),
+                    ("List", "Show installed agents"),
+                    ("Back", "Return to the main menu"),
+                ],
                 selected,
             )
             try:
@@ -271,7 +288,12 @@ class Session:
     def list_content(self, kind):
         def mode():
             state["mode"] = self.screen.choose(
-                f"{kind} / List", ["Local", "Remote"], state["mode"]
+                f"{kind} / List",
+                [
+                    ("Local", "Show installed items"),
+                    ("Remote", "Browse source catalogs"),
+                ],
+                state["mode"],
             )
 
         def scope():
