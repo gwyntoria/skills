@@ -48,7 +48,7 @@ interactive_setup() {
             esac
             ;;
         agent_menu)
-            choose_items 20 Agent 0 0 Install Cleanup Uninstall Back || {
+            choose_items 20 Agent 0 0 Install Cleanup Uninstall List Back || {
                 [ "$?" -eq 2 ] || return "$session_status"
                 page=main
                 continue
@@ -66,7 +66,12 @@ interactive_setup() {
                 lifecycle_action=Uninstall
                 page=lifecycle_agent
                 ;;
-            3) page=main ;;
+            3)
+                run_interactive_task run_python 'Agent listing' agents/list_installed.py
+                list_result=1
+                page=complete
+                ;;
+            4) page=main ;;
             esac
             ;;
         lifecycle_agent)

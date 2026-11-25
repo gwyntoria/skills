@@ -46,6 +46,12 @@
 **已安装清单 (Installed inventory)**：
 `List → Local` 展示的本机规则与技能条目，按所选安装范围和 Agent 查看，也包含可识别的手动安装项和软链接。
 
+**Agent 命令入口 (Agent command entry)**：
+通过 `PATH` 找到的 Agent 命令路径。同一个 Agent 可以有多个命令入口，搜索顺序中的第一项为当前入口。
+
+**Agent 实际可执行文件 (Agent executable)**：
+Agent 命令入口沿软链接解析后的最终文件。启动脚本本身也可以是实际可执行文件。
+
 **可安装目录 (Available catalog)**：
 由配置的技能来源和规则来源提供的候选条目，可用于选择安装项，也可通过 `List → Remote` 查看远程来源提供的内容。
 
