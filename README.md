@@ -124,13 +124,21 @@ claude plugin install gwyn-space-skills-writing@gwyn-space
 
 ## Scripts
 
-[`scripts/`](scripts/) 下是个人环境安装和 Ubuntu 配置脚本。
+[`scripts/`](scripts/) 下是 Ubuntu 配置脚本、Agent 更新脚本和 Agent 配置 TUI(gwyn-tool)。
 
 | 脚本 | 运行环境 | 说明 |
 | --- | --- | --- |
-| [`setup-ubuntu.sh`](scripts/setup-ubuntu.sh) | Ubuntu（原生 / WSL） | 通过中文 TUI 选择基础包、开发环境与 AI 工具，选择 Fish/Zsh/Bash（默认 Fish）、准备启动配置并切换默认 shell |
-| [`manage-tools.sh`](scripts/manage-tools.sh) | macOS / Linux | 可直接安装为单文件，默认依次更新 Skills、所有支持的 Agent 和 Homebrew。Agent 更新包括 Codex、Claude Code、Pi。传入 `-c` 或 `config` 打开交互菜单，安装、清理、卸载或查看 Agent、Skills 和 Rules |
+| [`setup-ubuntu.sh`](scripts/setup-ubuntu.sh) | Ubuntu（原生 / WSL） | 通过 TUI 选择基础包、开发环境与 AI 工具，选择 Fish/Zsh/Bash（默认 Fish）、准备启动配置并切换默认 shell |
+| [`manage-tools.sh`](scripts/manage-tools.sh) | macOS / Linux | 可直接安装为单文件，默认依次更新 Skills、所有支持的 Agent 和 Homebrew。Agent 更新包括 Codex、Claude Code、Pi。传入 `-c` 或 `config` 打开 TUI，安装、清理、卸载或查看 Agent、Skills 和 Rules |
 | [`claude-statusline.sh`](scripts/statusline/claude-statusline.sh) | Claude Code | 状态栏脚本，显示模型与思考等级、目录与 Git 分支、上下文余量、输入输出 token、速率限制和版本。通过 Agent 配置菜单安装 Claude Code 时，会一并安装到 `~/.claude/statusline.sh` |
+
+### gwyn-tool
+
+`gwyn-tool` 主要用于管理我个人常用的一些 skills、rules、agents。执行 `bash scripts/manage-tools.sh config` 或者 `python3 scripts/manage-tools/main.py` 进入 TUI。
+
+![gwyn-tool](./assets/gwyn-tool.png)
+
+### Mac 或 Ubuntu 下直接运行
 
 可在交互终端执行如下命令打开 Ubuntu 和 Agent 配置菜单：
 
@@ -141,10 +149,6 @@ curl -fsSL https://raw.githubusercontent.com/gwyntoria/skills/refs/heads/main/sc
 ```bash
 curl -fsSL https://raw.githubusercontent.com/gwyntoria/skills/refs/heads/main/scripts/manage-tools.sh | bash -s -- config
 ```
-
-在完整仓库中，也可直接运行 `python3 scripts/manage-tools/main.py` 打开 Agent 配置菜单。此入口适用于 macOS / Linux，需要带有 `curses` 的 Python 3.10 或更高版本和交互终端。
-
-进入 `Agent → List` 可查看当前 `PATH` 上的 Codex、Claude Code 和 Pi。列表显示每个命令入口及其软链接解析后的实际可执行文件，并标记当前入口 `Active`。
 
 ## License
 
