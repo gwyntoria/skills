@@ -319,20 +319,20 @@ class Session:
                 self.list_remote(kind)
                 return
             scope_name = SCOPES[state["scope"]]
-            choices = dict(AGENTS)
-            if scope_name == "project":
-                choices.pop("agy")
-            if kind == "Skill":
-                choices = {"shared": "Shared", **choices}
-            elif scope_name == "project":
-                choices.pop("pi")
-            selected = self.select_agents(
-                f"{kind} / List / {scope_name.title()}",
-                choices,
-                state["selected"],
-            )
-            if not selected:
-                raise Back
+            selected = []
+            if kind == "Skill" or scope_name == "global":
+                choices = dict(AGENTS)
+                if scope_name == "project":
+                    choices.pop("agy")
+                if kind == "Skill":
+                    choices = {"shared": "Shared", **choices}
+                selected = self.select_agents(
+                    f"{kind} / List / {scope_name.title()}",
+                    choices,
+                    state["selected"],
+                )
+                if not selected:
+                    raise Back
             rows = capture(
                 list_installed.main,
                 str(self.home),
