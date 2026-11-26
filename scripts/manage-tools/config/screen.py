@@ -297,7 +297,7 @@ class Screen:
             if cursor is not None or actions is not None:
                 footer_row = min(row + 1, footer_row)
             if len(footer) > width:
-                footer = footer.replace("  │  ", "  ")
+                footer = footer.replace("  │  ", " │ ")
             self.draw_row(footer_row, next(wrap(footer, width)), curses.A_DIM)
         self.window.refresh()
 
@@ -381,7 +381,10 @@ class Screen:
         if toggle is None:
             footer = "↑↓ Move  │  Enter Select  │  Esc Back  │  q Exit"
         else:
-            footer = "↑↓ Move  Space Toggle  a All  n None  Enter Continue  Esc Back  q Exit"
+            footer = (
+                "↑↓ Move  │  Space Toggle  │  a All  │  n None  │  "
+                "Enter Continue  │  Esc Back  │  q Exit"
+            )
         return f"{number_shortcut(count)}  │  {footer}" if numbered else footer
 
     @staticmethod
@@ -472,7 +475,7 @@ class Screen:
         while True:
             height, width = self.window.getmaxyx()
             if height < 4 or width <= max(22, len(action) + len(cancel) + 8):
-                self.display("Resize terminal", [], "Esc Back  q Exit")
+                self.display("Resize terminal", [], "Esc Back  │  q Exit")
                 self.navigate(self.key())
                 continue
             action_color = "1;31" if destructive else "1;96"
@@ -534,7 +537,7 @@ class Screen:
             self.display(
                 title,
                 lines,
-                "↑↓ Scroll  Enter / Esc Main menu  q Exit",
+                "↑↓ Scroll  │  Enter / Esc Main menu  │  q Exit",
                 offset=offset,
             )
             key = self.key()
@@ -554,7 +557,9 @@ class Screen:
             for job in ordered[: self.body_height()]
         ]
         done = sum(job.status is not None for job in jobs)
-        footer = "Esc Cancel download  Ctrl+C Exit" if cancel else "Ctrl+C Exit"
+        footer = (
+            "Esc Cancel download  │  Ctrl+C Exit" if cancel else "Ctrl+C Exit"
+        )
         self.display(f"{title}  {done}/{len(jobs)} finished", lines, footer)
         if self.key(0) in BACK and cancel:
             raise Back
