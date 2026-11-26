@@ -1,6 +1,7 @@
 """Paths and provenance shared by the installed-content views."""
 
 import os
+import re
 import json
 import stat
 import errno
@@ -71,6 +72,17 @@ def read_json(file):
 
 def display(value):
     return json.dumps(str(value), ensure_ascii=False)[1:-1]
+
+
+def abbreviate_home(text):
+    home = os.environ.get("HOME", "").rstrip("/")
+    if not home.startswith("/") or "/" not in text:
+        return text
+    # Match whole path prefixes in both plain messages and quoted paths.
+    prefixes = "|".join(map(re.escape, dict.fromkeys((home, display(home)))))
+    before = r"""(?<![^\s"'\`=(\[{,:;<>])"""
+    after = r"""(?=$|[/\s"'\`)\]},:;<>])"""
+    return re.sub(f"{before}(?:{prefixes}){after}", "~", text)
 
 
 def safe_root(value, label):

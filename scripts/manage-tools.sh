@@ -7,6 +7,16 @@ OPEN_AGENT_SETUP=0
 SOURCE_ARCHIVE_URL=https://codeload.github.com/gwyntoria/skills/tar.gz/refs/heads/main
 SOURCE_TEMP=""
 
+display_path() {
+    local argument="$1" home_prefix="${HOME%/}"
+    if [[ "$home_prefix" == /* ]]; then
+        case "$argument" in
+        "$home_prefix" | "$home_prefix"/*) argument="~${argument#"$home_prefix"}" ;;
+        esac
+    fi
+    printf '%s' "$argument"
+}
+
 usage() {
     printf 'Usage: %s [-c | config | -h | help]\n' "$PROGRAM_NAME"
     printf '\n'
@@ -32,7 +42,7 @@ parse_args() {
             return 1
             ;;
         *)
-            printf 'Error: unknown option: %s\n\n' "$1" >&2
+            printf 'Error: unknown option: %s\n\n' "$(display_path "$1")" >&2
             usage >&2
             return 2
             ;;
@@ -210,6 +220,7 @@ run_update() {
     local status
     local detail
     local rc
+    local argument
 
     shift 2
     if [ "${IN_AGENTS:-0}" -eq 0 ]; then
@@ -227,14 +238,17 @@ run_update() {
         "$(date '+%H:%M:%S')" "$STEP_COLOR" "$TASK_CURRENT" "$TASK_TOTAL" "$COLOR_RESET" \
         "$log_step_prefix" "$TITLE_STYLE" "$name" "$COLOR_RESET"
     printf 'Command:'
-    printf ' %s' "$@"
+    for argument in "$@"; do
+        printf ' %s' "$(display_path "$argument")"
+    done
     printf '\n'
     printf '%s==================================================%s\n' "$DIVIDER_COLOR" "$COLOR_RESET"
 
     if ! command -v "$executable" >/dev/null 2>&1; then
-        printf '⚠️  Skipped: command '\''%s'\'' not found\n' "$executable"
+        argument=$(display_path "$executable")
+        printf '⚠️  Skipped: command '\''%s'\'' not found\n' "$argument"
         status=skip
-        detail="command '$executable' unavailable in current PATH"
+        detail="command '$argument' unavailable in current PATH"
     else
         SECONDS=0
         draw_progress "$TASK_CURRENT" "$TASK_TOTAL" "$step_prefix$name" "Running" "$step"
@@ -414,7 +428,7 @@ run_agents() {
         if [ -n "${reasons[$i]}" ]; then
             printf '  %s: skipped (%s)\n' "${names[$i]}" "${reasons[$i]}"
         else
-            printf '  %s: %s\n' "${names[$i]}" "$executable"
+            printf '  %s: %s\n' "${names[$i]}" "$(display_path "$executable")"
         fi
     done
 

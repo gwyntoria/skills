@@ -8,6 +8,8 @@ import subprocess
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from content.paths import abbreviate_home
+
 
 SOURCE_ARCHIVE_URL = (
     "https://codeload.github.com/gwyntoria/skills/tar.gz/refs/heads/main"
@@ -55,7 +57,10 @@ def start(mode, archive_url):
     except KeyboardInterrupt:
         return 130
     except curses.error as error:
-        print(f"Error: unable to run the config TUI: {error}", file=sys.stderr)
+        print(
+            abbreviate_home(f"Error: unable to run the config TUI: {error}"),
+            file=sys.stderr,
+        )
         return 2
 
 
@@ -72,7 +77,7 @@ def main(args):
                 kind, value, ref, Path(directory), Path(root), mode, archive_url
             )
         except InvalidRule as error:
-            print(error, file=sys.stderr)
+            print(abbreviate_home(str(error)), file=sys.stderr)
             return 2
         except (
             OSError,
@@ -82,14 +87,19 @@ def main(args):
             AttributeError,
             subprocess.SubprocessError,
         ) as error:
-            print(error, file=sys.stderr)
+            print(abbreviate_home(str(error)), file=sys.stderr)
             return 1
         return 0
     if len(args) == 2 and args[0] in ("local", "archive"):
         return start(*args)
-    argparse.ArgumentParser(
+    parser = argparse.ArgumentParser(
         description="Open the Agent configuration menu from this checkout."
-    ).parse_args(args)
+    )
+    _, unknown = parser.parse_known_args(args)
+    if unknown:
+        parser.error(
+            abbreviate_home(f"unrecognized arguments: {' '.join(unknown)}")
+        )
     return start("local", SOURCE_ARCHIVE_URL)
 
 

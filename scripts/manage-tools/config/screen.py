@@ -9,6 +9,7 @@ import subprocess
 import unicodedata
 from itertools import zip_longest
 
+from content.paths import abbreviate_home
 from content.loading import job_line
 
 
@@ -145,6 +146,7 @@ def wrap(text, width):
     for text, attrs, color in chunks(text):
         part = []
         span_width = 0
+        text = abbreviate_home(text)
         text = (" " * tab_offset + text).expandtabs(4)[tab_offset:]
         tab_offset = (tab_offset + len(text)) % 4
         for char in text:
@@ -527,8 +529,10 @@ class Screen:
             ),
         )
 
-    def page(self, title, details, *, start_at_end=False):
+    def page(self, title, details, *, start_at_end=False, alternate=None):
         offset = None if start_at_end else 0
+        layout = 0
+        footer = "↑↓ Scroll  │  Enter / Esc Main menu  │  q Exit"
         while True:
             lines = self.details(details)
             offset = self.scroll(
@@ -537,7 +541,9 @@ class Screen:
             self.display(
                 title,
                 lines,
-                "↑↓ Scroll  │  Enter / Esc Main menu  │  q Exit",
+                f"← {'AB'[layout]} →  │  {footer}"
+                if alternate is not None
+                else footer,
                 offset=offset,
             )
             key = self.key()
@@ -545,6 +551,14 @@ class Screen:
                 return
             if key in QUIT:
                 raise Quit
+            if alternate is not None and key in (
+                curses.KEY_LEFT,
+                curses.KEY_RIGHT,
+            ):
+                details, alternate = alternate, details
+                layout = 1 - layout
+                offset = 0
+                continue
             offset = self.scroll(key, offset, lines)
 
     def downloads(self, title, jobs, *, cancel=True):

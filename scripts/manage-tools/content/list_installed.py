@@ -20,9 +20,11 @@ from .paths import (
     target_stat,
     metadata_origin,
 )
+from .bundled_skills import claude_skills, antigravity_skills
 
 
 BROKEN = " (broken link)"
+BUILD_IN = "build-in"
 
 
 def rule_source(file):
@@ -150,7 +152,11 @@ def skill_entries(path):
 
 def skill_files(path, entries, shared, records, *, codex_location=False):
     for child in entries:
-        name = child.name if child == path else str(child.relative_to(path))
+        relative = child.relative_to(path)
+        name = str(relative) if relative.parts else child.name
+        if codex_location and relative.parts[:1] == (".system",):
+            yield name, BUILD_IN, child
+            continue
         canonical = shared_skill_name(child, shared)
         label = (
             f"{name} ({canonical})" if canonical and canonical != name else name
@@ -193,20 +199,30 @@ def print_skills(print_group, root, scope, selected, agy):
         ("Claude", root / SKILL_DIRECTORIES["claude"]),
         ("Pi", pi / "skills"),
     )
+    bundled = {}
     if scope == "global":
         locations += (("Antigravity CLI", root / SKILL_DIRECTORIES["agy"]),)
         selected += (agy,)
+        bundled = {
+            "Claude": claude_skills,
+            "Antigravity CLI": antigravity_skills,
+        }
     records = skill_records(root, scope)
     shared_target = Path(os.path.realpath(shared))
     for (title, path), enabled in zip(locations, selected, strict=True):
         if enabled == "1":
+            rows = (
+                [(name, BUILD_IN, file) for name, file in bundled[title](root)]
+                if title in bundled
+                else []
+            )
             if title == "Antigravity CLI" and path.is_symlink():
                 name = (
                     "Shared skills directory link"
                     if Path(os.path.realpath(path)) == shared_target
                     else "Skills directory link"
                 )
-                print_group(f"Skills · {title}", [(name, "", path)])
+                print_group(f"Skills · {title}", [*rows, (name, "", path)])
                 continue
             entries = (
                 nested_skill_entries(path, standalone=True)
@@ -215,13 +231,16 @@ def print_skills(print_group, root, scope, selected, agy):
             )
             print_group(
                 f"Skills · {title}",
-                skill_files(
-                    path,
-                    entries,
-                    shared_target,
-                    records,
-                    codex_location=title == "Codex",
-                ),
+                [
+                    *rows,
+                    *skill_files(
+                        path,
+                        entries,
+                        shared_target,
+                        records,
+                        codex_location=title == "Codex",
+                    ),
+                ],
             )
 
 
@@ -269,33 +288,54 @@ def print_group(paint, title, rows):
         )
 
 
-def main(
-    home,
-    project,
-    scope,
-    rules,
-    skills,
-    shared,
-    codex,
-    claude,
-    pi,
-    pi_path,
-    color,
-    agy="0",
-):
-    def paint(code, text):
-        return f"\033[{code}m{text}\033[0m" if color == "1" else text
-
+def list_rules(paint, root, scope, codex, claude, pi, pi_path, agy):
     def group(title, rows):
         print_group(paint, title, rows)
 
-    for label, root in (("global", Path(home)), ("project", Path(project))):
-        if scope not in (label, "both"):
-            continue
-        print(
-            f"\n{paint('1;36', 'Installed · ' + label.title())}\n{display(root)}"
-        )
-        if rules == "1":
-            print_rules(group, root, label, codex, claude, pi, pi_path, agy)
-        if skills == "1":
-            print_skills(group, root, label, (shared, codex, claude, pi), agy)
+    print(f"\n{paint('1;36', 'Installed · ' + scope.title())}\n{display(root)}")
+    print_rules(group, root, scope, codex, claude, pi, pi_path, agy)
+
+
+def skill_layouts(paint, root, scope, selected, agy):
+    inline = ["", paint("1;36", f"Installed · {scope.title()}"), display(root)]
+    stacked = inline.copy()
+
+    def add(line):
+        inline.append(line)
+        stacked.append(line)
+
+    def group(title, rows):
+        sources = {}
+        count = 0
+        for name, origin, file in rows:
+            path = display(file) if file is not None else ""
+            if file is not None and symlink(entry_stat(file)):
+                path += f" → {display(os.readlink(file))}"
+            sources.setdefault(origin, []).append((name, path))
+            count += 1
+
+        add("")
+        add(paint("1;36", f"{title} ({count})"))
+        if not sources:
+            add("  None")
+        for index, (origin, entries) in enumerate(sources.items()):
+            if index:
+                add("")
+            heading = (
+                paint("1;33", display(origin))
+                if origin
+                else paint("2", "No source recorded")
+            )
+            add(f"  {heading}")
+            digits = len(str(len(entries)))
+            for number, (name, path) in enumerate(entries, 1):
+                item = f"    {number:>{digits}}. {paint('1', display(name))}"
+                if not path:
+                    add(item)
+                    continue
+                arrow = f"{paint('2', '→')} {path}"
+                inline.append(f"{item} {arrow}")
+                stacked.extend((item, f"{' ' * (digits + 6)}{arrow}"))
+
+    print_skills(group, root, scope, selected, agy)
+    return inline, stacked

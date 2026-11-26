@@ -330,25 +330,33 @@ class Session:
                 )
                 if not selected:
                     raise Back
-            rows = capture(
-                list_installed.main,
-                str(self.home),
-                str(self.project),
-                scope_name,
-                flag(kind == "Rule"),
-                flag(kind == "Skill"),
-                *(
-                    flag(name in selected)
-                    for name in ("shared", "codex", "claude", "pi")
-                ),
-                str(installation.pi_rule_path(self.home)),
-                "1",
-                flag("agy" in selected),
-            )
-            self.page(f"{kind} / List / Local", rows)
+            self.list_local(kind, scope_name, selected)
 
         state = {"mode": 0, "scope": 0, "selected": {0}}
         choose_steps((mode, scope, locations))
+
+    def list_local(self, kind, scope, selected):
+        root = self.home if scope == "global" else self.project
+        agents = tuple(
+            flag(name in selected) for name in ("codex", "claude", "pi")
+        )
+        agy = flag("agy" in selected)
+        if kind == "Skill":
+            inline, stacked = list_installed.skill_layouts(
+                paint, root, scope, (flag("shared" in selected), *agents), agy
+            )
+            self.screen.page("Skill / List / Local", inline, alternate=stacked)
+            return
+        rows = capture(
+            list_installed.list_rules,
+            paint,
+            root,
+            scope,
+            *agents,
+            str(installation.pi_rule_path(self.home)),
+            agy,
+        )
+        self.page("Rule / List / Local", rows)
 
     def list_remote(self, kind):
         specs = [skill_spec(source) for source in SKILL_SOURCES]
