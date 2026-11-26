@@ -257,10 +257,7 @@ class Session:
         self.perform("Agent / Install results", install)
 
     def agent_lifecycle(self, action):
-        choices = dict(AGENTS)
-        if action == "Cleanup":
-            choices.pop("agy")
-        selected = self.select_agents(f"Agent / {action}", choices, set())
+        selected = self.select_agents(f"Agent / {action}", AGENTS, set())
         if not selected:
             return
         source = self.root / CLAUDE_STATUSLINE

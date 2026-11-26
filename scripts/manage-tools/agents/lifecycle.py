@@ -5,7 +5,7 @@ import re
 import json
 import stat
 import subprocess
-from os.path import join, dirname, basename, normpath, realpath
+from os.path import join, abspath, dirname, basename, normpath, realpath
 from tempfile import NamedTemporaryFile
 from dataclasses import field, dataclass
 
@@ -31,6 +31,7 @@ NPM_PACKAGES = {
     "pi": ("@earendil-works/pi-coding-agent", "@mariozechner/pi-coding-agent"),
 }
 BREW_PREFIXES = ("/opt/homebrew", "/usr/local", "/home/linuxbrew/.linuxbrew")
+SESSION_UUID = r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}"
 UNINSTALL_GUIDE = {
     "codex": "https://developers.openai.com/codex/cli",
     "claude": "https://code.claude.com/docs/en/setup#uninstall-claude-code",
@@ -101,11 +102,7 @@ class Lifecycle:
         packages,
         interaction,
     ):
-        if (
-            action not in ("Cleanup", "Uninstall")
-            or agent not in PROFILES
-            or (action == "Cleanup" and agent == "agy")
-        ):
+        if action not in ("Cleanup", "Uninstall") or agent not in PROFILES:
             raise ValueError("Invalid Agent lifecycle action or Agent")
         self.interaction = interaction
         self.action = action
@@ -840,7 +837,7 @@ class Lifecycle:
             )
         )
 
-    def custom_pi_sessions(self, root):
+    def custom_pi_sessions(self, root, steps):
         if (
             not self.user.safe(root)
             or not is_dir(info(root))
@@ -871,7 +868,7 @@ class Lifecycle:
                 and isinstance(header.get("timestamp"), str)
                 and name.endswith(f"_{header['id']}.jsonl")
             ):
-                self.add(self.required, path, "Delete Pi session")
+                self.add(steps, path, "Delete Pi session")
 
     def collect_uninstall(self, executable):
         for root in self.roots:
@@ -902,7 +899,7 @@ class Lifecycle:
                 if not self.covered_by_directory(realpath(directory)) and all(
                     directory != join(root, "sessions") for root in self.roots
                 ):
-                    self.custom_pi_sessions(directory)
+                    self.custom_pi_sessions(directory, self.required)
 
     def uninstall_preview(self, installation, executable):
         selected = installation.launcher or executable
@@ -964,8 +961,130 @@ class Lifecycle:
             raise ValueError("Cannot verify CLI removal paths")
         return steps
 
+    def session_entries(self, root):
+        if (
+            is_dir(info(root))
+            and self.user.safe(root)
+            and not info(join(root, ".git"))
+        ):
+            return sorted(os.listdir(root))
+        return ()
+
+    def add_session_cleanup(self, label, steps):
+        if not steps:
+            return
+
+        def check():
+            for step in steps:
+                step.check()
+
+        def apply():
+            for step in steps:
+                step.check()
+                step.apply()
+                print(f"Completed: {step.description}")
+
+        self.optional.append(
+            Step(
+                f"{label} ({len(steps)} paths)",
+                check,
+                apply,
+                details=tuple(step.description for step in steps),
+            )
+        )
+
+    def claude_session_cleanup(self):
+        steps = []
+        projects = join(self.configured, "projects")
+        for project in self.session_entries(projects):
+            directory = join(projects, project)
+            for name in self.session_entries(directory):
+                if not re.fullmatch(SESSION_UUID + r"\.jsonl", name):
+                    continue
+                transcript = join(directory, name)
+                if not is_file(info(transcript)):
+                    continue
+                step = self.user.removal(transcript, "Delete transcript")
+                if step is None:
+                    continue
+                steps.append(step)
+                for kind in ("subagents", "tool-results", "mcp-tasks"):
+                    path = join(directory, name.removesuffix(".jsonl"), kind)
+                    if is_dir(info(path)):
+                        self.add(steps, path, "Delete session data", True)
+        self.add_session_cleanup("Delete local Claude Code sessions", steps)
+
+    def pi_session_cleanup(self):
+        default = join(self.configured, "sessions")
+        configured = os.environ.get("PI_CODING_AGENT_SESSION_DIR")
+        if not configured:
+            settings = self.user.json(join(self.configured, "settings.json"))
+            configured = settings.get("sessionDir")
+        active = (
+            abspath(self.expand_home(configured))
+            if isinstance(configured, str) and configured
+            else default
+        )
+        workspaces = [
+            join(default, name)
+            for name in self.session_entries(default)
+            if name.startswith("--") and name.endswith("--")
+        ]
+        unarchived = []
+        for directory in workspaces if active == default else (active,):
+            if is_dir(info(directory)):
+                self.custom_pi_sessions(directory, unarchived)
+        self.add_session_cleanup("Delete unarchived Pi sessions", unarchived)
+
+        archived = []
+        archive = join(self.configured, "sessions-archive")
+        if (
+            is_dir(info(archive))
+            and active != archive
+            and not within(archive, active)
+        ):
+            self.add(archived, archive, "Delete session archive", True)
+        for directory in dict.fromkeys([*workspaces, active]):
+            path = join(directory, "archived")
+            if (
+                path != active
+                and not within(path, active)
+                and is_dir(info(path))
+            ):
+                self.custom_pi_sessions(path, archived)
+        self.add_session_cleanup("Delete archived Pi sessions", archived)
+
+    def agy_session_cleanup(self):
+        steps = []
+        root = join(self.configured, "conversations")
+        for name in self.session_entries(root):
+            if not re.fullmatch(SESSION_UUID + r"\.(?:db|pb)", name):
+                continue
+            path = join(root, name)
+            if not is_file(info(path)):
+                continue
+            step = self.user.removal(path, "Delete conversation")
+            if step is None:
+                continue
+            steps.append(step)
+            if name.endswith(".db"):
+                for suffix in ("-wal", "-shm", "-journal"):
+                    sidecar = path + suffix
+                    if is_file(info(sidecar)):
+                        self.add(steps, sidecar, "Delete SQLite sidecar")
+        self.add_session_cleanup("Delete local Antigravity CLI sessions", steps)
+
+    def codex_session_cleanup(self):
+        for directory, label in (
+            ("sessions", "Delete unarchived Codex sessions"),
+            ("archived_sessions", "Delete archived Codex sessions"),
+        ):
+            path = join(self.configured, directory)
+            if is_dir(info(path)):
+                self.add(self.optional, path, label, recursive=True)
+
     def collect_cleanup(self, executable, managed):
-        if not self.uninstall and self.agent != "claude":
+        if not self.uninstall and self.agent in ("codex", "pi"):
             cache = (
                 "models_cache.json"
                 if self.agent == "codex"
@@ -977,9 +1096,16 @@ class Lifecycle:
                     join(root, cache),
                     "Remove model catalog cache",
                 )
+        if self.agent == "codex" and not self.uninstall:
+            self.codex_session_cleanup()
+        if not self.uninstall and self.agent == "pi":
+            self.pi_session_cleanup()
+        if self.agent == "agy":
+            self.agy_session_cleanup()
         if self.agent == "claude":
             if not self.uninstall:
                 self.claude_old_versions()
+                self.claude_session_cleanup()
             self.statusline()
         if self.agent == "pi" and executable:
             self.pi_packages(
@@ -1092,7 +1218,9 @@ class Lifecycle:
         details = list(dict.fromkeys([*preview, *self.warnings]))
         if self.uninstall:
             details.append("This permanently removes the listed data.")
-        details.extend(item.description for item in plan)
+        for item in plan:
+            details.append(item.description)
+            details.extend(item.details)
         return self.interaction.review(details, can_edit=bool(self.optional))
 
     def plan_uninstall(self, executable):

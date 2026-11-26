@@ -63,6 +63,7 @@ class Step:
     check: Callable[[], None]
     apply: Callable[[], None]
     needs_cli: bool = False
+    details: tuple[str, ...] = ()
 
 
 def checked_command(description, executable, apply, *, needs_cli=False):
