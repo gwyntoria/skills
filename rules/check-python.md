@@ -1,6 +1,8 @@
 # Python 文件检查
 
-新增或修改 Python 文件后，在任务结束前对每个改动的文件运行 Ruff。沿用项目已声明的 Ruff 版本和运行方式。以下命令中的路径换成实际改动的文件。
+新增或修改 Python 文件后，在任务结束前对每个改动的文件依次运行 `ruff check --fix` 和 `ruff format`。
+
+下述命令中的路径换成实际改动的文件。
 
 ## 项目有 Ruff 配置
 
@@ -30,20 +32,12 @@ ruff format --isolated --target-version py310 --line-length 80 \
     path/to/script.py
 ```
 
-## 检查结果
-
-两条命令都会写回改动文件。即使 `ruff check --fix` 报告仍有问题，也要执行 `ruff format`。核对自动修复和格式化产生的差异，处理本次改动引入的剩余问题后，再运行这两条命令。
-
 ## Ruff 缺失时
 
-先确认项目的开发环境是否已经提供 Ruff，例如 `uv run ruff --version`。仍不可用时，告知用户哪些检查未运行，并按其环境提供安装命令。已安装 uv 或 pipx 时，任选一种。 [Ruff 安装文档](https://docs.astral.sh/ruff/installation/)
+根据系统提示用户安装 Ruff：
 
-```bash
-uv tool install ruff
-```
-
-```bash
-pipx install ruff
-```
-
-已有启用的项目虚拟环境时，也可以在该环境中执行 `python -m pip install ruff`。
+| 系统 | 安装命令 |
+| -- | -- |
+| Windows | `winget install --id astral-sh.ruff -e` |
+| Mac | `brew install ruff` |
+| Linux | `curl -LsSf <https://astral.sh/ruff/install.sh> \| sh` |
