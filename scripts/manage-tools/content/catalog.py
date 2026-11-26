@@ -40,7 +40,7 @@ SKILL_SOURCES = (
         "improve-codebase-architecture implement-spec writing-for-agents codebase-design wayfinder",
     ),
     SkillSource("humanlayer/skills", "skill_fixed", "show-me"),
-    SkillSource(GWYNTORIA, defaults="how why"),
+    SkillSource(GWYNTORIA, defaults="how why check-mode"),
     SkillSource("titanwings/distilly"),
 )
 WAZA_DEFAULTS = {"waza-waza-anti-patterns", "waza-waza-durable-context"}
