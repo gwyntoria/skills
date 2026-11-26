@@ -20,7 +20,8 @@
         "./skills/work/why",
         "./skills/work/maintain-changelog",
         "./skills/work/scan-codebase",
-        "./skills/work/daily-weekly-reporting"
+        "./skills/work/daily-weekly-reporting",
+        "./skills/work/check-mode"
       ]
     },
     {

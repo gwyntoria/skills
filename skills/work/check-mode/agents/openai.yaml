@@ -1,0 +1,5 @@
+interface:
+  display_name: "Check Changed Files"
+  short_description: "Fix and check changed Python, Shell, and Markdown files"
+policy:
+  allow_implicit_invocation: true

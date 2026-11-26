@@ -24,6 +24,7 @@
 | [`scan-codebase`](skills/work/scan-codebase/SKILL.md) | 阅读实现代码前，先从 Git 历史判断仓库阶段与风险区域 | 当前阶段判断、风险地图和代码阅读顺序 |
 | [`how`](skills/work/how/SKILL.md) | 理解代码如何运作、模块归属和架构分层 | 代码运行流程、关键概念、文件地图和注意事项 |
 | [`why`](skills/work/why/SKILL.md) | 追查代码设计动机、历史决策和取舍 | 带来源引用和置信度分级的调查结果，区分证据、推断和未知 |
+| [`check-mode`](skills/work/check-mode/SKILL.md) | 检查改动的 Python、Shell、Markdown 文件和代码注释 | 按文件类型运行格式修正和静态检查，并检查脚注、图片路径和注释 |
 
 ### writing
 
@@ -114,13 +115,7 @@ claude plugin install gwyn-space-skills-writing@gwyn-space
 
 ## Rules
 
-| 文件 | 说明 |
-| --- | --- |
-| [`chinese-punctuation.md`](rules/chinese-punctuation.md) | 终端回复的中文半角标点、空格规则和适用范围 |
-| [`code-comments.md`](rules/code-comments.md) | 跨语言的接口契约、数据含义、流程与分支注释规则 |
-| [`writing-repo.md`](rules/writing-repo.md) | Markdown 写作仓库的资源路径、引用方式和格式检查规则 |
-
-> 规则可通过 [`scripts/manage-tools.sh`](scripts/manage-tools.sh) 的 `config` 交互菜单安装和卸载。安装器还会动态获取 [Waza 的规则](https://github.com/tw93/Waza/tree/main/rules)。
+文件检查和代码注释规则由 [`check-mode`](skills/work/check-mode/SKILL.md) 提供。[`scripts/manage-tools.sh`](scripts/manage-tools.sh) 的 `config` 菜单可以安装和卸载 [Waza 的规则](https://github.com/tw93/Waza/tree/main/rules)。
 
 ## Scripts
 
