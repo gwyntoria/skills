@@ -8,6 +8,7 @@ from pathlib import Path
 from .paths import (
     UNKNOWN,
     MISSING_TARGET,
+    ANTIGRAVITY_RULES,
     SKILL_DIRECTORIES,
     display,
     regular,
@@ -177,7 +178,7 @@ def skill_records(root, scope):
     return records
 
 
-def print_skills(print_group, root, scope, selected):
+def print_skills(print_group, root, scope, selected, agy):
     shared = root / ".agents/skills"
     codex = root / ".codex"
     pi = root / ".pi"
@@ -192,10 +193,21 @@ def print_skills(print_group, root, scope, selected):
         ("Claude", root / SKILL_DIRECTORIES["claude"]),
         ("Pi", pi / "skills"),
     )
+    if scope == "global":
+        locations += (("Antigravity CLI", root / SKILL_DIRECTORIES["agy"]),)
+        selected += (agy,)
     records = skill_records(root, scope)
     shared_target = Path(os.path.realpath(shared))
     for (title, path), enabled in zip(locations, selected, strict=True):
         if enabled == "1":
+            if title == "Antigravity CLI" and path.is_symlink():
+                name = (
+                    "Shared skills directory link"
+                    if Path(os.path.realpath(path)) == shared_target
+                    else "Skills directory link"
+                )
+                print_group(f"Skills · {title}", [(name, "", path)])
+                continue
             entries = (
                 nested_skill_entries(path, standalone=True)
                 if title == "Pi"
@@ -213,7 +225,7 @@ def print_skills(print_group, root, scope, selected):
             )
 
 
-def print_rules(print_group, root, scope, codex, claude, pi, pi_path):
+def print_rules(print_group, root, scope, codex, claude, pi, pi_path, agy):
     if scope == "project":
         print_group(
             "Rules · Shared project rules",
@@ -230,6 +242,11 @@ def print_rules(print_group, root, scope, codex, claude, pi, pi_path):
             print_group("Rules · Claude", rows)
         if pi == "1":
             print_group("Rules · Pi", rule_files(Path(pi_path)))
+        if agy == "1":
+            print_group(
+                "Rules · Antigravity CLI",
+                shared_rules(root / ANTIGRAVITY_RULES),
+            )
 
 
 def print_group(paint, title, rows):
@@ -264,6 +281,7 @@ def main(
     pi,
     pi_path,
     color,
+    agy="0",
 ):
     def paint(code, text):
         return f"\033[{code}m{text}\033[0m" if color == "1" else text
@@ -278,6 +296,6 @@ def main(
             f"\n{paint('1;36', 'Installed · ' + label.title())}\n{display(root)}"
         )
         if rules == "1":
-            print_rules(group, root, label, codex, claude, pi, pi_path)
+            print_rules(group, root, label, codex, claude, pi, pi_path, agy)
         if skills == "1":
-            print_skills(group, root, label, (shared, codex, claude, pi))
+            print_skills(group, root, label, (shared, codex, claude, pi), agy)

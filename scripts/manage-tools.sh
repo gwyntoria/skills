@@ -13,7 +13,7 @@ usage() {
     printf 'Arguments:\n'
     printf '  -c, config      Open the Agent menu using local repository modules or GitHub main (requires an interactive terminal)\n'
     printf '  -h, help        Show this help message\n'
-    printf '\nDefault: update Skills, Codex, Claude Code, Pi and Homebrew, including supported Agent plugins and extensions.\n'
+    printf '\nDefault: update Skills, Codex, Claude Code, Pi, Antigravity CLI and Homebrew, including supported Agent plugins and extensions.\n'
     printf 'Updates run directly from the installed script.\n'
 }
 
@@ -376,8 +376,8 @@ run_claude_plugins() {
 run_agents() {
     local IN_AGENTS=1
     local AGENT_STEP=0
-    local -a names=('Codex' 'Claude Code' 'Pi')
-    local -a commands=(codex claude pi)
+    local -a names=('Codex' 'Claude Code' 'Pi' 'Antigravity CLI')
+    local -a commands=(codex claude pi agy)
     local -a paths=() reasons=()
     local i executable help record status name detail
     local success=0 failed=0 group_status group_detail
@@ -396,7 +396,12 @@ run_agents() {
         if [ -z "$executable" ]; then
             reasons[i]="command '${commands[$i]}' unavailable in current PATH"
         else
-            help=$("$executable" --help 2>/dev/null) || help=
+            if [ "${commands[$i]}" = agy ]; then
+                # agy --help prints the command list to standard error.
+                help=$("$executable" --help 2>&1) || help=
+            else
+                help=$("$executable" --help 2>/dev/null) || help=
+            fi
             if ! [[ "$help" =~ (^|$'\n')[[:space:]]*(${commands[$i]}[[:space:]]+)?update([[:space:]|]|$) ]]; then
                 reasons[i]="installed CLI does not advertise 'update'; update manually"
             elif [ "${commands[$i]}" = pi ]; then
@@ -436,6 +441,9 @@ run_agents() {
         pi)
             run_update Pi "$executable" "$executable" update --self
             run_pi_extensions "$executable"
+            ;;
+        agy)
+            run_update 'Antigravity CLI' "$executable" "$executable" update
             ;;
         esac
     done

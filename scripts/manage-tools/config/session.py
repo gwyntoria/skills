@@ -8,6 +8,7 @@ from contextlib import redirect_stderr, redirect_stdout
 from rules import installation
 from agents import list_installed as agent_list
 from content import list_installed
+from content.paths import SKILL_DIRECTORIES
 from content.catalog import (
     KAMI,
     WAZA,
@@ -28,8 +29,10 @@ from .execution import (
     ACTION_ERRORS,
     Execution,
     require,
+    cli_label,
     command_paths,
     node_environment,
+    installed_skill_name,
 )
 from .selection import Selection
 
@@ -208,6 +211,7 @@ class Session:
             "codex": "Codex",
             "claude": "Claude Code (with statusline)",
             "pi": "Pi (with three packages)",
+            "agy": AGENTS["agy"],
         }
         while True:
             agents = self.select_agents("Agent / Install", labels, selected)
@@ -216,7 +220,7 @@ class Session:
             try:
                 lines = []
                 for agent in agents:
-                    lines.append(f"{AGENTS[agent]} CLI")
+                    lines.append(cli_label(agent))
                     lines.extend(
                         f"  {bundle} (bundled)"
                         for bundle in BUNDLES.get(agent, ())
@@ -237,7 +241,7 @@ class Session:
         statusline = self.root / CLAUDE_STATUSLINE
         if "claude" in agents and not statusline.is_file():
             raise ValueError(f"Invalid resource: {statusline}")
-        if set(agents) & {"codex", "claude"}:
+        if set(agents) & {"codex", "claude", "agy"}:
             require("curl")
         environment = None
         if "pi" in agents:
@@ -253,7 +257,10 @@ class Session:
         self.perform("Agent / Install results", install)
 
     def agent_lifecycle(self, action):
-        selected = self.select_agents(f"Agent / {action}", AGENTS, set())
+        choices = dict(AGENTS)
+        if action == "Cleanup":
+            choices.pop("agy")
+        selected = self.select_agents(f"Agent / {action}", choices, set())
         if not selected:
             return
         source = self.root / CLAUDE_STATUSLINE
@@ -313,6 +320,8 @@ class Session:
                 return
             scope_name = SCOPES[state["scope"]]
             choices = dict(AGENTS)
+            if scope_name == "project":
+                choices.pop("agy")
             if kind == "Skill":
                 choices = {"shared": "Shared", **choices}
             elif scope_name == "project":
@@ -337,6 +346,7 @@ class Session:
                 ),
                 str(installation.pi_rule_path(self.home)),
                 "1",
+                flag("agy" in selected),
             )
             self.page(f"{kind} / List / Local", rows)
 
@@ -422,6 +432,8 @@ class SkillInstall(Installation):
         self.visited = set()
         self.selected = {}
         self.errors = {}
+        self.antigravity_selected = False
+        self.link_antigravity = False
 
     def run(self):
         choose_steps(
@@ -430,6 +442,7 @@ class SkillInstall(Installation):
                 self.choose_repositories,
                 self.choose_skills,
                 self.choose_agents,
+                self.choose_antigravity_links,
                 self.confirm,
             )
         )
@@ -483,10 +496,30 @@ class SkillInstall(Installation):
     def choose_agents(self):
         if not self.selected:
             return False
+        choices = {"codex": "Shared", "claude-code": "Claude Code"}
+        if self.scope == "global":
+            choices["agy"] = AGENTS["agy"]
         self.agents = self.session.select_agents(
-            f"{self.title} / Agents for skills",
-            {"codex": "Shared", "claude-code": "Claude Code"},
-            self.targets,
+            f"{self.title} / Agents for skills", choices, self.targets
+        )
+        self.antigravity_selected = "agy" in self.agents
+        if self.antigravity_selected:
+            self.agents.remove("agy")
+            if "codex" not in self.agents:
+                self.agents.append("codex")
+
+    def choose_antigravity_links(self):
+        if not self.selected or not self.antigravity_selected:
+            self.link_antigravity = False
+            return False
+        self.link_antigravity = self.screen.confirm(
+            "Skill / Link to Antigravity CLI",
+            [
+                f"Create individual links in {self.session.home / SKILL_DIRECTORIES['agy']}"
+            ],
+            action="Link skills",
+            cancel="Skip links",
+            default=self.link_antigravity,
         )
 
     def confirm(self):
@@ -520,6 +553,11 @@ class SkillInstall(Installation):
                 )
                 if "claude-code" in self.agents:
                     lines.append(f"  Claude -> {claude / 'skills' / name}")
+                if self.link_antigravity:
+                    directory = installed_skill_name(name)
+                    link = home / SKILL_DIRECTORIES["agy"] / directory
+                    target = home / SKILL_DIRECTORIES["codex"] / directory
+                    lines.append(f"  Antigravity CLI link: {link} -> {target}")
         if self.screen.confirm(
             "Execution plan / Skill install",
             lines,
@@ -541,6 +579,7 @@ class SkillInstall(Installation):
             env.setdefault("FORCE_COLOR", "1")
         npx = require("npx", env)
         scope = ["--global"] if self.scope == "global" else []
+        linked_names = []
         for repository, names in self.selected.items():
             source = KAMI_ARCHIVE if repository == KAMI else GITHUB + repository
             command = [
@@ -560,7 +599,15 @@ class SkillInstall(Installation):
             def install():
                 execution.command(command, cwd=self.session.project, env=env)
 
-            execution.item(f"{repository}: {', '.join(names)}", install)
+            installed = execution.item(
+                f"{repository}: {', '.join(names)}", install
+            )
+            if installed and self.link_antigravity:
+                linked_names.extend(names)
+        if linked_names:
+            execution.link_antigravity_skills(
+                self.session.home, dict.fromkeys(linked_names)
+            )
 
 
 class RuleInstall(Installation):
@@ -763,6 +810,8 @@ class ContentRemoval:
         }
         if self.scope_index == 0 and self.kind == "Rule":
             labels["pi"] = "Pi (rules only)"
+        if self.scope_index == 0:
+            labels["agy"] = AGENTS["agy"]
         self.selected_locations.intersection_update(range(len(labels)))
         self.agents = self.session.select_agents(
             f"{self.title} / Agents", labels, self.selected_locations
@@ -839,6 +888,7 @@ class ContentRemoval:
                     flag(self.kind == "Rule"),
                     flag(self.kind == "Skill"),
                     flag("pi" in self.agents),
+                    flag("agy" in self.agents),
                 ],
             )
         self.warnings = warnings.getvalue().splitlines()
@@ -853,7 +903,7 @@ class ContentRemoval:
         self.inventory.run("select", self.selected)
         links = capture(self.inventory.run, "linked-skills", [])
         if links and self.screen.confirm(
-            "Also remove these Claude links?",
+            "Also remove these skill links?",
             links,
             action="Include",
             cancel="Keep",

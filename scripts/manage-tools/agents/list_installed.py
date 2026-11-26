@@ -6,7 +6,12 @@ import sys
 from .user_paths import show
 
 
-AGENTS = (("codex", "Codex"), ("claude", "Claude Code"), ("pi", "Pi"))
+AGENTS = {
+    "codex": "Codex",
+    "claude": "Claude Code",
+    "pi": "Pi",
+    "agy": "Antigravity CLI",
+}
 
 
 def executable_entries(command, directories):
@@ -37,7 +42,7 @@ def main(use_color=False):
         os.path.join(cwd, directory) for directory in os.get_exec_path()
     ]
     found = False
-    for command, name in AGENTS:
+    for command, name in AGENTS.items():
         for index, (entry, executable) in enumerate(
             executable_entries(command, directories)
         ):

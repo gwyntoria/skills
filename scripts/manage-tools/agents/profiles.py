@@ -139,4 +139,5 @@ PROFILES = {
         ],
         "retained": ["npm", "git", "bin", "install", "tools"],
     },
+    "agy": {"fallback": ".gemini/antigravity-cli"},
 }

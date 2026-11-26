@@ -35,6 +35,7 @@ UNINSTALL_GUIDE = {
     "codex": "https://developers.openai.com/codex/cli",
     "claude": "https://code.claude.com/docs/en/setup#uninstall-claude-code",
     "pi": "https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/quickstart.md#uninstall-pi",
+    "agy": "https://antigravity.google/docs/getting-started?tab=cli",
 }
 
 
@@ -100,7 +101,11 @@ class Lifecycle:
         packages,
         interaction,
     ):
-        if action not in ("Cleanup", "Uninstall") or agent not in PROFILES:
+        if (
+            action not in ("Cleanup", "Uninstall")
+            or agent not in PROFILES
+            or (action == "Cleanup" and agent == "agy")
+        ):
             raise ValueError("Invalid Agent lifecycle action or Agent")
         self.interaction = interaction
         self.action = action
@@ -120,9 +125,9 @@ class Lifecycle:
         self.packages = packages
         self.profile = PROFILES[agent]
         self.fallback = join(self.home, self.profile["fallback"])
-        self.configured = self.expand_home(
-            os.environ.get(self.profile["override"]) or self.fallback
-        )
+        override = self.profile.get("override")
+        configured = os.environ.get(override) if override else None
+        self.configured = self.expand_home(configured or self.fallback)
         self.roots = list(dict.fromkeys([self.fallback, self.configured]))
 
     def command(self, program, args, *, env=None, interactive=False):
@@ -983,6 +988,8 @@ class Lifecycle:
 
     def execute(self):
         executable = self.command_paths[0] if self.command_paths else None
+        if self.agent == "agy" and self.uninstall:
+            return self.uninstall_agy(executable)
         managed = (
             self.managed_pi(executable)
             if executable and self.agent == "pi" and not self.uninstall
@@ -1006,6 +1013,48 @@ class Lifecycle:
                 return
 
         return self.review(cli, directory_step, preview)
+
+    def uninstall_agy(self, executable):
+        default = join(self.home, ".local/bin/agy")
+        executable = executable or default
+        entry = info(executable)
+        before = identity(executable)
+        if (
+            executable != default
+            or not self.user.safe(executable)
+            or not is_file(entry)
+            or not os.access(executable, os.X_OK)
+            or not re.fullmatch(
+                r"v?[0-9]+\.[0-9]+\.[0-9]+(?:[-+][\w.+-]+)?",
+                run(executable, ["--version"]).strip(),
+            )
+            or identity(executable) != before
+        ):
+            raise ValueError(
+                f"Cannot verify the default Antigravity CLI at {show(executable)}. "
+                f"Use its original installation method. {UNINSTALL_GUIDE['agy']}"
+            )
+        cli = self.user.removal(executable, "Remove CLI executable")
+        if cli is None:
+            raise ValueError("Cannot verify Antigravity CLI removal path")
+        preview = self.uninstall_preview(
+            Installation("Antigravity standalone", [executable]), executable
+        )
+        if is_dir(info(self.fallback)):
+            self.add(
+                self.optional,
+                self.fallback,
+                "Delete CLI-specific user data",
+                True,
+            )
+        elif info(self.fallback) is not None:
+            preview.append(
+                f"Retain non-directory CLI data path {show(self.fallback)}"
+            )
+        preview.append(
+            "Shared Antigravity configuration and sign-in are retained."
+        )
+        return self.review([cli], None, preview)
 
     def review(self, cli, directory_step, preview):
         selection = set()

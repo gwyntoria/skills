@@ -13,7 +13,9 @@ from tempfile import NamedTemporaryFile
 from .paths import (
     UNKNOWN,
     MISSING_TARGET,
+    ANTIGRAVITY_RULES,
     SKILL_DIRECTORIES,
+    ANTIGRAVITY_CONFIG,
     display,
     regular,
     symlink,
@@ -31,6 +33,7 @@ AGENTS = {
     "codex": "Codex",
     "claude": "Claude",
     "pi": "Pi",
+    "agy": "Antigravity CLI",
     "project": "Project",
 }
 
@@ -226,17 +229,18 @@ class Removal:
         parents = self.parents(relative)
         return {"snapshot": self.fingerprint(relative), "parents": parents}
 
-    def scan(self, codex, claude, rules, skills, pi=False):
+    def scan(self, codex, claude, rules, skills, pi=False, agy=False):
         global_scope = self.scope == "global"
+        agy = agy and global_scope
         pi_relative = (
             os.path.relpath(self.pi_rule, self.root)
             if pi and rules and global_scope
             else None
         )
-        self.verify_scan_paths(codex, claude, rules, skills, pi_relative)
+        self.verify_scan_paths(codex, claude, rules, skills, pi_relative, agy)
 
         entries = []
-        has_skills = skills and (codex or claude)
+        has_skills = skills and (codex or claude or agy)
         lock = self.read_lock() if has_skills else {}
         records = (lock or {}).get("skills", {})
 
@@ -254,8 +258,9 @@ class Removal:
                 )
             )
 
-        if rules and not global_scope:
-            self.scan_project_rules(add)
+        self.scan_modular_rules(rules, agy, add)
+        if agy and skills:
+            self.scan_skills("agy", records, add)
 
         for agent, enabled, rule in (
             ("codex", codex, ".codex/AGENTS.md"),
@@ -291,7 +296,7 @@ class Removal:
             lockSnapshot=self.fingerprint(self.lock) if has_skills else None,
         )
 
-    def verify_scan_paths(self, codex, claude, rules, skills, pi_relative):
+    def verify_scan_paths(self, codex, claude, rules, skills, pi_relative, agy):
         global_scope = self.scope == "global"
         if pi_relative is not None:
             self.full(pi_relative)
@@ -299,19 +304,29 @@ class Removal:
             (skills and (codex or claude), ".agents"),
             (claude and (skills or global_scope), ".claude"),
             (rules and codex and global_scope, ".codex"),
+            (agy, ".gemini"),
+            (agy, ANTIGRAVITY_CONFIG),
         ):
             if enabled and symlink(entry_stat(self.full(name))):
                 raise ValueError(
                     f"Refusing symlinked directory: {self.full(name)}"
                 )
 
-    def scan_project_rules(self, add):
-        folder = self.full("docs/rules")
+    def scan_modular_rules(self, rules, agy, add):
+        if not rules:
+            return
+        if self.scope == "project":
+            self.scan_rule_folder("docs/rules", "project", add)
+        elif agy:
+            self.scan_rule_folder(ANTIGRAVITY_RULES, "agy", add)
+
+    def scan_rule_folder(self, relative, agent, add):
+        folder = self.full(relative)
         info = entry_stat(folder)
         if symlink(info):
             raise ValueError(f"Refusing symlinked directory: {folder}")
         if directory(info):
-            self.parents("docs/rules/entry")
+            self.parents(f"{relative}/entry")
             for child in sorted(folder.iterdir()):
                 info = entry_stat(child)
                 if child.name.endswith(".md") and (
@@ -319,8 +334,8 @@ class Removal:
                 ):
                     add(
                         "rules",
-                        "project",
-                        f"docs/rules/{child.name}",
+                        agent,
+                        f"{relative}/{child.name}",
                         child.name,
                         info,
                     )
@@ -347,6 +362,14 @@ class Removal:
         if symlink(info):
             if agent == "codex":
                 raise ValueError(f"Refusing symlinked directory: {folder}")
+            if agent == "agy":
+                print(
+                    yellow(
+                        f"Retain Antigravity CLI skills directory link: {display(folder)}"
+                    ),
+                    file=sys.stderr,
+                )
+                return
             add(
                 "skills",
                 agent,
@@ -366,7 +389,7 @@ class Removal:
                 source = location
                 info = entry_stat(child)
                 record = records.get(name) if agent == "codex" else None
-                if agent == "claude" and symlink(info):
+                if agent != "codex" and symlink(info):
                     destination = self.link_destination(child)
                     if destination.parent == self.full(".agents/skills"):
                         skill_name = destination.name
@@ -426,8 +449,17 @@ class Removal:
                     yield from walk(child)
 
         # A symlinked agent parent may point outside the removal root.
-        if sources and not symlink(entry_stat(self.full(".claude"))):
-            yield from walk(self.full(".claude/skills"))
+        locations = [("claude", (".claude",))]
+        if self.scope == "global":
+            locations.append(("agy", (".gemini", ANTIGRAVITY_CONFIG)))
+        for agent, parents in locations:
+            if sources and not any(
+                symlink(entry_stat(self.full(parent))) for parent in parents
+            ):
+                for path, target, shared in walk(
+                    self.full(SKILL_DIRECTORIES[agent])
+                ):
+                    yield agent, path, target, shared
 
     def atomic_lock_write(self, lock):
         self.parents(self.lock)
@@ -506,18 +538,18 @@ class Removal:
             print(
                 f"  {action} ({', '.join(names)}): {red(display(self.full(self.lock)))}"
             )
-        for path, target, shared in self.related_links(items):
+        for agent, path, target, shared in self.related_links(items):
             link = f"{display(path)} -> {display(target)}"
             if self.scope == "global" and shared:
                 print(
                     yellow(
-                        f"WARNING: Shared Claude skills directory link will be kept: {link}; removing the selected skills also affects Claude."
+                        f"WARNING: Shared {AGENTS[agent]} skills directory link will be kept: {link}; removing the selected skills also affects {AGENTS[agent]}."
                     )
                 )
             else:
                 print(
                     yellow(
-                        f"WARNING: Claude link will be kept: {link}; it will become broken if its target is removed."
+                        f"WARNING: {AGENTS[agent]} link will be kept: {link}; it will become broken if its target is removed."
                     )
                 )
 
@@ -644,11 +676,14 @@ class Removal:
 
     def collect_linked_skills(self, data, items):
         links = []
-        for path, _, shared in (
+        for agent, path, _, shared in (
             self.related_links(items) if self.scope == "global" else ()
         ):
-            if shared or path.is_relative_to(
-                self.full(".claude/skills/.system")
+            folder = self.full(SKILL_DIRECTORIES[agent])
+            if (
+                shared
+                or path == folder
+                or path.is_relative_to(folder / ".system")
             ):
                 continue
             relative = str(path.relative_to(self.root))
@@ -656,9 +691,9 @@ class Removal:
                 dict(
                     kind="skills",
                     type="link",
-                    agent="claude",
+                    agent=agent,
                     relative=relative,
-                    name=str(path.relative_to(self.full(".claude/skills"))),
+                    name=str(path.relative_to(folder)),
                     external=True,
                     **self.snapshot(relative),
                 )

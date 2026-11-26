@@ -8,7 +8,13 @@ from pathlib import Path
 
 
 UNKNOWN = "Unknown / local"
-SKILL_DIRECTORIES = {"codex": ".agents/skills", "claude": ".claude/skills"}
+ANTIGRAVITY_CONFIG = ".gemini/config"
+ANTIGRAVITY_RULES = f"{ANTIGRAVITY_CONFIG}/rules"
+SKILL_DIRECTORIES = {
+    "codex": ".agents/skills",
+    "claude": ".claude/skills",
+    "agy": f"{ANTIGRAVITY_CONFIG}/skills",
+}
 MISSING_TARGET = {errno.ENOENT, errno.ENOTDIR, errno.ELOOP}
 
 

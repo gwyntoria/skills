@@ -129,7 +129,7 @@ claude plugin install gwyn-space-skills-writing@gwyn-space
 | 脚本 | 运行环境 | 说明 |
 | --- | --- | --- |
 | [`setup-ubuntu.sh`](scripts/setup-ubuntu.sh) | Ubuntu（原生 / WSL） | 通过 TUI 选择基础包、开发环境与 AI 工具，选择 Fish/Zsh/Bash（默认 Fish）、准备启动配置并切换默认 shell |
-| [`manage-tools.sh`](scripts/manage-tools.sh) | macOS / Linux | 可直接安装为单文件，默认依次更新 Skills、所有支持的 Agent 和 Homebrew。Agent 更新包括 Codex、Claude Code、Pi。传入 `-c` 或 `config` 打开 TUI，安装、清理、卸载或查看 Agent、Skills 和 Rules |
+| [`manage-tools.sh`](scripts/manage-tools.sh) | macOS / Linux | 可直接安装为单文件，默认依次更新 Skills、所有支持的 Agent 和 Homebrew。Agent 更新包括 Codex、Claude Code、Pi 和 Antigravity CLI。传入 `-c` 或 `config` 打开 TUI，安装、清理、卸载或查看 Agent、Skills 和 Rules |
 | [`claude-code.sh`](scripts/statusline/claude-code.sh) | Claude Code | 状态栏脚本，显示模型与思考等级、目录与 Git 分支、上下文余量、输入输出 token、速率限制和版本。通过 Agent 配置菜单安装 Claude Code 时，会一并安装到 `~/.claude/statusline.sh` |
 | [`antigravity.py`](scripts/statusline/antigravity.py) | Antigravity CLI (`agy`) | Powerline 风格状态栏脚本（Catppuccin Mocha 配色，需 Nerd Font），显示模型与思考等级、Agent 状态、当前目录、Git 分支与变更统计、上下文用量进度条、当前时间，以及 SSH 会话下的主机名 |
 
