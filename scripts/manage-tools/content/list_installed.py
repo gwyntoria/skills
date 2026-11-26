@@ -34,14 +34,14 @@ def rule_source(file):
         text,
         re.ASCII,
     )
-    return match[1] if match else UNKNOWN
+    return match[1] if match else ""
 
 
 def rule_files(path, ancestors=frozenset()):
     info = target_stat(path)
     if info is None:
         if path.parent.exists() and symlink(entry_stat(path)):
-            yield path.name, UNKNOWN + BROKEN, path
+            yield path.name, BROKEN, path
     elif regular(info):
         yield path.name, rule_source(path), path
     elif directory(info):
@@ -59,8 +59,8 @@ def shared_rules(path):
             info = entry_stat(file)
             if regular(info) or symlink(info):
                 target = target_stat(file)
-                origin = rule_source(file) if regular(target) else UNKNOWN
-                yield file.name, origin if target else origin + BROKEN, file
+                origin = rule_source(file) if regular(target) else ""
+                yield file.name, origin if target else BROKEN, file
 
 
 def shared_skill_name(child, shared):
@@ -260,10 +260,10 @@ def print_group(paint, title, rows):
             if symlink(entry_stat(file))
             else ""
         )
-        provenance = display(origin)
-        if origin.endswith(BROKEN):
-            provenance = display(origin[: -len(BROKEN)]) + paint("33", BROKEN)
-        source = f"  [{provenance}]" if provenance else ""
+        if origin == BROKEN:
+            source = paint("33", BROKEN)
+        else:
+            source = f"  [{display(origin)}]" if origin else ""
         print(
             f"  {paint('1', display(name))}{source}\n    {display(file)}{link}"
         )
