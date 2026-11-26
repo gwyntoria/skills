@@ -38,7 +38,7 @@ WAZA_CATALOG = ("rules-waza", "Rules / Waza", "", "")
 BUNDLED_RULES = ("rules-bundled", "Rules / Gwyntoria", "", "")
 PUBLISHED_RULES = ("rules-published", "Rules / Gwyntoria", "", "")
 SCOPES = ("global", "project")
-CLAUDE_STATUSLINE = "scripts/statusline/claude-statusline.sh"
+CLAUDE_STATUSLINE = "scripts/statusline/claude-code.sh"
 
 
 def capture(operation, *args):

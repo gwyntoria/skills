@@ -79,7 +79,7 @@ load_remote_source() {
     # Extract the module tree and the resources it uses from the same snapshot.
     tar -xzf "$SOURCE_TEMP/source.tar.gz" -C "$SOURCE_TEMP" -- \
         skills-main/scripts/manage-tools skills-main/rules \
-        skills-main/scripts/statusline/claude-statusline.sh || return 1
+        skills-main/scripts/statusline/claude-code.sh || return 1
     MODULE_ENTRY="$SOURCE_TEMP/skills-main/scripts/manage-tools/main.py"
     if [ ! -f "$MODULE_ENTRY" ]; then
         printf 'Error: manage-tools entry missing from the downloaded archive.\n' >&2
