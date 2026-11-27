@@ -1,0 +1,46 @@
+name: gwyn-tool prototype terminals
+on:
+  push:
+    branches: [codex/gwyn-tool-interaction-prototype]
+
+permissions:
+  contents: read
+
+jobs:
+  terminal:
+    name: Terminal (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 8
+    defaults:
+      run:
+        shell: bash
+        working-directory: scripts/gwyn-tool/prototype
+    env:
+      CGO_ENABLED: "0"
+      TERM: xterm-256color
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-go@v7.1.0
+        with:
+          go-version-file: scripts/gwyn-tool/prototype/go.mod
+          cache: false
+      - name: Build and drive native terminal
+        run: |
+          mkdir artifacts
+          name=gwyn-tool
+          if [[ "$RUNNER_OS" == Windows ]]; then
+              name+=.exe
+          fi
+          go build -o "artifacts/$name" .
+          go run ./smoke "artifacts/$name" 2>&1 | tee artifacts/smoke.txt
+      - name: Save prototype and terminal verification
+        if: always()
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: gwyn-tool-prototype-${{ matrix.os }}
+          path: scripts/gwyn-tool/prototype/artifacts/
+          retention-days: 7
