@@ -8,4 +8,7 @@
 一次更新所涵盖的全局技能、Agent 及其组件和 Homebrew 软件包。某项处于更新范围内，仍需满足该项的更新条件。
 
 **默认更新 (Default update)**：
-工具管理命令无参数运行时采用的范围，涵盖已安装的全局技能、受支持的 Agent 及其组件，以及 Homebrew 软件包。
+一次涵盖已安装的全局技能、受支持的 Agent 及其组件，以及适用时的 Homebrew 软件包的更新。
+
+**gwyn-tool 升级 (gwyn-tool upgrade)**：
+用新版本替换本机已安装的 gwyn-tool 程序。
