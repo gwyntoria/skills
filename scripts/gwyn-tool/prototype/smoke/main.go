@@ -94,23 +94,28 @@ func (t *terminal) wait(text string, childOutput bool) {
 		select {
 		case chunk, ok := <-t.chunks:
 			if !ok {
-				panic(fmt.Sprintf("terminal closed waiting for %q: %q", text, t.log.String()))
+				panic(fmt.Sprintf("terminal closed waiting for %q: %q", text, t.transcript()))
 			}
 			t.log.Write(chunk)
 			_, err := t.screen.Write(chunk)
 			check(err)
 			t.pending = append(t.pending, chunk...)
 		case <-deadline.C:
-			panic(fmt.Sprintf("timed out waiting for %q: %q", text, t.log.String()))
+			panic(fmt.Sprintf("timed out waiting for %q: %q", text, t.transcript()))
 		}
 	}
+}
+
+func (t *terminal) transcript() string {
+	log := t.log.String()
+	return log[max(0, len(log)-3000):]
 }
 
 func (t *terminal) quit(want int) {
 	t.send("q")
 	err := t.process.Wait()
 	if t.process.ProcessState == nil || t.process.ProcessState.ExitCode() != want {
-		panic(fmt.Sprintf("wanted TUI exit %d, got %v: %q", want, err, t.log.String()))
+		panic(fmt.Sprintf("wanted TUI exit %d, got %v: %q", want, err, t.transcript()))
 	}
 }
 
@@ -175,18 +180,25 @@ func management(ctx context.Context, binary string) {
 	t.expectOutput("Child ready")
 	t.send("ok\r")
 	t.expectOutput("Child received: ok")
+	t.send("\r")
 	t.expect("Agent operation succeeded")
-	t.send("\r")
+	t.quit(0)
+	fmt.Println("Child reads input and returns control after success")
+}
+
+func childInterrupt(ctx context.Context, binary string) {
+	t := newTerminal(ctx, binary)
+	defer t.Close()
+
 	t.expect("Manage tools")
-	t.send("\r")
+	t.send("jj\r")
 	t.expect("Agent / Interactive operation")
 	t.send("\r")
 	t.expectOutput("Child ready")
 	t.send("\x03")
-	t.expectOutput("Child interrupted")
 	t.expect("Agent operation cancelled")
 	t.quit(0)
-	fmt.Println("Child reads input and returns control after success and Ctrl+C")
+	fmt.Println("Ctrl+C cancels the child and restores the TUI")
 }
 
 func childFailure(ctx context.Context, binary string) {
@@ -200,6 +212,7 @@ func childFailure(ctx context.Context, binary string) {
 	t.expectOutput("Child ready")
 	t.send("fail\r")
 	t.expectOutput("Child received: fail")
+	t.send("\r")
 	t.expect("Agent operation failed")
 	t.quit(1)
 	fmt.Println("Child failure recovers the TUI and gives session exit 1")
@@ -218,5 +231,6 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
 	management(ctx, binary)
+	childInterrupt(ctx, binary)
 	childFailure(ctx, binary)
 }

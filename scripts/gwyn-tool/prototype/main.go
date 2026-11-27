@@ -225,22 +225,31 @@ func interactiveFixture() int {
 	signal.Notify(interrupt, os.Interrupt)
 	defer signal.Stop(interrupt)
 	fmt.Println("Child ready: type ok or fail. Ctrl+C cancels.")
-	input := make(chan string, 1)
+	input := make(chan string, 2)
 	go func() {
-		line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
-		input <- strings.TrimSpace(line)
+		defer close(input)
+		scanner := bufio.NewScanner(os.Stdin)
+		for i := 0; i < 2 && scanner.Scan(); i++ {
+			input <- strings.TrimSpace(scanner.Text())
+		}
 	}()
+	var response string
 	select {
 	case <-interrupt:
-		fmt.Println("Child interrupted")
 		return 130
-	case line := <-input:
-		fmt.Println("Child received:", line)
-		if line == "ok" {
-			return 0
-		}
-		return 7
+	case response = <-input:
 	}
+	fmt.Println("Child received:", response)
+	fmt.Println("Press Enter to return to the TUI.")
+	select {
+	case <-interrupt:
+		return 130
+	case <-input:
+	}
+	if response == "ok" {
+		return 0
+	}
+	return 7
 }
 
 func run(args []string) int {
