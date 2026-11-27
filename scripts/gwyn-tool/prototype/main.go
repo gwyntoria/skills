@@ -237,14 +237,21 @@ func interactiveFixture() int {
 	select {
 	case <-interrupt:
 		return 130
-	case response = <-input:
+	case line, read := <-input:
+		if !read {
+			return 130
+		}
+		response = line
 	}
 	fmt.Println("Child received:", response)
 	fmt.Println("Press Enter to return to the TUI.")
 	select {
 	case <-interrupt:
 		return 130
-	case <-input:
+	case _, read := <-input:
+		if !read {
+			return 130
+		}
 	}
 	if response == "ok" {
 		return 0
