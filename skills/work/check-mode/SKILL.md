@@ -23,7 +23,7 @@ bash "$skill_dir/scripts/check-markdown.sh" -- "README.md" "docs/notes.md"
 
 Set `skill_dir` to the directory containing this `SKILL.md`. Group Shell files with different explicit dialect or indentation requirements into separate calls. Pass every changed sourced file directly to the Shell script so ShellCheck can report its own diagnostics.
 
-The scripts modify the specified files in place. A nonzero exit means a file or check could not be processed, a tool or rule was missing, or diagnostics remain. If a tool is unavailable, the script prints an installation command and continues with the checks it can run. If the project pins a version, use that version. Resolve issues caused by your changes and rerun the relevant script. Report remaining diagnostics and checks that could not run.
+The scripts modify the specified files in place. A nonzero exit means a file or check could not be processed, a tool or rule was missing, or diagnostics remain. If a tool is unavailable, the script prints an installation command and continues with the checks it can run. If the project pins a version, use that version. Resolve issues caused by your changes and rerun the relevant script.
 
 ## Check Markdown references and images
 
@@ -41,3 +41,21 @@ Keep comments whose removal would cost maintainers information. Review comments 
 - Update comments affected by behavior changes. Prefer clear names and structure for operations that can explain themselves. Remove comments that repeat the code and commented-out implementations within the task's scope.
 - Make `TODO` and `FIXME` comments state the unresolved problem and link to an issue when available.
 - Follow the project's comment style and language. Otherwise use the language's standard documentation format and the user's requested language, defaulting to English.
+
+## Sign-off
+
+Include `status`, `scope`, and `verification` in the final reply's verification section, in that order. When `/check` is also active, put these lines under its `verification` field.
+
+```text
+status: check-mode blocked — markdownlint-cli2 is missing
+scope: 1 file — README.md
+verification:
+- bash "$skill_dir/scripts/check-markdown.sh" -- "README.md" → exit 1
+  - markdownlint-cli2 → blocked (tool missing)
+  - textlint → pass
+- Markdown image paths → pass (linked files exist)
+```
+
+- `status` uses `fail` when a check found a problem that remains in the changed files, `blocked` when a prerequisite prevented an applicable check and no file problem remains, or `pass` when all applicable checks passed. Include any blockers in `verification` even when the overall status is `fail`.
+- `scope` counts distinct in-scope files, including files whose checks were blocked. Name the files here or in the verification entries.
+- `verification` records each applicable check's latest result. For scripts, include the command, exit code, and any remaining diagnostic or blocker with the affected paths. Use the output to classify a nonzero exit and report the subcheck results it establishes. For manual checks, name what you inspected and what you found. Omit inapplicable checks.
