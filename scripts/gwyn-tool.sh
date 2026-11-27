@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 SCRIPT_SOURCE="${BASH_SOURCE[0]:-}"
-PROGRAM_NAME="${SCRIPT_SOURCE:-manage-tools.sh}"
+PROGRAM_NAME="${SCRIPT_SOURCE:-gwyn-tool.sh}"
 PROGRAM_NAME="${PROGRAM_NAME##*/}"
 OPEN_AGENT_SETUP=0
 SOURCE_ARCHIVE_URL=https://codeload.github.com/gwyntoria/skills/tar.gz/refs/heads/main
@@ -84,15 +84,15 @@ load_remote_source() {
     trap 'exit 143' TERM
     trap 'exit 129' HUP
 
-    printf 'Fetching manage-tools from GitHub main...\n' >&2
+    printf 'Fetching gwyn-tool from GitHub main...\n' >&2
     curl -fLsS "$SOURCE_ARCHIVE_URL" -o "$SOURCE_TEMP/source.tar.gz" || return 1
     # Extract the module tree and the resources it uses from the same snapshot.
     tar -xzf "$SOURCE_TEMP/source.tar.gz" -C "$SOURCE_TEMP" -- \
-        skills-main/scripts/manage-tools skills-main/rules \
+        skills-main/scripts/gwyn-tool skills-main/rules \
         skills-main/scripts/statusline/claude-code.sh || return 1
-    MODULE_ENTRY="$SOURCE_TEMP/skills-main/scripts/manage-tools/main.py"
+    MODULE_ENTRY="$SOURCE_TEMP/skills-main/scripts/gwyn-tool/main.py"
     if [ ! -f "$MODULE_ENTRY" ]; then
-        printf 'Error: manage-tools entry missing from the downloaded archive.\n' >&2
+        printf 'Error: gwyn-tool entry missing from the downloaded archive.\n' >&2
         return 1
     fi
 }
@@ -574,7 +574,7 @@ main() {
     *) return 2 ;;
     esac
     if [ "${BASH_VERSINFO[0]:-0}" -lt 5 ]; then
-        printf 'Error: manage-tools requires Bash 5.x or later.\n' >&2
+        printf 'Error: gwyn-tool requires Bash 5.x or later.\n' >&2
         return 2
     fi
 
@@ -593,7 +593,7 @@ main() {
         fi
         if [ -n "$SCRIPT_SOURCE" ]; then
             script_path="$(resolve_script_path "$SCRIPT_SOURCE")" || return 1
-            MODULE_ENTRY="${script_path%/*}/manage-tools/main.py"
+            MODULE_ENTRY="${script_path%/*}/gwyn-tool/main.py"
         fi
         if [ -f "$MODULE_ENTRY" ]; then
             exec python3 -B "$MODULE_ENTRY" local "$SOURCE_ARCHIVE_URL" <&"$input_fd"

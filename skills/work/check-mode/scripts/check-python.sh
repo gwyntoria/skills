@@ -46,7 +46,7 @@ for file in "$@"; do
         if [[ ! $settings =~ $settings_path_pattern ||
             $settings != *$'\n'"file_resolver.project_root = \"${BASH_REMATCH[1]:-/}\""$'\n'* ]]; then
             ruff check "${fallback[@]}" --fix --select E,F,W,C90,I --ignore E501,W191 \
-                --config 'src = ["scripts/manage-tools/agents", "scripts/manage-tools/content"]' \
+                --config 'src = ["scripts/gwyn-tool/agents", "scripts/gwyn-tool/content"]' \
                 --config 'lint.isort.combine-as-imports = true' \
                 --config 'lint.isort.length-sort = true' \
                 --config 'lint.isort.lines-after-imports = 2' -- "$file" || result=1

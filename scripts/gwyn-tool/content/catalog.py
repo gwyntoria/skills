@@ -242,7 +242,7 @@ class Catalogs:
                     [
                         sys.executable,
                         "-B",
-                        str(self.root / "scripts/manage-tools/main.py"),
+                        str(self.root / "scripts/gwyn-tool/main.py"),
                         "--worker",
                         str(self.root),
                         self.mode,
