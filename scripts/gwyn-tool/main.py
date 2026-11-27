@@ -46,7 +46,7 @@ def start(mode, archive_url):
     signal.signal(signal.SIGHUP, interrupted)
     root = Path(__file__).resolve().parents[2]
     try:
-        with TemporaryDirectory(prefix="manage-tools-") as work:
+        with TemporaryDirectory(prefix="gwyn-tool-") as work:
             return curses.wrapper(
                 lambda window: Session(
                     Screen(window), root, mode, archive_url, Path(work)

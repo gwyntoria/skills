@@ -45,7 +45,7 @@ def node_environment(home):
                 "bash",
                 "-c",
                 'source "$1" --no-use >&2 && nvm use --silent default >&2 && "$2" -c "$3"',
-                "manage-tools",
+                "gwyn-tool",
                 str(script),
                 sys.executable,
                 "import json, os; print(json.dumps(dict(os.environ)))",

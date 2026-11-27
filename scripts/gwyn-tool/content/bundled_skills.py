@@ -79,7 +79,7 @@ def claude_skills(_home):
         '{"mcpServers":{}}',
     )
     try:
-        with TemporaryDirectory(prefix="manage-tools-claude-") as home:
+        with TemporaryDirectory(prefix="gwyn-tool-claude-") as home:
             output = run_listing(
                 Path(binary).absolute(),
                 args,
@@ -128,7 +128,7 @@ def antigravity_skills(home):
     try:
         # The agents inventory unpacks vendor assets before sign-in. A temporary
         # home keeps the inventory read-only with respect to the user's settings.
-        with TemporaryDirectory(prefix="manage-tools-agy-") as home:
+        with TemporaryDirectory(prefix="gwyn-tool-agy-") as home:
             run_listing(Path(binary).absolute(), ("agents",), home)
             files = sorted((Path(home) / AGY_SKILLS).glob("*/SKILL.md"))
             return [

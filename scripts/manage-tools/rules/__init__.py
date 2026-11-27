@@ -1,1 +1,0 @@
-"""Manage-tools rules modules."""

@@ -3,7 +3,7 @@ line-length = 80
 fix = true
 
 # 独立脚本通过模块名导入同目录的 Python 文件。
-src = ["scripts/manage-tools/agents", "scripts/manage-tools/content"]
+src = ["scripts/gwyn-tool/agents", "scripts/gwyn-tool/content"]
 
 [lint]
 select = ["E", "F", "W", "C90", "I"]
